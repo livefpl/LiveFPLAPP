@@ -1,35 +1,68 @@
 {
   "expo": {
-    "name": "github.com/livefpl/disrespectful-croissant",
-    "slug": "snack-ef08f30c-af4b-486d-9813-6b4045512988",
+    "updates": {
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/602bdbe9-4f3d-4b57-89ad-ccd361c5ba16"
+    },
+    "name": "LiveFPL",
+    "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./icon.png",
+"android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./adaptive-foreground-1024.png",
+        "backgroundImage": "./adaptive-background-1024.png"
+      }
+    },
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+            "resizeMode": "contain",
+      "backgroundColor": "#ffffff",
+      "plugins": [
+        [
+          "react-native-google-mobile-ads",
+          {
+            "androidAppId": "ca-app-pub-7466981426984905~5242246091",
+            "iosAppId": "ca-app-pub-7466981426984905~5242246091"
+          }
+        ]
+      ]
+    },
+    "react-native-google-mobile-ads": {
+      "androidAppId": "ca-app-pub-7466981426984905~5242246091",
+      "iosAppId": "ca-app-pub-7466981426984905~5242246091"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "net.livefpl.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
-    "android": {
-      "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
-      },
-      "edgeToEdgeEnabled": true
-    },
-    "web": {
-      "favicon": "./assets/favicon.png"
-    },
+    
+    
     "description": "github.com/livefpl/disrespectful-croissant @ Apr 30, 2023",
     "extra": {
       "eas": {
-        "projectId": "b7cba3d3-2305-4837-bcd9-dd36a0458015"
+        "projectId": "602bdbe9-4f3d-4b57-89ad-ccd361c5ba16"
       }
+    },
+    "plugins": [
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-7466981426984905~5242246091",
+          "iosAppId": "ca-app-pub-7466981426984905~5242246091"
+        }
+      ],
+      "expo-font"
+    ],
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
