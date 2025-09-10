@@ -1,0 +1,44 @@
+{
+  "license": "0BSD",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^14.1.0",
+    "@fortawesome/free-solid-svg-icons": "*",
+    "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-native-firebase/app": "11.5.0",
+    "@react-native-picker/picker": "2.11.1",
+    "@react-navigation/bottom-tabs": "^6.0.0",
+    "@react-navigation/native": "^6.1.18",
+    "expo": "~53.0.22",
+    "expo-application": "~6.1.5",
+    "expo-constants": "~17.1.7",
+    "expo-crypto": "~14.1.5",
+    "expo-dev-client": "~5.2.4",
+    "expo-linear-gradient": "~14.1.5",
+    "expo-secure-store": "~14.2.4",
+    "expo-status-bar": "~2.2.3",
+    "react": "19.0.0",
+    "react-is": "^16.8.0",
+    "react-native": "0.79.6",
+    "react-native-linear-gradient": "*",
+    "react-native-mmkv": "*",
+    "react-native-paper": "4.9.2",
+    "react-native-safe-area-context": "5.4.0",
+    "react-native-screens": "~4.11.1",
+    "react-native-svg": "15.11.2",
+    "react-native-vector-icons": "*",
+    "sync-storage": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "typescript": "~5.8.3",
+    "@types/react": "~19.0.10"
+  },
+  "private": true
+}
