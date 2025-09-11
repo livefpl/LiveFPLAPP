@@ -12,7 +12,8 @@ import {
   Dimensions,
   SafeAreaView,
   useWindowDimensions,
-  Image,
+  Modal,
+  ScrollView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { DataTable } from 'react-native-paper';
@@ -22,6 +23,11 @@ import { useFplId } from './FplIdContext';
 import { smartFetch } from './signedFetch';
 import { useColors, useTheme } from './theme';
 import AppHeader from './AppHeader';
+
+// Shared keys (use these across Games/Threats/Prices to stay in sync)
+const EOPREF_KEY = 'eo.source';                // 'near' | 'top10k'
+const PRICES_EO_FILTER_KEY = 'prices.onlyAbove1Pct'; // '1' | '0'
+const EO_CUTOFF = 1.0; // percent
 
 const screenWidth = Dimensions.get('window').width;
 const BOTTOM_AD_INSET = 120;
@@ -104,15 +110,16 @@ const ProgressBar = ({ value, styles }) => {
 };
 
 /* ---------- Chips ---------- */
-const ToggleChip = ({ label, active, onPress, P, isDark }) => (
-  <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
+const ToggleChip = ({ label, active, onPress, P, isDark, disabled }) => (
+  <TouchableOpacity onPress={onPress} activeOpacity={0.8} disabled={disabled}>
     <View style={[
       chipStyles.base,
+      disabled ? { opacity: 0.5 } :
       active
-          ? (isDark
-              ? { backgroundColor: P.accentPillBg, borderColor: P.accent }
-              : { backgroundColor: P.accent,       borderColor: P.accent })
-          : { backgroundColor: P.card, borderColor: P.border2 },
+        ? (isDark
+            ? { backgroundColor: P.accentPillBg, borderColor: P.accent }
+            : { backgroundColor: P.accent,       borderColor: P.accent })
+        : { backgroundColor: P.card, borderColor: P.border2 },
     ]}>
       <Text style={[chipStyles.txtBase, { color: active ? P.accentOn : P.muted }]}>{label}</Text>
     </View>
@@ -139,6 +146,145 @@ const detectDark = (hex) => {
   return L < 0.5; // dark if luminance low
 };
 
+/* ---------- EO helpers ---------- */
+const EO_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+const normalizePercent = (v) => {
+  const n = Number(v);
+  if (!isFinite(n)) return 0;
+  return n >= 0 && n <= 1 ? n * 100 : n; // 0.02 -> 2
+};
+
+const getEOFromStorage = async (key) => {
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.t && parsed.data) {
+      if (Date.now() - parsed.t > EO_TTL_MS) return null;
+      return parsed.data;
+    }
+    // tolerate plain JSON without wrapper
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const setEOToStorage = async (key, data) => {
+  try { await AsyncStorage.setItem(key, JSON.stringify({ t: Date.now(), data })); } catch {}
+};
+
+// prefer true FPL element id
+const elementIdOf = (p) => {
+  const cands = [p?.element, p?.id, p?.element_id, p?.player_id, p?.eid, p?.el];
+  for (const c of cands) {
+    const n = Number(c);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+};
+
+// Build a Map<elementId, percent> from EO JSON for a given source.
+const buildEOMapForSource = (json, source /* 'near' | 'top10k' */) => {
+  const map = new Map();
+  if (!json) return map;
+
+  const KEYS_NEAR   = ['EO1','eo1','eo_near','EO_near','near','eoNear','EO_near_you','EO_NearYou'];
+  const KEYS_TOP10K = ['EO2','eo2','eo_top10k','EO_top10k','top10k','eoTop10k'];
+  const keys = source === 'near' ? KEYS_NEAR : KEYS_TOP10K;
+
+  const norm = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n >= 0 && n <= 1 ? n * 100 : n; // 0.42 -> 42
+  };
+
+  const pickEO = (obj) => {
+    for (const k of keys) {
+      if (obj && obj[k] != null) {
+        const n = norm(obj[k]);
+        if (n != null) return n;
+      }
+    }
+    // fallback: any "eo" field
+    if (obj && typeof obj === 'object') {
+      for (const [k, v] of Object.entries(obj)) {
+        if (/eo/i.test(k)) {
+          const n = norm(v);
+          if (n != null) return n;
+        }
+      }
+    }
+    return null;
+  };
+
+  const setOne = (idLike, v) => {
+    const id = Number(idLike ?? v?.element ?? v?.id ?? v?.element_id ?? v?.player_id);
+    if (!Number.isFinite(id) || id <= 0) return;
+
+    if (typeof v === 'number') {
+      const n = norm(v);
+      if (n != null) map.set(id, n);
+      return;
+    }
+    if (v && typeof v === 'object') {
+      const n = pickEO(v);
+      if (n != null) map.set(id, n);
+    }
+  };
+
+  // { elements: { "1": {...}|42.7, ... } }
+  if (json.elements && typeof json.elements === 'object') {
+    for (const [id, v] of Object.entries(json.elements)) setOne(id, v);
+    return map;
+  }
+  // flat dict { "1": {...}|42.7, ... }
+  if (typeof json === 'object' && !Array.isArray(json)) {
+    for (const [id, v] of Object.entries(json)) setOne(id, v);
+    return map;
+  }
+  // array rows [{element, EO1, EO2, ...}]
+  if (Array.isArray(json)) {
+    for (const row of json) {
+      if (row && typeof row === 'object') {
+        setOne(row?.element ?? row?.id ?? row?.element_id ?? row?.player_id, row);
+      }
+    }
+  }
+
+  return map;
+};
+
+// Inline EO reader from a player row, then fallback to map
+const getEOForPlayer = (p, source, eoMap) => {
+  const norm = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n >= 0 && n <= 1 ? n * 100 : n;
+  };
+  const NEAR = ['EO1','eo1','eo_near','EO_near','near','eoNear','EO_near_you','EO_NearYou'];
+  const TOP  = ['EO2','eo2','eo_top10k','EO_top10k','top10k','eoTop10k'];
+  const keys = source === 'near' ? NEAR : TOP;
+
+  // 1) inline EO on player, if ever present
+  for (const k of keys) {
+    if (p && p[k] != null) {
+      const n = norm(p[k]);
+      if (n != null) return n;
+    }
+  }
+  // 2) from map
+  if (eoMap instanceof Map && eoMap.size > 0) {
+    const el = p?._el ?? elementIdOf(p);
+    if (Number.isFinite(el)) {
+      const v = eoMap.get(el);
+      if (v != null) return v;
+    }
+  }
+  return null;
+};
+
 /* ---------- Main ---------- */
 const PricesPage = () => {
   const baseC = useColors();
@@ -161,8 +307,10 @@ const PricesPage = () => {
   const P = C; // pass to chips
   const LIVEFPL_LOGO = assetImages?.livefplLogo ?? assetImages?.logo;
 
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const isCompact = width < 360;
+  const listHeight = Math.max(280, Math.floor(height * 0.55));
+
   const { fplId } = useFplId();
 
   const sFetch = smartFetch;
@@ -180,6 +328,15 @@ const PricesPage = () => {
   const [myTeamNames, setMyTeamNames] = useState(new Set());
 
   const [countdown, setCountdown] = useState(computeCountdownToNext0130UTC());
+
+  /* EO filter state + map */
+  const [onlyAbove1Pct, setOnlyAbove1Pct] = useState(true);     // default ON
+  const [eoSource, setEoSource] = useState('top10k');           // 'near' | 'top10k'
+  const [eoMap, setEoMap] = useState(new Map());                // always a Map
+
+  /* Summary modal state */
+  const [summaryOpen, setSummaryOpen] = useState(false);
+
   useEffect(() => {
     const id = setInterval(() => setCountdown(computeCountdownToNext0130UTC()), 1000);
     return () => clearInterval(id);
@@ -190,23 +347,40 @@ const PricesPage = () => {
     const resp = await sFetch('https://livefpl-api-489391001748.europe-west4.run.app/LH_api/prices');
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const json = await resp.json();
-    const arr = Object.values(json).map((p) => ({
-      ...p,
-      _pid: pidOf(p),
-      name: String(p.name || ''),
-      team: String(p.team || ''),
-      _nameFold: fold(p?.name ?? ''),
-      _teamFold: fold(p?.team ?? ''),
-      _typeFold: fold(p?.type ?? ''),
-      progress: Number(p.progress ?? 0),
-      progress_tonight: Number(p.progress_tonight ?? 0),
-      per_hour: Number(p.per_hour ?? 0),
-      type: String(p.type || ''),
-      cost: Number(p.cost ?? 0),
-      team_code: Number(p.team_code ?? 0),
-      id: Number(p.id ?? p.element ?? NaN),
-      element: Number(p.element ?? p.id ?? NaN),
-    }));
+
+    // IMPORTANT: keep the dict key as the element id
+    const arr = Object.entries(json).map(([elStr, p]) => {
+      const el = Number(elStr); // element id from the key
+      return {
+        ...p,
+        // search fields
+        name: String(p.name || ''),
+        team: String(p.team || ''),
+        _nameFold: fold(p?.name ?? ''),
+        _teamFold: fold(p?.team ?? ''),
+        _typeFold: fold(p?.type ?? ''),
+
+        // numbers
+        progress: Number(p.progress ?? 0),
+        progress_tonight: Number(p.progress_tonight ?? 0),
+        per_hour: Number(p.per_hour ?? 0),
+        cost: Number(p.cost ?? 0),
+        team_code: Number(p.team_code ?? 0),
+
+        // ids — this is what makes EO lookup work
+        id: el,
+        element: el,
+        _el: el,
+
+        // stable key for watchlist / FlatList
+        _pid: `${fold(p.name)}|${Number(p.team_code ?? 0)}`,
+
+        // keep type/labels
+        type: String(p.type || ''),
+        type_code: Number(p.type_code ?? 0),
+      };
+    });
+
     setPlayers(arr);
   }, [sFetch]);
 
@@ -251,21 +425,86 @@ const PricesPage = () => {
     }
   }, []);
 
+  const loadEOPrefsAndMap = useCallback(async () => {
+    try {
+      // EO source
+      const storedEO = await AsyncStorage.getItem(EOPREF_KEY);
+      const src = storedEO === 'near' ? 'near' : 'top10k';
+      setEoSource(src);
+
+      // toggle
+      const storedFilter = await AsyncStorage.getItem(PRICES_EO_FILTER_KEY);
+      if (storedFilter == null) {
+        setOnlyAbove1Pct(true);
+        AsyncStorage.setItem(PRICES_EO_FILTER_KEY, '1').catch(() => {});
+      } else {
+        setOnlyAbove1Pct(storedFilter === '1');
+      }
+
+      // cache key like Games/Threats
+      let key = 'EO:elite';
+      if (src === 'near') {
+        const myId = await AsyncStorage.getItem('fplId');
+        const rawLocal =
+          (myId && (await AsyncStorage.getItem(`localGroup:${myId}`))) ||
+          (await AsyncStorage.getItem('localGroup'));
+        const localNum = Number(rawLocal) || 1;
+        key = `EO:local:${localNum}`;
+      }
+
+      // try cached src
+      const cached = await getEOFromStorage(key);
+      if (cached) {
+        const m = buildEOMapForSource(cached, src);
+        if (m.size > 0) { setEoMap(m); return; }
+      }
+
+      // fallback to elite cache
+      if (key !== 'EO:elite') {
+        const elite = await getEOFromStorage('EO:elite');
+        if (elite) {
+          const m = buildEOMapForSource(elite, 'top10k');
+          if (m.size > 0) { setEoMap(m); return; }
+        }
+      }
+
+      // last resort: fetch elite.json
+      try {
+        const res = await fetch('https://livefpl.us/elite.json', { headers: { 'cache-control': 'no-cache' } });
+        if (res.ok) {
+          const json = await res.json();
+          await setEOToStorage('EO:elite', json);
+          const m = buildEOMapForSource(json, 'top10k');
+          setEoMap(m);
+          return;
+        }
+      } catch {
+        // ignore network error
+      }
+
+      // if nothing, still set an empty Map to keep type stable
+      setEoMap(new Map());
+    } catch {
+      setEoMap(new Map());
+    }
+  }, []);
+
   useEffect(() => {
     fetchPrices().catch(() => {});
     loadWatchlist().catch(() => {});
     loadMyTeamFromRankCache().catch(() => {});
-  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache]);
+    loadEOPrefsAndMap().catch(() => {});
+  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache, loadEOPrefsAndMap]);
 
   const handleRefresh = useCallback(async () => {
     try {
       setRefreshing(true);
-      await Promise.all([fetchPrices(), loadWatchlist(), loadMyTeamFromRankCache()]);
+      await Promise.all([fetchPrices(), loadWatchlist(), loadMyTeamFromRankCache(), loadEOPrefsAndMap()]);
     } finally {
       setRefreshing(false);
       setLimit(60);
     }
-  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache]);
+  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache, loadEOPrefsAndMap]);
 
   /* -------- Sorting / Filtering / Search -------- */
   const handleSort = useCallback(
@@ -296,10 +535,35 @@ const PricesPage = () => {
     });
   }, []);
 
+  // While searching, EO filter is temporarily OFF (UI also shows it OFF)
+  const searchActive = searchQuery.trim().length > 0;
+  const eoFilterActive = onlyAbove1Pct && !searchActive; // effective toggle
+
   const filteredSorted = useMemo(() => {
     const qFold = fold(searchQuery.trim());
     let arr = players;
 
+    /* EO ≥ 1% filter with survival for My Team / Watchlist / Positive prediction */
+    if (eoFilterActive && eoMap instanceof Map) {
+      arr = arr.filter((p) => {
+        const inWatch = watchlist.has(p._pid);
+        const inMy =
+          myTeamIds.has(Number(p.id)) ||
+          myTeamIds.has(Number(p.element)) ||
+          myTeamNames.has(p._nameFold);
+
+        // NEW: anyone with positive prediction survives
+        const positivePrediction = Number(p.progress_tonight) > 0;
+
+        if (inWatch || inMy || positivePrediction) return true; // survive
+
+        const el = Number(p.id ?? p.element);
+        const eoPct = eoMap.get(el) ?? 0; // eo already in percent
+        return eoPct >= EO_CUTOFF; // default gate: EO ≥ 1%
+      });
+    }
+
+    // Existing mode filters
     if (filterMode === 'watch') {
       arr = arr.filter((p) => watchlist.has(p._pid));
     } else if (filterMode === 'my') {
@@ -348,10 +612,70 @@ const PricesPage = () => {
     }
 
     return arr;
-  }, [players, searchQuery, sortColumn, sortDirection, filterMode, watchlist, myTeamIds, myTeamNames]);
+  }, [
+    players,
+    searchQuery,
+    sortColumn,
+    sortDirection,
+    filterMode,
+    watchlist,
+    myTeamIds,
+    myTeamNames,
+    onlyAbove1Pct,
+    eoMap,
+    eoSource,
+  ]);
 
   const visible = useMemo(() => filteredSorted.slice(0, limit), [filteredSorted, limit]);
+
+  /* -------- Tonight / Tomorrow summary (players, not just names) -------- */
+  const summary = useMemo(() => {
+    const buckets = {
+      tonight_up: [], tonight_down: [],
+      tomorrow_up: [], tomorrow_down: []
+    };
+    for (const p of filteredSorted) {
+      const b = getPredictionBucket(p.progress_tonight, p.per_hour);
+      if (b in buckets) buckets[b].push(p);
+    }
+    const byImpact = (arr) =>
+      [...arr].sort((a, b) => Math.abs(b.progress_tonight) - Math.abs(a.progress_tonight));
+
+    return {
+      tonightUp:    byImpact(buckets.tonight_up),
+      tonightDown:  byImpact(buckets.tonight_down),
+      tomorrowUp:   byImpact(buckets.tomorrow_up),
+      tomorrowDown: byImpact(buckets.tomorrow_down),
+    };
+  }, [filteredSorted]);
+
   useEffect(() => setLimit(60), [searchQuery, filterMode, sortColumn, sortDirection]);
+
+  /* -------- Small summary UI bits (for modal) -------- */
+  const SummaryPlayerPill = ({ p }) => (
+    <View style={styles.pill}>
+      <View style={styles.pillCrest}>
+        <ClubCrest id={p.team_code} style={{ width: 18, height: 18 }} resizeMode="contain" />
+      </View>
+      <Text style={styles.pillName} numberOfLines={1}>{p.name}</Text>
+      <Text style={styles.pillPct}>{pct(p.progress_tonight)}</Text>
+    </View>
+  );
+
+  const SummarySection = ({ title, players, tintStyle }) => (
+    <View style={[styles.sectionCard, tintStyle]}>
+      <Text style={styles.sectionTitle}>{title} · <Text style={styles.sectionCount}>{players.length}</Text></Text>
+      {players.length ? (
+        <View style={styles.pillWrap}>
+          {players.map((p) => (
+            <SummaryPlayerPill key={`${p._el}|pill`} p={p} />
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.sumNamesDim}>No strong movers</Text>
+      )}
+    </View>
+  );
 
   /* -------- Renderers -------- */
   const renderHeader = () => {
@@ -447,7 +771,7 @@ const PricesPage = () => {
               </TouchableOpacity>
 
               <View style={styles.shirtWrap}>
-                <ClubCrest id={item.team_code} style={styles.shirtImage} resizeMode="contain" />
+                <ClubCrest id={item.team_code} style={{ width: 28, height: 28 }} resizeMode="contain" />
               </View>
 
               <View style={styles.playerText}>
@@ -491,7 +815,7 @@ const PricesPage = () => {
             </TouchableOpacity>
 
             <View style={styles.shirtWrap}>
-              <ClubCrest id={item.team_code} style={styles.shirtImage} resizeMode="contain" />
+              <ClubCrest id={item.team_code} style={{ width: 28, height: 28 }} resizeMode="contain" />
             </View>
 
             <View style={styles.playerText}>
@@ -523,7 +847,26 @@ const PricesPage = () => {
       </DataTable.Row>
     );
   };
-
+const CheckButton = ({ label, checked, onToggle, disabled, P, isDark }) => (
+  <TouchableOpacity onPress={onToggle} activeOpacity={0.8} disabled={disabled}>
+    <View
+      style={[
+        { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1 },
+        { borderColor: P.border2, backgroundColor: isDark ? P.card : '#ffffff' },
+        disabled && { opacity: 0.5 },
+      ]}
+    >
+      <FontAwesome
+        name={checked ? 'check-square' : 'square-o'}
+        size={18}
+        color={checked ? P.accent : P.muted}
+      />
+      <Text style={{ fontWeight: '700', color: isDark ? P.ink : '#0f172a', fontSize: 12 }}>
+        {label}
+      </Text>
+    </View>
+  </TouchableOpacity>
+);
   const renderFooter = () => (
     <View>
       {visible.length < filteredSorted.length ? (
@@ -548,7 +891,7 @@ const PricesPage = () => {
         <AppHeader />
 
         {/* Countdown banner */}
-        <InfoBanner text="Transfer trends and past price changes available at" link="www.livefpl.net/prices" />
+        <InfoBanner text="Transfer trends & past changes at" link="www.livefpl.net/prices" />
         <View style={styles.banner}>
           <Text style={styles.bannerTxt}>
             These are predicted price changes to take place in{' '}
@@ -557,7 +900,7 @@ const PricesPage = () => {
           </Text>
         </View>
 
-        {/* Top controls */}
+        {/* Top controls (sticky area) */}
         <View style={styles.controlsRow}>
           <TextInput
             style={styles.input}
@@ -568,28 +911,102 @@ const PricesPage = () => {
           />
 
           <View style={styles.toggleRow}>
-            <ToggleChip label="All"       active={filterMode === 'all'}  onPress={() => setFilterMode('all')}  P={P} isDark={isDark} />
-            <ToggleChip label="My Team"   active={filterMode === 'my'}   onPress={() => setFilterMode('my')}   P={P} isDark={isDark} />
+            <ToggleChip label="All"       active={filterMode === 'all'}   onPress={() => setFilterMode('all')}   P={P} isDark={isDark} />
+            <ToggleChip label="My Team"   active={filterMode === 'my'}    onPress={() => setFilterMode('my')}    P={P} isDark={isDark} />
             <ToggleChip label="Watchlist" active={filterMode === 'watch'} onPress={() => setFilterMode('watch')} P={P} isDark={isDark} />
+            {/* EO filter toggle (persisted, default ON) */}
+            <TouchableOpacity onPress={() => setSummaryOpen(true)} activeOpacity={0.85}>
+              <View style={[chipStyles.base, { backgroundColor: isDark ? '#1e293b' : '#e2e8f0', borderColor: P.border2 }]}>
+                <Text style={[chipStyles.txtBase, { color: isDark ? P.whiteHi : '#0f172a' }]}>Show summary</Text>
+              </View>
+            </TouchableOpacity>
+            /* ---------- Check button ---------- */
+
+<CheckButton
+  label="Hide fallers below 1% EO"
+  checked={eoFilterActive}            // visually off while typing
+  onToggle={() => {
+    if (searchActive) return;         // don't change saved pref mid-typing
+    const v = !onlyAbove1Pct;
+    setOnlyAbove1Pct(v);
+    AsyncStorage.setItem(PRICES_EO_FILTER_KEY, v ? '1' : '0').catch(() => {});
+  }}
+  disabled={searchActive}
+  P={P}
+  isDark={isDark}
+/>
+
+            {/* Show Summary button */}
+            
           </View>
         </View>
 
-        <DataTable style={styles.table}>
-          {renderHeader()}
-          <FlatList
-            data={visible}
-            keyExtractor={(item) => String(item._pid)}
-            renderItem={renderRow}
-            onEndReachedThreshold={0.35}
-            onEndReached={() => {
-              if (visible.length < filteredSorted.length) setLimit((n) => n + 60);
-            }}
-            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
-            contentContainerStyle={{ paddingBottom: BOTTOM_AD_INSET }}
-            ListFooterComponent={renderFooter}
-          />
-        </DataTable>
+        {/* Table area with finite height and scroll */}
+        <View style={[styles.tableWrap, { height: listHeight }]}>
+          <DataTable style={styles.table}>
+            <FlatList
+              ListHeaderComponent={renderHeader()}
+              data={visible}
+              keyExtractor={(item) => String(item._el)}  // use element id (stable, unique)
+              renderItem={renderRow}
+              onEndReachedThreshold={0.35}
+              onEndReached={() => {
+                if (visible.length < filteredSorted.length) setLimit((n) => n + 60);
+              }}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
+              contentContainerStyle={{ paddingBottom: BOTTOM_AD_INSET }}
+              ListFooterComponent={renderFooter}
+            />
+          </DataTable>
+        </View>
       </View>
+
+      {/* ===== Summary Modal ===== */}
+      <Modal
+        visible={summaryOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setSummaryOpen(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalCard, { backgroundColor: isDark ? '#0b1224' : '#ffffff', borderColor: P.border }]}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Price Change Summary</Text>
+              <TouchableOpacity onPress={() => setSummaryOpen(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={styles.modalClose}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.modalSub}>
+              Based on current predictions and your filters/search.
+            </Text>
+
+            <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
+              <SummarySection
+                title="Likely Tonight ⬆️"
+                players={summary.tonightUp}
+                tintStyle={styles.sumTintUp}
+              />
+              <SummarySection
+                title="Likely Tonight ⬇️"
+                players={summary.tonightDown}
+                tintStyle={styles.sumTintDown}
+              />
+              <SummarySection
+                title="Likely Tomorrow ⬆️"
+                players={summary.tomorrowUp}
+                tintStyle={styles.sumTintSoonUp}
+              />
+              <SummarySection
+                title="Likely Tomorrow ⬇️"
+                players={summary.tomorrowDown}
+                tintStyle={styles.sumTintSoonDown}
+              />
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+      {/* ===== End Summary Modal ===== */}
     </SafeAreaView>
   );
 };
@@ -600,27 +1017,82 @@ const createStyles = (C, isDark, screenWidth) =>
     safe: { flex: 1, backgroundColor: C.bg, paddingTop: 48 },
     container: { flex: 1, paddingHorizontal: 10 },
 
+    tableWrap: { overflow: 'hidden', borderRadius: 10, marginTop: 8 },
+
+    // Summary modal-specific
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'flex-end',
+    },
+    modalCard: {
+      maxHeight: '85%',
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      paddingHorizontal: 14,
+      paddingTop: 12,
+      borderWidth: 1,
+    },
+    modalHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingBottom: 6,
+    },
+    modalTitle: { fontSize: 16, fontWeight: '900', color: isDark ? C.whiteHi : '#0f172a' },
+    modalClose: { fontSize: 20, color: isDark ? C.whiteMd : '#334155' },
+    modalSub: {
+      color: isDark ? C.whiteMd : '#475569',
+      marginBottom: 10,
+      fontSize: 12,
+      textAlign: 'center',
+    },
+
+    // Section cards inside modal
+    sectionCard: {
+      borderWidth: 1,
+      borderRadius: 12,
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      marginBottom: 10,
+    },
+    sectionTitle: { fontWeight: '800', fontSize: 12, color: isDark ? C.whiteHi : '#0f172a' },
+    sectionCount: { color: isDark ? C.ink : '#0f172a' },
+
+    // Player pills
+    pillWrap: {
+      marginTop: 8,
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      marginHorizontal: -4,
+    },
+    pill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1,
+      borderColor: isDark ? '#1b2642' : '#cbd5e1',
+      backgroundColor: isDark ? '#0f1525' : '#f8fafc',
+      borderRadius: 999,
+      paddingVertical: 6,
+      paddingHorizontal: 10,
+      margin: 4,
+      maxWidth: '100%',
+      gap: 6,
+    },
+    pillCrest: { width: 20, alignItems: 'center' },
+    pillName: { color: isDark ? C.whiteHi : '#0f172a', fontWeight: '700', maxWidth: screenWidth * 0.5 },
+    pillPct: { color: isDark ? C.whiteMd : '#475569', fontSize: 11 },
+
+    // Summary tints (reused from earlier)
+    sumTintUp:       { backgroundColor: isDark ? '#0f1d12' : '#ecfdf5', borderColor: isDark ? '#14532d' : '#a7f3d0' },
+    sumTintDown:     { backgroundColor: isDark ? '#2b1412' : '#fef2f2', borderColor: isDark ? '#7f1d1d' : '#fecaca' },
+    sumTintSoonUp:   { backgroundColor: isDark ? '#0f1725' : '#eef2ff', borderColor: isDark ? '#1d4ed8' : '#c7d2fe' },
+    sumTintSoonDown: { backgroundColor: isDark ? '#1e1825' : '#f5f3ff', borderColor: isDark ? '#6d28d9' : '#ddd6fe' },
+
     // Force DataTable background to our theme color (fixes white table in dark)
     table: {
       backgroundColor: isDark ? C.bg : '#ffffff',
     },
-
-    // Top bar — fixed dark
-    topBar: {
-      height: 44,
-      paddingHorizontal: 12,
-      alignItems: 'center',
-      flexDirection: 'row',
-      justifyContent: 'center',
-      backgroundColor: '#0b0c10',
-      borderBottomWidth: 1,
-      borderBottomColor: '#0b0c10',
-      zIndex: 10,
-      elevation: 10,
-      marginBottom: 6,
-    },
-    topLogo: { height: 28, width: 160 },
-    topTitle: { color: '#e6eefc', fontWeight: '900', fontSize: 16 },
 
     // Banner
     banner: {
@@ -647,7 +1119,7 @@ const createStyles = (C, isDark, screenWidth) =>
       borderRadius: 10,
       marginBottom: 8,
     },
-    toggleRow: { flexDirection: 'row', gap: 8 },
+    toggleRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
 
     // Table header / rows
     headerStyle: {
@@ -673,7 +1145,6 @@ const createStyles = (C, isDark, screenWidth) =>
     // Player cell
     playerCell: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     shirtWrap: { width: 28, alignItems: 'center' },
-    shirtImage: { width: 28, height: 28 },
     playerText: { minWidth: 0, maxWidth: screenWidth * 0.42 - 28 - 26 },
     playerName: { color: isDark ? C.ink : '#0f172a', fontSize: 12, fontWeight: '700' },
     playerMeta: { color: isDark ? C.muted : '#64748b', fontSize: 10, marginTop: 2 },
@@ -745,6 +1216,7 @@ const createStyles = (C, isDark, screenWidth) =>
     footerDone: { paddingVertical: 14, alignItems: 'center' },
     footerTxt: { color: isDark ? '#cbd5e1' : '#64748b', fontWeight: '700' },
     footerTxtDim: { color: isDark ? '#6b7280' : '#94a3b8' },
+    sumNamesDim: { color: isDark ? '#cbd5e1' : '#64748b',}
   });
 
 export default PricesPage;

@@ -1,35 +1,45 @@
 {
   "cli": {
-    "version": ">= 10.0.0"
+    "version": ">= 10.0.0",
+    "appVersionSource": "remote"
   },
   "build": {
-"development": {
+    "development": {
       "developmentClient": true,
       "distribution": "internal",
       "channel": "development",
-      "ios": { "resourceClass": "m-medium" }
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "autoIncrement": true
     },
     "preview": {
       "channel": "preview",
       "distribution": "store",
-      "ios": { "resourceClass": "m-medium" },
-          },
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "autoIncrement": true
+    },
     "production": {
       "channel": "production",
       "distribution": "store",
-      "ios": { "resourceClass": "m-medium" },
-         }
+      "ios": {
+        "resourceClass": "m-medium"
+      },
+      "autoIncrement": true
+    }
   },
   "submit": {
     "preview": {
       "ios": {
-"ascAppId": "6752318405"
-              }
+        "ascAppId": "6752318405"
+      }
     },
     "production": {
       "ios": {
-"ascAppId": "6752318405"
-               }
+        "ascAppId": "6752318405"
+      }
     }
   }
 }
