@@ -8,9 +8,15 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { setTrigger, setConfig, bump } from './meter';
 import { showOnce } from './AdInterstitial';
 import { ThemeProvider, useTheme, useColors } from './theme';
+import { Text, TextInput } from 'react-native';
+
+Text.defaultProps = Text.defaultProps || {};
+Text.defaultProps.allowFontScaling = false;
+TextInput.defaultProps = TextInput.defaultProps || {};
+TextInput.defaultProps.allowFontScaling = false;
 
 const LOCAL_BUILD = 1; // ← your hardcoded app build/version
-const CONFIG_URL = 'https://www.livefpl.net/app_version.json';
+const CONFIG_URL = 'https://livefpl.us/version.json';
 const DEFAULT_REMOTE_VERSION = 1;
 import ForceUpdateGate from './checkversion';
 
@@ -19,12 +25,15 @@ import PricesPage from './Prices.js';
 import { FplIdProvider } from './FplIdContext';
 import Leagues from './league';
 import Threats from './threats';
+import PlannerScreen from './planner';
+import WhatIf from './whatif';
 import Games from './games';
 import AdFooter from './ad';
 import ChangeID from './ChangeID';
+import Achievements from './achievements';
 
 // Configure once (safe even with HMR; no UI side effects)
-setConfig({ N: 10, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
+setConfig({ N: 1000, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
 setTrigger((ctx) => showOnce({ reason: `meter:${ctx.source}:${ctx.count}` }));
 
 const Tab = createBottomTabNavigator();
@@ -44,11 +53,14 @@ function MyTabs() {
             case 'Prices': iconName = 'finance'; break;
             case 'Leagues': iconName = 'trophy'; break;
             case 'Rank': iconName = 'chart-line'; break;
-            case 'Change ID': iconName = 'account-edit'; break;
+            case 'ID': iconName = 'account-edit'; break;
             case 'Games': iconName = 'soccer'; break;
+            case 'Trophies': iconName = 'medal'; break;
+            case 'Planner': iconName = 'calendar-edit';break;
+            case 'What If': iconName = 'lightbulb-on-outline';break;
             default: iconName = 'account'; break;
           }
-          return <MaterialCommunityIcons name={iconName} size={size} color={color} />;
+          return <MaterialCommunityIcons name={iconName} size={19} color={color} />;
         },
 
         headerShown: false,
@@ -59,7 +71,7 @@ function MyTabs() {
           borderTopColor: C.border,
           borderTopWidth: 1,
         },
-        tabBarLabelStyle: { fontSize: 12, fontWeight: '700' },
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '700' },
         tabBarIconStyle: { marginTop: 2 },
         tabBarItemStyle: { paddingVertical: 2 },
         tabBarHideOnKeyboard: true,
@@ -92,19 +104,24 @@ function MyTabs() {
           },
         })}
       />
+      
       <Tab.Screen name="Battle" component={Threats} />
-      <Tab.Screen
-        name="Leagues"
-        component={Leagues}
-        options={{
-          tabBarIcon: ({ color, size }) => (
-            <MaterialCommunityIcons name="trophy" size={size} color={color} />
-          ),
-        }}
-      />
+      <Tab.Screen name="Leagues" component={Leagues} />
       <Tab.Screen name="Prices" component={PricesPage} />
       <Tab.Screen name="Games" component={Games} />
-      <Tab.Screen name="Change ID" component={ChangeID} />
+      
+      <Tab.Screen name="What If" component={WhatIf} />
+      <Tab.Screen name="Planner" component={PlannerScreen} />
+      <Tab.Screen name="Trophies" component={Achievements} options={{
+    tabBarButton: () => null,   // hides it from the bottom bar
+    tabBarIcon: () => null,     // (optional) don’t reserve icon space
+    tabBarLabel: () => null,    // (optional) belt & suspenders
+  }} />
+      <Tab.Screen name="ID" component={ChangeID} options={{
+    tabBarButton: () => null,   // hides it from the bottom bar
+    tabBarIcon: () => null,     // (optional) don’t reserve icon space
+    tabBarLabel: () => null,    // (optional) belt & suspenders
+  }} />
     </Tab.Navigator>
   );
 }
@@ -140,6 +157,7 @@ export default function App() {
   };
 
   return (
+    <ThemeProvider>
     <ForceUpdateGate localBuild={LOCAL_BUILD} configUrl={CONFIG_URL} defaultRemote={DEFAULT_REMOTE_VERSION}>
       <FplIdProvider>
         <ThemeProvider>
@@ -147,6 +165,7 @@ export default function App() {
         </ThemeProvider>
       </FplIdProvider>
     </ForceUpdateGate>
+    </ThemeProvider>
   );
 }
 

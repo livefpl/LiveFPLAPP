@@ -3,23 +3,21 @@ import AppHeader from './AppHeader';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   SafeAreaView,
-  Image,
   Linking,
   ScrollView,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import { useFplId } from './FplIdContext';
-import { assetImages } from './clubs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors, useTheme } from './theme';
+import ThemedTextInput from './ThemedTextInput';
 
 /* --- Helpers --- */
 function extractIdFromText(s) {
@@ -59,11 +57,10 @@ function ValueProps({ C, styles }) {
   return (
     <View style={styles.valueCard} accessibilityRole="summary">
       <View style={styles.valueHeaderRow}>
-       
-        <Text style={styles.valueHeading}>The original and most used FPL service since 2018</Text>
+        <Text style={styles.valueHeading}>
+          The original, most-trusted FPL rank tool since 2018 ❤️
+        </Text>
       </View>
-
-      
 
       <TouchableOpacity
         onPress={() => openUrl('https://www.livefpl.net')}
@@ -72,18 +69,9 @@ function ValueProps({ C, styles }) {
         accessibilityRole="link"
         accessibilityLabel="Open the LiveFPL website"
       >
-        <Text style={styles.learnMoreText}>Learn more on the website</Text>
+        <Text style={styles.learnMoreText}>Get the full experience on the website</Text>
         <MaterialCommunityIcons name="open-in-new" size={13} color={C.muted} />
       </TouchableOpacity>
-    </View>
-  );
-}
-
-function Chip({ icon, text, C, styles }) {
-  return (
-    <View style={styles.badgePill}>
-      <MaterialCommunityIcons name={icon} size={12} color={C.ink} />
-      <Text style={styles.badgeText}>{text}</Text>
     </View>
   );
 }
@@ -112,6 +100,7 @@ export default function ChangeID() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [showHelp, setShowHelp] = useState(false);
+  const [parsedId, setParsedId] = useState(null);
 
   const inputRef = useRef(null);
 
@@ -125,10 +114,15 @@ export default function ChangeID() {
     })();
   }, [fplId]);
 
-  const exampleUrl = useMemo(
-    () => 'https://fantasy.premierleague.com/entry/1234567/event/1',
-    []
-  );
+  // live parse feedback
+  useEffect(() => {
+    const trimmed = (value || '').trim();
+    let next = null;
+    if (/^\d+$/.test(trimmed)) next = trimmed;
+    else next = extractIdFromText(trimmed);
+    setParsedId(next);
+    if (error && next) setError('');
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onSave = async () => {
     setError('');
@@ -177,12 +171,10 @@ export default function ChangeID() {
   }
 
   const hasText = (value || '').length > 0;
+  const isValid = !!parsedId;
 
   return (
-    
     <SafeAreaView style={styles.safe}>
-      {/* Top bar (always dark) */}
-      
       <AppHeader />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -197,7 +189,7 @@ export default function ChangeID() {
 
           {/* Input Card */}
           <View style={styles.card}>
-            {/* Theme toggle row (kept compact, synchronized with global theme) */}
+            {/* Theme toggle row */}
             <View style={styles.themeRow}>
               <Text style={styles.themeLabel}>Theme</Text>
               <View style={styles.themeSeg}>
@@ -205,58 +197,87 @@ export default function ChangeID() {
                   onPress={() => setMode('dark')}
                   activeOpacity={0.85}
                   style={[styles.segment, mode === 'dark' && styles.segmentActive]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Switch to dark mode"
                 >
                   <Text style={[styles.segmentText, mode === 'dark' && styles.segmentTextActive]}>
-                    Dark Mode
+                    Dark
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={() => setMode('light')}
                   activeOpacity={0.85}
                   style={[styles.segment, mode === 'light' && styles.segmentActive]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Switch to light mode"
                 >
                   <Text style={[styles.segmentText, mode === 'light' && styles.segmentTextActive]}>
-                    Light Mode
+                    Light
                   </Text>
                 </TouchableOpacity>
               </View>
             </View>
 
-            <Text style={styles.title}>Enter Your FPL ID</Text>
+            <Text style={styles.title}>Enter your FPL ID</Text>
             <Text style={styles.subtitle}>
-              We only need your public FPL ID to get going!
+              We only use your public FPL ID on this device.
             </Text>
 
-            <View style={styles.inputRow}>
-              <TextInput
-                ref={inputRef}
-                style={styles.input}
-                placeholder="e.g. 1234567 or paste a link"
-                placeholderTextColor={C.muted}
-                value={value}
-                onChangeText={(t) => setValue(sanitizeInput(t))}
-                keyboardType="numeric"
-                inputMode="numeric"
-                returnKeyType="done"
-                blurOnSubmit={true}
-                onSubmitEditing={() => inputRef.current?.blur()}
-                autoCapitalize="none"
-                autoCorrect={false}
-                selectionColor={C.accent}
-              />
-              {hasText ? (
-                <TouchableOpacity
-                  onPress={() => {
-                    setValue('');
-                    requestAnimationFrame(() => inputRef.current?.focus());
-                  }}
-                  activeOpacity={0.7}
-                  style={styles.clearBtn}
-                >
-                  <MaterialCommunityIcons name="close-circle" size={18} color={C.muted} />
-                </TouchableOpacity>
+            <View
+  style={[
+    styles.inputRow,
+    error && { borderColor: C.danger, backgroundColor: isDark ? 'rgba(220,38,38,0.08)' : '#fff5f5' },
+    !error && isValid && { borderColor: C.ok, backgroundColor: isDark ? 'rgba(16,185,129,0.10)' : '#f0fff4' },
+  ]}
+>
+  <ThemedTextInput
+    ref={inputRef}
+    style={styles.input} // transparent bg handled inside ThemedTextInput
+    placeholder="e.g. 1234567 or paste a link"
+    placeholderTextColor={C.muted}
+    value={value}
+    onChangeText={(t) => setValue(sanitizeInput(t))}
+    keyboardType="number-pad"
+    inputMode="numeric"
+    returnKeyType="done"
+    enterKeyHint="done"
+    blurOnSubmit
+    onSubmitEditing={() => inputRef.current?.blur()}
+    autoCapitalize="none"
+    autoCorrect={false}
+    selectionColor={C.accent}
+    accessibilityLabel="Your FPL ID"
+    maxLength={10}
+    textContentType={Platform.OS === 'ios' ? 'oneTimeCode' : 'none'}
+  />
+</View>
+
+
+            {/* Live parsed feedback */}
+            <View style={{ minHeight: 18, marginTop: 6 }}>
+              {isValid ? (
+                <Text style={styles.validHint}>
+                  Detected ID: <Text style={styles.validId}>{parsedId}</Text>
+                </Text>
+              ) : hasText ? (
+                <Text style={styles.mutedSmall}>Paste a full FPL link or enter digits only.</Text>
               ) : null}
             </View>
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, saving && { opacity: 0.8 }]}
+              onPress={onSave}
+              disabled={saving}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Continue"
+            >
+              {saving ? (
+                <ActivityIndicator color="#ffffff" />
+              ) : (
+                <Text style={styles.primaryBtnText}>Continue</Text>
+              )}
+            </TouchableOpacity>
 
             {!!error && (
               <View style={styles.errRow}>
@@ -265,20 +286,7 @@ export default function ChangeID() {
               </View>
             )}
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, saving && { opacity: 0.8 }]}
-              onPress={onSave}
-              disabled={saving}
-              activeOpacity={0.85}
-            >
-              {saving ? (
-                <ActivityIndicator color="#ffffff" />
-              ) : (
-                <Text style={styles.primaryBtnText}>Save ID & Open Live Rank</Text>
-              )}
-            </TouchableOpacity>
-
-            {/* Help toggle */}
+            {/* Help toggle + panel */}
             <TouchableOpacity
               onPress={() => setShowHelp((s) => !s)}
               activeOpacity={0.8}
@@ -290,7 +298,7 @@ export default function ChangeID() {
                 color={C.muted}
               />
               <Text style={styles.helpToggleText}>
-                {showHelp ? 'Hide help' : 'Where do I find my ID?'}
+                {showHelp ? 'Hide help' : 'Don’t know your ID? Find it'}
               </Text>
             </TouchableOpacity>
 
@@ -303,27 +311,45 @@ export default function ChangeID() {
                     fantasy.premierleague.com
                   </Text>
                 </Text>
-                <Text style={styles.helpBullet}>2) Open <Text style={styles.bold}>Points</Text> or <Text style={styles.bold}>Gameweek History</Text></Text>
-                <Text style={styles.helpBullet}>3) Copy the number after <Text style={styles.codeInline}>/entry/</Text></Text>
+                <Text style={styles.helpBullet}>
+                  2) Open <Text style={styles.bold}>Points</Text> or <Text style={styles.bold}>Gameweek History</Text>
+                </Text>
+                <Text style={styles.helpBullet}>
+                  3) Copy the number after <Text style={styles.codeInline}>/entry/</Text>
+                </Text>
 
                 <View style={styles.codeBlock}>
                   <Text
                     selectable
                     style={styles.codeText}
-                    onPress={() => openUrl(exampleUrl)}
+                    onPress={() => openUrl('https://fantasy.premierleague.com/entry/1234567/event/1')}
                   >
-                    {exampleUrl}
+                    https://fantasy.premierleague.com/entry/1234567/event/1
                   </Text>
                 </View>
 
                 <Text style={styles.tip}>
-                  Tip: Paste the FPL link above—we’ll extract the ID automatically.
+                  Tip: Paste your FPL link—we’ll extract the ID automatically.
                 </Text>
               </View>
             )}
           </View>
 
-          {/* Footer */}
+          {/* Notice about free period / subscription (updated copy) */}
+          <View style={styles.noticeCard}>
+            <MaterialCommunityIcons
+              name="information-outline"
+              size={16}
+              color={isDark ? '#C7D2FE' : '#4338CA'}
+              style={{ marginRight: 8 }}
+            />
+            <Text style={styles.noticeText}>
+              This is an initial test version of the app. All app features are free &amp; unlimited right now.
+              In a few weeks, some features may require a subscription to allow unlimited use.
+            </Text>
+          </View>
+
+          {/* Footer with Buy Me a Coffee */}
           <View style={styles.signatureWrap}>
             <Text style={styles.signatureText}>© LiveFPL by Ragabolly 2025</Text>
             <TouchableOpacity
@@ -348,21 +374,6 @@ const createStyles = (C, isDark) =>
   StyleSheet.create({
     safe: { flex: 1, backgroundColor: C.bg },
 
-    /* Top bar (ALWAYS dark for the LiveFPL logo) */
-    topBar: {
-      marginTop: 40,
-      height: 44,
-      paddingHorizontal: 14,
-      alignItems: 'center',
-      justifyContent: 'center',
-      borderBottomWidth: 1,
-      borderBottomColor: '#1f2937',
-      backgroundColor: '#0b0c10',
-      
-    },
-    topLogo: { height: 26, width: 160 },
-    topTitle: { color: '#e6eefc', fontWeight: '900', fontSize: 16 },
-
     /* Page container */
     container: {
       paddingHorizontal: 20,
@@ -374,6 +385,7 @@ const createStyles = (C, isDark) =>
 
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     muted: { color: C.muted, marginTop: 8 },
+    mutedSmall: { color: C.muted, fontSize: 12 },
 
     /* Value / hero */
     valueCard: {
@@ -399,24 +411,6 @@ const createStyles = (C, isDark) =>
       letterSpacing: 0.2,
       textAlign: 'center',
     },
-    chipsRow: {
-      gap: 8,
-      paddingTop: 8,
-      paddingBottom: 2,
-    },
-    badgePill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 6,
-      borderRadius: 999,
-      backgroundColor: isDark ? '#0b1320' : '#eef2ff',
-      borderWidth: 1,
-      borderColor: isDark ? C.border2 : '#d1d5db',
-      marginRight: 2,
-    },
-    badgeText: { color: C.ink, fontSize: 12, fontWeight: '800' },
     learnMoreLink: {
       alignSelf: 'center',
       marginTop: 6,
@@ -425,6 +419,25 @@ const createStyles = (C, isDark) =>
       gap: 6,
     },
     learnMoreText: { color: C.muted, fontSize: 12, textDecorationLine: 'underline' },
+
+    /* Notice card */
+    noticeCard: {
+      width: '100%',
+      maxWidth: 520,
+      flexDirection: 'row',
+      alignItems: 'flex-start',
+      borderRadius: 12,
+      padding: 10,
+      borderWidth: 1,
+      borderColor: isDark ? '#243b5a' : '#c7d2fe',
+      backgroundColor: isDark ? 'rgba(59,130,246,0.10)' : '#eef2ff',
+    },
+    noticeText: {
+      flex: 1,
+      color: C.ink,
+      fontSize: 12,
+      lineHeight: 18,
+    },
 
     /* Input card */
     card: {
@@ -436,10 +449,10 @@ const createStyles = (C, isDark) =>
       borderWidth: 1,
       borderColor: C.border,
       shadowColor: '#000',
-      shadowOpacity: 0.16,
-      shadowRadius: 10,
-      shadowOffset: { width: 0, height: 4 },
-      elevation: 5,
+      shadowOpacity: isDark ? 0 : 0.16,
+      shadowRadius: isDark ? 0 : 10,
+      shadowOffset: { width: 0, height: isDark ? 0 : 4 },
+      elevation: isDark ? 0 : 5,
     },
 
     /* Theme toggle */
@@ -454,24 +467,26 @@ const createStyles = (C, isDark) =>
     segment: {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: C.border,
-      backgroundColor: isDark ?  '#182544': "white" ,
+      backgroundColor: C.chipBg ?? (isDark ? '#0f172a' : '#eef2ff'),
       paddingVertical: 8,
       paddingHorizontal: 12,
       borderRadius: 999,
+      minHeight: 40,
+      justifyContent: 'center',
     },
     segmentActive: {
       backgroundColor: C.accent,
       borderColor: C.accentDark,
     },
     segmentText: {
-  color: isDark ? C.ink : 'black', // stronger legibility on light
-   fontWeight: '800',
-   fontSize: 12,
-   letterSpacing: 0.2,
- },
-        segmentTextActive: { color: '#ffffff',},
+      color: isDark ? C.ink : '#0b1220',
+      fontWeight: '800',
+      fontSize: 12,
+      letterSpacing: 0.2,
+    },
+    segmentTextActive: { color: '#ffffff' },
 
-    title: { fontSize: 18, fontWeight: '900', color: C.ink },
+    title: { fontSize: 18, fontWeight: '900', color: C.ink, marginTop: 2 },
     subtitle: { fontSize: 12, color: C.muted, marginTop: 4, marginBottom: 10 },
 
     inputRow: {
@@ -483,11 +498,12 @@ const createStyles = (C, isDark) =>
       borderColor: C.inputBorder,
       backgroundColor: C.inputBg,
       paddingHorizontal: 10,
+      overflow: 'hidden',   // clip rounded corners so nothing bleeds
     },
     input: {
       flex: 1,
       color: C.ink,
-      paddingVertical: Platform.select({ ios: 12, android: 10 }),
+      // paddingVertical handled in ThemedTextInput; keep here if you want overrides
     },
     clearBtn: {
       height: 40,
@@ -497,21 +513,13 @@ const createStyles = (C, isDark) =>
       marginHorizontal: 2,
     },
 
+    validHint: { color: C.muted, fontSize: 12 },
+    validId: { color: C.ink, fontWeight: '800' },
+
     errRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
     error: { color: C.danger },
 
-    primaryBtn: {
-      marginTop: 12,
-      height: 48,
-      borderRadius: 10,
-      backgroundColor: C.accent,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    primaryBtnText: { color: '#ffffff', fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
-
-    linkish: { color: C.ink, textDecorationLine: 'underline' },
-
+    /* Help toggle + panel */
     helpToggle: {
       marginTop: 12,
       alignSelf: 'center',
@@ -523,8 +531,10 @@ const createStyles = (C, isDark) =>
     },
     helpToggleText: { color: C.muted, fontSize: 13 },
 
+    linkish: { color: C.ink, textDecorationLine: 'underline' },
+
     helpBox: {
-      marginTop: 8,
+      marginTop: 12,
       borderRadius: 12,
       borderWidth: 1,
       borderColor: isDark ? C.border2 : '#e5e7eb',
@@ -557,7 +567,9 @@ const createStyles = (C, isDark) =>
     },
     tip: { color: C.muted, marginTop: 8 },
 
+    /* Footer */
     signatureWrap: {
+      display:'none',
       width: '100%',
       maxWidth: 520,
       alignItems: 'center',
@@ -565,7 +577,7 @@ const createStyles = (C, isDark) =>
       flexDirection: 'row',
       gap: 10,
       flexWrap: 'wrap',
-      marginTop: 8,
+      marginTop: 12,
       marginBottom: 12,
     },
     signatureText: {
@@ -588,4 +600,21 @@ const createStyles = (C, isDark) =>
       fontSize: 12,
       fontWeight: '800',
     },
+
+    /* Sticky CTA */
+    ctaBar: {
+      paddingHorizontal: 20,
+      paddingVertical: 12,
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: C.border,
+      backgroundColor: C.bg,
+    },
+    primaryBtn: {
+      height: 48,
+      borderRadius: 10,
+      backgroundColor: C.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    primaryBtnText: { color: '#ffffff', fontWeight: '900', fontSize: 15, letterSpacing: 0.2 },
   });

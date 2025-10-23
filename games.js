@@ -1,9 +1,12 @@
 // Games.js (theme-integrated)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
 import AppHeader from './AppHeader';
 import {
+ 
   ActivityIndicator,
   FlatList,
+  SectionList,
   RefreshControl,
   StyleSheet,
   Text,
@@ -11,22 +14,251 @@ import {
   View,
   Image,
   Dimensions,
-  SafeAreaView,
+
   Modal,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { clubCrestUri, assetImages } from './clubs';
 import { smartFetch } from './signedFetch';
-import { useColors } from './theme';
+import { useColors,useTheme  } from './theme';
+Text.defaultProps = Text.defaultProps || {};
+Text.defaultProps.allowFontScaling = false;
 
 /* ---------------------- Sizing ---------------------- */
 const rem = Dimensions.get('window').width / 380;
 const SCREEN_W = Dimensions.get('window').width;
 const SCREEN_H = Dimensions.get('window').height;
 const LIVEFPL_LOGO = assetImages?.livefplLogo ?? assetImages?.logo;
+const SORT_OPTIONS = [
+  { label: 'Chronological',     value: 'chrono' },
+  { label: 'Live Games First',  value: 'live' },
+  { label: 'Biggest Gain/Loss', value: 'net' },
+  { label: 'Highest EO',        value: 'eo' },
+];
+const SORT_KEY = 'games.sortBy';
+
+// Safe kickoff getter (accepts object or array payloads)
+// Safe kickoff getter (array uses *last* entry; object uses common keys)
+// Safe kickoff getter (accepts object or array payloads)
+function getKickoffDate(game) {
+  const parseMaybeDate = (v) => {
+    if (v == null) return null;
+
+    // numeric: treat < 1e12 as seconds, otherwise ms
+    if (typeof v === 'number') {
+      const n = v < 1e12 ? v * 1000 : v;
+      const d = new Date(n);
+      const yr = d.getUTCFullYear();
+      return isNaN(d) || yr < 2020 || yr > 2100 ? null : d;
+    }
+
+    // string: normalize and parse as UTC, not local
+    if (typeof v === 'string') {
+      const s = v.trim();
+
+      // ISO with timezone (Z or ±hh:mm) → safe
+      if (/Z$|[+-]\d{2}:\d{2}$/.test(s)) {
+        const d = new Date(s);
+        return isNaN(d) ? null : d;
+      }
+
+      // "YYYY-MM-DD HH:mm(:ss)?" or "YYYY-MM-DDTHH:mm(:ss)?" (no tz)
+      let m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+      if (m) {
+        const [ , Y, M, D, h, mnt, sec = '0' ] = m;
+        const d = new Date(Date.UTC(+Y, +M - 1, +D, +h, +mnt, +sec));
+        return isNaN(d) ? null : d;
+      }
+
+      // "YYYY-MM-DD" date-only
+      m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m) {
+        const [ , Y, M, D ] = m;
+        const d = new Date(Date.UTC(+Y, +M - 1, +D, 0, 0, 0));
+        return isNaN(d) ? null : d;
+      }
+
+      // numeric string → same as number path
+      if (/^\d+$/.test(s)) {
+        const n = Number(s);
+        return parseMaybeDate(n);
+      }
+
+      // last resort
+      const d = new Date(s);
+      return isNaN(d) ? null : d;
+    }
+
+    return null;
+  };
+
+  // Prefer known kickoff fields; fall back to common alternates
+  if (Array.isArray(game)) {
+    const candidates = [game[15], game[14], game[19], game[20]]; // adjust if your feed differs
+    for (const c of candidates) {
+      const d = parseMaybeDate(c);
+      if (d) return d;
+    }
+    return null;
+  } else {
+    const k = game?.kickoff ?? game?.kickoff_time ?? game?.ko ?? game?.start ?? null;
+    return parseMaybeDate(k);
+  }
+}
+
+
+// Day label like "Saturday 12 Oct"
+function formatDay(d) {
+  try {
+    return d.toLocaleDateString(undefined, {
+      weekday: 'long',
+      day: '2-digit',
+      month: 'short',
+    });
+  } catch { return ''; }
+}
+
+// Time like "14:00"
+function formatTime(d) {
+  try {
+    return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  } catch { return ''; }
+}
+
+// Light metrics we need for sorting (team EO sum, abs net, live/done flags, kickoff)
+function gameSortMetrics(game, eoMap, myExposure) {
+  const status = Array.isArray(game) ? game[4] : (game?.status || '');
+  const bonusStatus = Array.isArray(game) ? game[5] : (game?.bonus_status || '');
+  const isLive = /live/i.test(status);
+  const isDone = /done|official/i.test(status) || /official/i.test(bonusStatus);
+
+  const tableH = Array.isArray(game) ? game[12] || [] : (game?.tableH || []);
+  const tableA = Array.isArray(game) ? game[13] || [] : (game?.tableA || []);
+
+  // rows: {id, eo, pts}
+  const normalize = (table) =>
+    (table || []).map((row) => {
+      const id  = Number(row?.[5]) || null;
+      const eo  = Number(row?.[1]) || 0;
+      const pts = Number(row?.[3]) || 0;
+      return { id, eo, pts };
+    });
+
+  const overlay = (rows) =>
+    eoMap instanceof Map
+      ? rows.map(r => (r.id && eoMap.has(r.id)) ? { ...r, eo: Number(eoMap.get(r.id)) || 0 } : r)
+      : rows;
+
+  const rowsH = overlay(normalize(tableH));
+  const rowsA = overlay(normalize(tableA));
+
+  const teamEOsum = rowsH.reduce((s,r)=>s+(r.eo||0),0) + rowsA.reduce((s,r)=>s+(r.eo||0),0);
+
+  let net = 0;
+  if (myExposure && typeof myExposure === 'object') {
+    const all = rowsH.concat(rowsA);
+    let my = 0, field = 0;
+    for (const r of all) {
+      const pts = r.pts || 0;
+      const mul = Number(myExposure?.[r.id] ?? 0);
+      const eoFrac = (Number(r.eo) || 0) / 100;
+      my   += mul * pts;
+      field+= eoFrac * pts;
+    }
+    net = my - field;
+  }
+
+  return {
+    isLive, isDone,
+    absNet: Math.abs(net || 0),
+    teamEOsum: Number.isFinite(teamEOsum) ? teamEOsum : 0,
+    kickoff: getKickoffDate(game),
+  };
+}
+
+// --- DEV: simulate multiple games ---
+const DEV_SIMULATE = { enabled: false, minute: 56 };
+
+function forceLive(game, minute = 56) {
+  const g = Array.isArray(game) ? [...game] : game;
+
+  // status / bonus
+  g[4] = 'Live';   // status
+  g[5] = '';       // bonus_status
+
+  const rewriteTable = (table = []) =>
+    table.map((row = []) => {
+      const r = [...row];
+      const explained = Array.isArray(r[4]) ? [...r[4]] : [];
+      const filtered = explained.filter(
+        (t) => !(Array.isArray(t) && String(t[0]) === 'minutes')
+      );
+      filtered.push(['minutes', minute, 0]);
+      r[4] = filtered;
+      return r;
+    });
+
+  g[12] = rewriteTable(g[12] || []); // tableH
+  g[13] = rewriteTable(g[13] || []); // tableA
+
+  return g;
+}
+
+function forceNilNilNotLive(game) {
+  const g = Array.isArray(game) ? [...game] : game;
+
+  // score 0–0 and clear any event lists
+  g[2] = 0; // home score
+  g[3] = 0; // away score
+  g[6] = [];  // goalsH
+  g[7] = [];  // goalsA
+  g[8] = [];  // assistsH
+  g[9] = [];  // assistsA
+  g[10] = []; // bonusH
+  g[11] = []; // bonusA
+
+  // ensure it's not live/done
+  // (keep kickoff so your UI can still show time if needed)
+  g[4] = 'Scheduled'; // status
+  g[5] = '';          // bonus_status
+
+  // remove any injected 'minutes' so maxMinutes = 0
+  const stripMinutes = (table = []) =>
+    table.map((row = []) => {
+      const r = [...row];
+      const explained = Array.isArray(r[4]) ? [...r[4]] : [];
+      r[4] = explained.filter(
+        (t) => !(Array.isArray(t) && String(t[0]) === 'minutes')
+      );
+      return r;
+    });
+
+  g[12] = stripMinutes(g[12] || []); // tableH
+  g[13] = stripMinutes(g[13] || []); // tableA
+
+  return g;
+}
+
+function simulateTail(list, minute = 56) {
+  if (!Array.isArray(list) || list.length === 0) return list;
+  const out = list.slice();
+
+  // last: 0-0 not live
+  out[out.length - 1] = forceNilNilNotLive(out[out.length - 1]);
+
+  // previous: live 56' (if exists)
+  if (out.length >= 2) {
+    out[out.length - 2] = forceLive(out[out.length - 2], minute);
+  }
+  return out;
+}
+
+
 // Simple breakpoints for tiny/narrow phones
 const XS = SCREEN_W <= 340;
 const SM = SCREEN_W <= 380;
@@ -46,7 +278,7 @@ const SAMPLE_OPTIONS = [
 ];
 
 const CACHE_TTL_MS = 30000; // reuse cached response for 30s
-const API_URL = 'https://livefpl-api-489391001748.europe-west4.run.app/LH_api/games';
+const API_URL = 'https://livefpl.us/api/games.json';
 
 /* ---------------------- EO Overlay Helpers ---------------------- */
 const EO_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -98,18 +330,130 @@ const parseEOJson = (json) => {
   }
   return map;
 };
+function maxMinutesFromTables(tableH = [], tableA = []) {
+  let maxM = 0;
+  const scan = (table) => {
+    for (const row of table) {
+      const explained = row?.[4];
+      if (!Array.isArray(explained)) continue;
+      for (const t of explained) {
+        if (!Array.isArray(t) || t.length < 2) continue;
+        if (String(t[0]) === 'minutes') {
+          const mins = Number(t[1]) || 0;
+          if (mins > maxM) maxM = mins;
+        }
+      }
+    }
+  };
+  scan(tableH);
+  scan(tableA);
+  return maxM;
+}
+
+function computeNetAggFromTables(tableH = [], tableA = [], eoMap, myExposure) {
+  if (!myExposure || typeof myExposure !== 'object') return null;
+
+  const normalize = (table) =>
+    (table || []).map(([name, eo, _o, pts, _explained, elementId]) => ({
+      id: Number(elementId) || null,
+      eo: Number(eo) || 0,
+      pts: Number(pts) || 0,
+    }));
+
+  const applyOverlay = (rows) =>
+    (eoMap instanceof Map)
+      ? rows.map(r => (r.id && eoMap.has(r.id)) ? { ...r, eo: Number(eoMap.get(r.id)) || 0 } : r)
+      : rows;
+
+  const rowsH = applyOverlay(normalize(tableH));
+  const rowsA = applyOverlay(normalize(tableA));
+  const all = rowsH.concat(rowsA);
+
+  let my = 0, field = 0;
+  for (const r of all) {
+    const pts = r.pts || 0;
+    const mul = Number(myExposure?.[r.id] ?? 0);     // your exposure multiplier
+    const eoFrac = (r.eo || 0) / 100;               // sample EO fraction
+    my += mul * pts;
+    field += eoFrac * pts;
+  }
+  return { my, field, net: my - field };
+}
+
+
+function riskEmoji({ eo, loss }) {
+  if ( loss > 3) return '☠️';
+  if ( loss > 2) return '😈';
+  return '';
+}
+
+function oppEmoji(gainPts) {
+  if (gainPts > 3) return '✅';
+  
+  return '';
+}
+
+function toPct(n) {
+  const v = Number(n) || 0;
+  return (v > 0 ? '+' : v < 0 ? '' : '') + v.toFixed(0) + '%';
+}
+
+function toSignedPts(n) {
+  const v = Number(n) || 0;
+  const s = v > 0 ? '+' : '';
+  return s + v.toFixed(1);
+}
+
+// Convert your existing arrays -> compact table rows
+function buildOppThreatTables(threats, opportunities) {
+  const opp = (opportunities || []).map(o => {
+    const youPct = (Number(o.mul) || 0) * 100;
+    const gainPct = (youPct - (Number(o.eo) || 0));         // positive
+    const gainPts = (gainPct / 100) * (Number(o.pts) || 0); // positive or 0
+    return {
+      id: o.id, name: o.name,
+      gainPct, pts: Number(o.pts) || 0,
+      gainedPts: gainPts,
+      emoji: oppEmoji(gainPts),
+    };
+  }).sort((a,b) => b.gainedPts - a.gainedPts || b.gainPct - a.gainPct);
+
+  const thr = (threats || []).map(t => {
+    const youPct = (Number(t.mul) || 0) * 100;
+    const lossPct = -((Number(t.eo) || 0) - youPct);        // negative
+    const lostPts = (lossPct / 100) * (Number(t.pts) || 0); // negative or 0
+    const rawLoss = Math.max(0, ((Number(t.eo)||0)/100 - (youPct/100)) * (Number(t.pts)||0));
+    return {
+      id: t.id, name: t.name,
+      lossPct, pts: Number(t.pts) || 0,
+      lostPts,
+      emoji: riskEmoji({ eo: Number(t.eo)||0, loss: rawLoss }),
+    };
+  }).sort((a,b) => a.lostPts - b.lostPts || a.lossPct - b.lossPct); // most negative first
+
+  return { opp, thr };
+}
 
 async function loadEOOverlay(sample) {
+  // figure out current GW (fallback to fplData → gw, then 1)
+  let gw = Number(await AsyncStorage.getItem('gw.current'));
+  if (!Number.isFinite(gw) || gw <= 0) {
+    const cachedGW = await AsyncStorage.getItem('fplData');
+    if (cachedGW) gw = Number(JSON.parse(cachedGW)?.data?.gw) || gw;
+  }
+  if (!Number.isFinite(gw) || gw <= 0) gw = 1;
+
   if (sample === 'elite') {
-    const key = 'EO:elite';
+    const key = `EO:elite:gw${gw}`;
     const cached = await getEOFromStorage(key);
-    if (cached) return { map: parseEOJson(cached), src: 'cache:elite' };
-    const res = await fetch('https://livefpl.us/elite.json', { headers: { 'cache-control': 'no-cache' } });
+    if (cached) return { map: parseEOJson(cached), src: `cache:elite:gw${gw}` };
+    const res = await fetch(`https://livefpl.us/${gw}/elite.json`, { headers: { 'cache-control': 'no-cache' } });
     if (!res.ok) throw new Error(`EO HTTP ${res.status}`);
     const json = await res.json();
     await setEOToStorage(key, json);
-    return { map: parseEOJson(json), src: 'net:elite' };
+    return { map: parseEOJson(json), src: `net:elite:gw${gw}` };
   }
+
   if (sample === 'local') {
     const myId = await AsyncStorage.getItem('fplId');
     const raw =
@@ -117,18 +461,19 @@ async function loadEOOverlay(sample) {
       (await AsyncStorage.getItem('localGroup'));
     const localNum = raw ? Number(raw) : null;
     if (!localNum) return { map: null, src: 'missing:local' };
-    const key = `EO:local:${localNum}`;
+    const key = `EO:local:${localNum}:gw${gw}`;
     const cached = await getEOFromStorage(key);
-    if (cached) return { map: parseEOJson(cached), src: `cache:local_${localNum}` };
-    const res = await fetch(`https://livefpl.us/local_${localNum}.json`, { headers: { 'cache-control': 'no-cache' } });
+    if (cached) return { map: parseEOJson(cached), src: `cache:local_${localNum}:gw${gw}` };
+    const res = await fetch(`https://livefpl.us/${gw}/local_${localNum}.json`, { headers: { 'cache-control': 'no-cache' } });
     if (!res.ok) throw new Error(`EO HTTP ${res.status}`);
     const json = await res.json();
     await setEOToStorage(key, json);
-    return { map: parseEOJson(json), src: `net:local_${localNum}` };
+    return { map: parseEOJson(json), src: `net:local_${localNum}:gw${gw}` };
   }
 
   return { map: null, src: 'none' };
 }
+
 
 /* ---------------------- Layout helpers ---------------------- */
 const COL_FLEX = XS
@@ -256,18 +601,23 @@ function SectionTitle({ icon, children, styles, colors }) {
   );
 }
 
+// CollapsibleSection
 function CollapsibleSection({ icon, title, open, onToggle, children, hint, rightExtra, styles, colors }) {
   return (
     <View style={{ marginTop: 8 }}>
       <TouchableOpacity onPress={onToggle} style={styles.collapseHeader} activeOpacity={0.8}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        {/* LEFT: allow truncation */}
+        <View style={styles.collapseLeft}>
           <MaterialCommunityIcons name={icon} size={16} color={colors.muted} />
-          <Text style={styles.sectionTitleText}>{title}</Text>
-          {hint ? <Text style={styles.hintText}>{hint}</Text> : null}
+          <Text style={styles.sectionTitleText} numberOfLines={1} ellipsizeMode="tail">
+            {title}
+          </Text>
+          {hint ? <Text style={styles.hintText} numberOfLines={1} ellipsizeMode="tail">{hint}</Text> : null}
         </View>
 
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {rightExtra /* <-- shows on the right of the header */}
+        {/* RIGHT: don’t shrink + clamp pill width */}
+        <View style={styles.collapseRight}>
+          {rightExtra ? <View style={styles.rightClamp}>{rightExtra}</View> : null}
           <MaterialCommunityIcons
             name={open ? 'chevron-up' : 'chevron-down'}
             size={20}
@@ -282,6 +632,7 @@ function CollapsibleSection({ icon, title, open, onToggle, children, hint, right
 }
 
 
+
 function Chip({ children, color, borderColor, styles }) {
   return (
     <View style={[styles.chip, borderColor && { borderColor }, color && { backgroundColor: color }]}>
@@ -290,11 +641,22 @@ function Chip({ children, color, borderColor, styles }) {
   );
 }
 
-function BarRow({ name, value, max, cap, unit, checkAt, color, styles, colors }) {
+function BarRow({
+  name, value, max, cap, unit, checkAt, color,
+  styles, colors,
+  // NEW (optional) for custom inline badge (e.g. +3/+2/+1 on Bonus Race)
+  badgeText,       // e.g. "+3"
+  badgeColor,      // e.g. colors.accent
+}) {
   const barColor = color || colors.accent;
   const capped = typeof cap === 'number' ? Math.min(value, cap) : value;
   const widthPct = max > 0 ? Math.round((capped / max) * 100) : 0;
   const hit = typeof checkAt === 'number' ? value >= checkAt : false;
+
+  // legacy badge (Defensive Contributions +2) only if no custom badge provided
+  const showHitBadge = !badgeText && hit;
+  const showCustomBadge = !!badgeText;
+
   return (
     <View style={styles.barRow}>
       <Text
@@ -304,12 +666,34 @@ function BarRow({ name, value, max, cap, unit, checkAt, color, styles, colors })
       >
         {name}
       </Text>
+
       <View style={styles.barMeter}>
         <View style={[styles.barFill, { width: `${widthPct}%`, backgroundColor: barColor }]} />
       </View>
-      <Text style={[styles.barValue, { width: VALUE_COL_W }]}>
-        {value}{unit ? unit : ''}{hit ? ' ✓' : ''}
-      </Text>
+
+      <View style={{ width: VALUE_COL_W, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
+        <Text style={styles.barValue}>
+          {value}{unit ? unit : ''}
+        </Text>
+
+        {/* Defensive Contributions “+2” when hitting target (legacy) */}
+        {showHitBadge ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 4 }}>
+            <MaterialCommunityIcons name="plus-circle" size={8} color={colors.ok} />
+            <Text style={[styles.barValue, { color: colors.ok, marginLeft: 2 }]}>+2</Text>
+          </View>
+        ) : null}
+
+        {/* Bonus Race awards (+3/+2/+1) */}
+        {showCustomBadge ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 4 }}>
+            <MaterialCommunityIcons name="plus-circle" size={8} color={badgeColor || colors.accent} />
+            <Text style={[styles.barValue, { color: badgeColor || colors.accent, marginLeft: 2 }]}>
+              {badgeText}
+            </Text>
+          </View>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -441,9 +825,210 @@ function SampleInfoHelp({ visible, onClose, styles, colors }) {
   );
 }
 
+function getSortLabel(value) {
+  const hit = SORT_OPTIONS.find(o => o.value === value);
+  return hit ? hit.label : value;
+}
+
+function SortDropdown({ value, onChange, options, styles, colors }) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <TouchableOpacity
+        onPress={() => setOpen(true)}
+        activeOpacity={0.8}
+        style={styles.ddButton}
+        accessibilityRole="button"
+        accessibilityLabel="Change sort order"
+      >
+        <Text style={styles.ddButtonText} numberOfLines={1}>
+          {getSortLabel(value)}
+        </Text>
+        <MaterialCommunityIcons
+          name={open ? 'chevron-up' : 'chevron-down'}
+          size={18}
+          color={colors.muted}
+        />
+      </TouchableOpacity>
+
+      {/* Use a transparent modal so the menu can overlay everything and close on outside tap */}
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <TouchableOpacity
+          style={styles.ddBackdrop}
+          activeOpacity={1}
+          onPress={() => setOpen(false)}
+        >
+          {/* Click-through blocker; actual menu below */}
+        </TouchableOpacity>
+
+        {/* Menu panel aligned to top-right (near the header). Tweak position if needed. */}
+        <View pointerEvents="box-none" style={styles.ddFloatingWrap}>
+          <View style={styles.ddMenu}>
+            {options.map(opt => {
+              const selected = opt.value === value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  onPress={() => { onChange(opt.value); setOpen(false); }}
+                  activeOpacity={0.8}
+                  style={[styles.ddItem, selected && styles.ddItemActive]}
+                >
+                  <Text
+                    style={[styles.ddItemText, selected && styles.ddItemTextActive]}
+                    numberOfLines={1}
+                  >
+                    {opt.label}
+                  </Text>
+                  {selected ? (
+                    <MaterialCommunityIcons name="check" size={16} color={colors.accent} />
+                  ) : null}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+// --- New compact, Flashscore-style row ---
+// --- Compact, Flashscore-style row with EO under each team ---
+// --- Compact, Flashscore-style row with EO under each team & fixed right column ---
+function CompactGameRow({ game, eoMap, myExposure, styles, colors, onPress, expanded }) {
+  const hName = game[0], aName = game[1];
+  const hScore = game[2], aScore = game[3];
+  const status = game[4], bonusStatus = game[5];
+  const teamHId = game[16], teamAId = game[17];
+  const tableH = game[12] || [];
+  const tableA = game[13] || [];
+
+  const crestH = clubCrestUri ? { uri: clubCrestUri(teamHId) } : null;
+  const crestA = clubCrestUri ? { uri: clubCrestUri(teamAId) } : null;
+
+  const isLive = /live/i.test(status);
+  const isDone = /done|official/i.test(status) || /Official/i.test(bonusStatus);
+
+  // EO overlay
+  const normalize = (table) =>
+    (table || []).map(([name, eo, _o, _pts, _explained, elementId]) => ({
+      id: Number(elementId) || null,
+      eo: Number(eo) || 0,
+    }));
+  const applyOverlay = (rows) =>
+    eoMap instanceof Map
+      ? rows.map(r => (r.id && eoMap.has(r.id)) ? { ...r, eo: Number(eoMap.get(r.id)) || 0 } : r)
+      : rows;
+
+  const rowsH = applyOverlay(normalize(tableH));
+  const rowsA = applyOverlay(normalize(tableA));
+  const teamEO_H = rowsH.reduce((s, r) => s + (r.eo || 0), 0);
+  const teamEO_A = rowsA.reduce((s, r) => s + (r.eo || 0), 0);
+
+  // minute + net gain
+  const minute = React.useMemo(() => maxMinutesFromTables(tableH, tableA), [tableH, tableA]);
+  const netAgg = React.useMemo(
+    () => computeNetAggFromTables(tableH, tableA, eoMap, myExposure),
+    [tableH, tableA, eoMap, myExposure]
+  );
+
+  const gainStyle =
+    !netAgg ? styles.fxGainZero
+    : netAgg.net > 0 ? styles.fxGainPos
+    : netAgg.net < 0 ? styles.fxGainNeg
+    : styles.fxGainZero;
+const ko = getKickoffDate(game);
+  const phaseText =
+    isDone ? 'FT'
+    : isLive ? `${minute}'`
+    : (ko ? formatTime(ko) : (status || '').toUpperCase());
+  const showScore = isLive || isDone; // only show scores when live or finished
+
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.8}
+      style={[
+        styles.fixtureRow,
+        isLive ? styles.fixtureRowLive : isDone ? styles.fixtureRowDone : styles.fixtureRowIdle
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`${hName} ${hScore}, ${aName} ${aScore}, ${phaseText}`}
+      accessibilityHint={expanded ? 'Collapse match details' : 'Expand match details'}
+    >
+      {/* LEFT: slim status rail */}
+      <View style={styles.fxLeft}>
+        <Text
+          style={[
+            styles.fxPhase,
+            isLive ? { color: colors.yellow } : isDone ? { color: colors.ok } : { color: colors.muted },
+          ]}
+          numberOfLines={1}
+        >
+          {phaseText}
+        </Text>
+        {isLive ? <View style={styles.fxLiveDot} /> : null}
+      </View>
+
+      {/* MIDDLE: two stacked team rows (EO under each team name) */}
+      <View style={styles.fxMiddle}>
+        {/* Home line */}
+        <View style={styles.fxTeamLine}>
+          {!!crestH && <Image source={crestH} style={styles.fxCrest} />}
+          <View style={styles.fxTeamNameWrap}>
+            <Text style={styles.fxTeamName} numberOfLines={1}>{hName}</Text>
+            <Text style={styles.fxEOText} numberOfLines={1}>EO {Math.round(teamEO_H)}%</Text>
+          </View>
+            <Text style={styles.fxScore} accessibilityLabel={`home score ${hScore}`}>
+    {showScore ? hScore : ''}
+  </Text>
+
+        </View>
+
+        {/* Away line */}
+        <View style={styles.fxTeamLine}>
+          {!!crestA && <Image source={crestA} style={styles.fxCrest} />}
+          <View style={styles.fxTeamNameWrap}>
+            <Text style={styles.fxTeamName} numberOfLines={1}>{aName}</Text>
+            <Text style={styles.fxEOText} numberOfLines={1}>EO {Math.round(teamEO_A)}%</Text>
+          </View>
+         <Text style={styles.fxScore} accessibilityLabel={`away score ${aScore}`}>
+    {showScore ? aScore : ''}
+  </Text>
+        </View>
+      </View>
+
+      {/* RIGHT: fixed-width column (gain + chevron) */}
+      <View style={styles.fxRight}>
+        {netAgg && (
+          <View style={[styles.fxGain, gainStyle]}>
+            <MaterialCommunityIcons
+              name={netAgg.net > 0 ? 'trending-up' : netAgg.net < 0 ? 'trending-down' : 'minus'}
+              size={14}
+              color={colors.ink}
+            />
+            <Text style={styles.fxGainText}>
+              {netAgg.net > 0 ? '+' : ''}{netAgg.net.toFixed(1)}
+            </Text>
+          </View>
+        )}
+        <MaterialCommunityIcons
+          style={{ marginTop: 2 }}
+          name={expanded ? 'chevron-up' : 'chevron-down'}
+          size={20}
+          color={colors.muted}
+        />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+
+
 
 /* ------------------------- Game Card -------------------------- */
-function GameCard({ game, eoMap, myExposure, styles, colors }) {
+function GameCard({ game, eoMap, myExposure, styles, colors,onCollapse  }) {
   const hName = game[0];
   const aName = game[1];
   const hScore = game[2];
@@ -525,6 +1110,66 @@ const goalsAwayDisplay = useMemo(
 
   const bpsJoined = useMemo(() => joinStatWithNames(bpsMap, idIndex, 'bps'), [bpsMap, idIndex]);
   const defJoined = useMemo(() => joinStatWithNames(defMap, idIndex, 'def'), [defMap, idIndex]);
+// --- Correct, tie-aware (competition ranking) bonus from BPS ---
+// Sort by BPS desc; assign ranks 1,2,3 with competition ranking (1,1,3,4...).
+// Then map rank→bonus: 1→+3, 2→+2, 3→+1.
+function deriveBonusMapFromBps(bpsArr) {
+  const arr = (bpsArr || [])
+    .map(p => ({ id: p.id, bps: Number(p.bps) || 0 }))
+    .sort((a, b) => b.bps - a.bps);
+
+  const bonusMap = new Map();
+  let prevBps = null;
+  let rankForThisBps = 0;  // the rank assigned to this BPS value
+  let seen = 0;            // how many players we've iterated over (1-based index)
+
+  for (const p of arr) {
+    seen += 1;
+    if (prevBps === null || p.bps !== prevBps) {
+      // new BPS group: competition ranking assigns rank = seen
+      rankForThisBps = seen;
+      prevBps = p.bps;
+    }
+    // award only for ranks 1..3
+    const award =
+      rankForThisBps === 1 ? 3 :
+      rankForThisBps === 2 ? 2 :
+      rankForThisBps === 3 ? 1 : 0;
+
+    if (p.id && award > 0) bonusMap.set(p.id, award);
+  }
+  return bonusMap;
+}
+
+
+// Quick membership sets
+const homeIdSet = useMemo(() => new Set(playersH.map(p => p.id).filter(Boolean)), [playersH]);
+const awayIdSet = useMemo(() => new Set(playersA.map(p => p.id).filter(Boolean)), [playersA]);
+
+// Derived awards map
+const bonusMap = useMemo(() => deriveBonusMapFromBps(bpsJoined), [bpsJoined]);
+
+// Derived Bonus Points lists (for the "Bonus Points" section)
+const bonusHomeDerived = useMemo(() => {
+  const rows = [];
+  for (const p of (bpsJoined || [])) {
+    const award = bonusMap.get(p.id) || 0;
+    if (award > 0 && homeIdSet.has(p.id)) rows.push([p.name, award]);
+  }
+  rows.sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+  return rows;
+}, [bpsJoined, bonusMap, homeIdSet]);
+
+const bonusAwayDerived = useMemo(() => {
+  const rows = [];
+  for (const p of (bpsJoined || [])) {
+    const award = bonusMap.get(p.id) || 0;
+    if (award > 0 && awayIdSet.has(p.id)) rows.push([p.name, award]);
+  }
+  rows.sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
+  return rows;
+}, [bpsJoined, bonusMap, awayIdSet]);
+
 
   // Collapsibles (hidden by default)
   const [bpsOpen, setBpsOpen] = useState(false);
@@ -634,6 +1279,19 @@ const goalsAwayDisplay = useMemo(
 
   return (
     <View style={styles.card}>
+    {/* collapse chevron */}
+     {onCollapse ? (
+       <TouchableOpacity
+         onPress={onCollapse}
+         accessibilityRole="button"
+         accessibilityLabel="Collapse match details"
+         accessibilityHint="Return to compact row"
+         style={styles.cardChevronBtn}
+         activeOpacity={0.8}
+      >
+         <MaterialCommunityIcons name="chevron-up" size={22} color={colors.muted} />
+       </TouchableOpacity>
+     ) : null}
       {/* Header */}
       <View style={styles.headerRow}>
         {/* Home block */}
@@ -668,6 +1326,7 @@ const goalsAwayDisplay = useMemo(
           <Text style={styles.teamMeta}>Team EO: {teamEO_A.toFixed(1)}%</Text>
         </View>
       </View>
+      
 {/* Scorers & Assists strip (compact, no headings) */}
 {(() => {
   const hasGoals = (scorersHome.length + scorersAway.length) > 0;
@@ -697,13 +1356,12 @@ const goalsAwayDisplay = useMemo(
   );
 })()}
 
-      {/* --- Collapsible: Rank Movers --- */}
-      <CollapsibleSection
+<CollapsibleSection
   icon="swap-vertical"
   title="Rank Movers"
   open={rankMoversOpen}
   onToggle={() => setRankMoversOpen(o => !o)}
-  hint={!rankMoversOpen ? 'Tap to expand' : undefined}
+  
   styles={styles}
   colors={colors}
   rightExtra={
@@ -726,47 +1384,96 @@ const goalsAwayDisplay = useMemo(
     ) : null
   }
 >
+  {(() => {
+    const { opp, thr } = buildOppThreatTables(threats, opportunities);
 
-        {/* Threats */}
+    const Table = ({ title, rows, kind }) => (
+      <View style={{ marginTop: 6 }}>
         <View style={styles.subHeaderRow}>
-          <MaterialCommunityIcons name="trending-up" size={16} color={colors.muted} />
-          <Text style={styles.subHeaderText}>Threats to You</Text>
+          <MaterialCommunityIcons
+            name={kind === 'opp' ? 'star-outline' : 'alert-outline'}
+            size={16}
+            color={colors.muted}
+          />
+          <Text style={styles.subHeaderText}>{title}</Text>
         </View>
-        {Array.isArray(threats) && threats.length > 0 ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-            {threats.map(t => (
-              <View key={`th-${t.id}`} style={styles.chip}>
-                <Text style={styles.chipName} numberOfLines={1}>
-                  {t.name}  (-{t.delta.toFixed(0)}%)
-                </Text>
-                <Text style={styles.chipMeta}>{t.pts} pts {emojiFor(t.pts, 'threat')}</Text>
-              </View>
-            ))}
-          </ScrollView>
-        ) : (
-          <Text style={styles.mutedSmall}>No major threats detected.</Text>
-        )}
 
-        {/* Opportunities */}
-        <View style={[styles.subHeaderRow, { marginTop: 8 }]}>
-          <MaterialCommunityIcons name="star-outline" size={16} color={colors.muted} />
-          <Text style={styles.subHeaderText}>Your Opportunities</Text>
+        <View style={styles.tableWrap}>
+          <View style={styles.tableHead}>
+            <Text style={[styles.th, styles.colPlayer]}>Player</Text>
+            <Text style={[styles.th, styles.colNum, styles.cellRight]}>
+              {kind === 'opp' ? 'Gain %' : 'Loss %'}
+            </Text>
+            <Text style={[styles.th, styles.colNum, styles.cellRight]}>Pts</Text>
+            <Text style={[styles.th, styles.colNum, styles.cellRight]}>
+              {kind === 'opp' ? 'Gained Pts' : 'Lost Pts'}
+            </Text>
+            <Text style={[styles.th, styles.colRisk]}> </Text>
+          </View>
+
+          {rows.length === 0 ? (
+            <View style={{ padding: 8 }}>
+              <Text style={styles.mutedSmall}>
+                {kind === 'opp' ? 'No players for you in this game.' : 'No major threats detected.'}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.tableBody}>
+              {rows.map((r, i) => (
+                <TouchableOpacity
+                  key={`${r.id || r.name}-${i}`}
+                  style={[styles.tr, i % 2 === 1 && styles.trAlt]}
+                  activeOpacity={0.7}
+                  onPress={() => onRowPress({
+                    id: r.id, name: r.name, pts: r.pts, type: undefined,
+                    explainedMap: {}, explainedRaw: []
+                  })}
+                >
+                  <Text style={[styles.td, styles.colPlayer]} numberOfLines={1} ellipsizeMode="tail">{r.name}</Text>
+
+                  {kind === 'opp' ? (
+                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.ok }]}>
+                      {toPct(r.gainPct)}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.red }]}>
+                      {toPct(r.lossPct)}
+                    </Text>
+                  )}
+
+                  <Text style={[styles.td, styles.colNum, styles.cellRight]}>{r.pts}</Text>
+
+                  {kind === 'opp' ? (
+                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.ok }]}>
+                      {toSignedPts(r.gainedPts)}
+                    </Text>
+                  ) : (
+                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.red }]}>
+                      {toSignedPts(r.lostPts)}
+                    </Text>
+                  )}
+
+                  <Text style={[styles.td, styles.colRisk]}>
+                    {kind === 'opp' ? oppEmoji(r.gainedPts) : r.emoji}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
         </View>
-        {Array.isArray(opportunities) && opportunities.length > 0 ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-            {opportunities.map(t => (
-              <View key={`op-${t.id}`} style={styles.chip}>
-                <Text style={styles.chipName} numberOfLines={1}>
-                  {t.name}  ({t.delta.toFixed(0)}%)
-                </Text>
-                <Text style={styles.chipMeta}>{t.pts} pts {emojiFor(t.pts, 'opportunity')}</Text>
-              </View>
-            ))}
-          </ScrollView>
-        ) : (
-          <Text style={styles.mutedSmall}>No players for you in this game.</Text>
-        )}
-      </CollapsibleSection>
+      </View>
+    );
+
+    return (
+      <>
+        <Table title="Opportunities" rows={opp} kind="opp" />
+        <Table title="Threats" rows={thr} kind="thr" />
+      </>
+    );
+  })()}
+</CollapsibleSection>
+
+
       <CollapsibleSection
         icon="shield-outline"
         title="Defensive Contributions"
@@ -820,9 +1527,22 @@ const goalsAwayDisplay = useMemo(
           {bpsShow.length === 0 ? (
             <Text style={styles.mutedSmall}>—</Text>
           ) : (
-            bpsShow.map((p) => (
-              <BarRow key={`bps-${p.id}`} name={p.name} value={p.bps} max={bpsMax} styles={styles} colors={colors} />
-            ))
+           bpsShow.map((p) => {
+    const award = bonusMap.get(p.id) || 0;
+    return (
+      <BarRow
+        key={`bps-${p.id}`}
+        name={p.name}
+        value={p.bps}
+        max={bpsMax}
+        styles={styles}
+        colors={colors}
+        // NEW: medal-style inline badge
+        badgeText={award > 0 ? `+${award}` : undefined}
+        badgeColor={award > 0 ? colors.accent : undefined}
+      />
+    );
+  })
           )}
         </View>
         {bpsJoined.length > 8 && (
@@ -838,7 +1558,9 @@ const goalsAwayDisplay = useMemo(
 
       {/* Bonus points list */}
       <SectionTitle icon="medal-outline" styles={styles} colors={colors}>Bonus Points</SectionTitle>
-      <BonusRow home={bonusH} away={bonusA} styles={styles} colors={colors} />
+ 
+<BonusRow home={bonusHomeDerived} away={bonusAwayDerived} styles={styles} colors={colors} />
+
 
       {/* Cards & Pens */}
       <SectionTitle icon="card-outline" styles={styles} colors={colors}>Cards & Pens</SectionTitle>
@@ -1059,9 +1781,50 @@ function rowsFromList(label, list, side, borderColor, styles, colors) {
 
 /* --------------------------- Screen --------------------------- */
 function Games() {
-  const colors = useColors();
-  const styles = useMemo(() => makeStyles(colors), [colors]);
+  
+  const [gwTitle, setGwTitle] = useState(null);
+const [sortBy, setSortBy] = useState('chrono'); // default: chronological
 
+
+// Load saved sort choice on first mount
+useEffect(() => {
+  (async () => {
+    try {
+      const v = await AsyncStorage.getItem(SORT_KEY);
+      if (v && SORT_OPTIONS.some(o => o.value === v)) setSortBy(v);
+    } catch {}
+  })();
+}, []);
+
+// Setter that also persists to storage
+const setSort = useCallback(async (v) => {
+  setSortBy(v);
+  try { await AsyncStorage.setItem(SORT_KEY, v); } catch {}
+}, []);
+
+  const [openIndex, setOpenIndex] = useState(null);
+
+ const toggleAt = useCallback(
+   (i) => setOpenIndex((prev) => (prev === i ? null : i)),
+   []
+ );
+  const [expanded, setExpanded] = useState(new Set());
+  const toggleExpanded = useCallback((i) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(i) ? next.delete(i) : next.add(i);
+      return next;
+    });
+  }, []);
+
+  const colors = useColors();
+  const { mode, setMode } = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+const onToggleMode = () => {
+    if (mode === 'dark') setMode('light');
+    else setMode('dark');
+  };
+  const iconName = mode === 'dark' ? 'moon-waning-crescent' : 'white-balance-sunny';
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1080,7 +1843,11 @@ function Games() {
       const key = 'base';
       const cached = cacheRef.current.get(key);
       if (!force && cached && Date.now() - cached.t < CACHE_TTL_MS) {
-        setData(cached.data);
+        const payload = cached.data;
+        const finalData = DEV_SIMULATE.enabled
+        ? simulateTail(payload, DEV_SIMULATE.minute)
+        : payload;
+        setData(finalData);
         setLoading(false);
         setRefreshing(false);
         return;
@@ -1091,7 +1858,11 @@ function Games() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!Array.isArray(json)) throw new Error('Bad payload');
-      setData(json);
+      // apply sim to UI only; keep cache raw
+    const finalData = DEV_SIMULATE.enabled
+      ? simulateTail(json, DEV_SIMULATE.minute)
+      : json;
+      setData(finalData);
       cacheRef.current.set(key, { t: Date.now(), data: json });
     } catch (e) {
       setErr('Failed to load games.');
@@ -1100,6 +1871,21 @@ function Games() {
       setRefreshing(false);
     }
   }, []);
+useEffect(() => {
+  (async () => {
+    // try explicit key first
+    let gw = Number(await AsyncStorage.getItem('gw.current'));
+    if (!Number.isFinite(gw) || gw <= 0) {
+      // fallback: read gw from cached fplData blob
+      const cached = await AsyncStorage.getItem('fplData');
+      if (cached) {
+        try { gw = Number(JSON.parse(cached)?.data?.gw); } catch {}
+      }
+    }
+    if (!Number.isFinite(gw) || gw <= 0) gw = null;
+    setGwTitle(gw);
+  })();
+}, []);
 
   useEffect(() => { fetchGames(); }, [fetchGames]);
 
@@ -1131,36 +1917,113 @@ function Games() {
     return () => { cancelled = true; };
   }, [sample]);
 
-  // Refresh exposure & EO overlay when returning to Games
-  useFocusEffect(
-    useCallback(() => {
-      let mounted = true;
-      const refresh = async () => {
+ // Refresh games + exposure + EO overlay whenever this screen regains focus
+useFocusEffect(
+  useCallback(() => {
+    let mounted = true;
+
+    const refreshOnFocus = async () => {
+      // 1) Try to refresh the games list
+      try {
+        if (mounted) setRefreshing(true);
+        await fetchGames(true); // force fresh pull on focus
+      } finally {
+        if (mounted) setRefreshing(false);
+      }
+
+      // 2) Rehydrate your exposure from storage
+      try {
+        const myId = await AsyncStorage.getItem('fplId');
+        const raw =
+          (myId && (await AsyncStorage.getItem(`myExposure:${myId}`))) ||
+          (await AsyncStorage.getItem('myExposure'));
+        if (mounted) setMyExposure(raw ? JSON.parse(raw) : null);
+      } catch {
+        if (mounted) setMyExposure(null);
+      }
+
+      // 3) Refresh EO overlay based on selected sample
+      if (sample === 'elite' || sample === 'local') {
         try {
-          const myId = await AsyncStorage.getItem('fplId');
-          const raw =
-            (myId && (await AsyncStorage.getItem(`myExposure:${myId}`))) ||
-            (await AsyncStorage.getItem('myExposure'));
-          if (mounted) setMyExposure(raw ? JSON.parse(raw) : null);
-        } catch {
-          if (mounted) setMyExposure(null);
+          const { map, src } = await loadEOOverlay(sample);
+          if (mounted) { setEoMap(map); setEoSrc(src); }
+        } catch (e) {
+          if (mounted) { setEoMap(null); setEoSrc('error'); setEoErr(String(e?.message || e)); }
         }
-        if (mounted && (sample === 'elite' || sample === 'local')) {
-          try {
-            const { map, src } = await loadEOOverlay(sample);
-            if (mounted) { setEoMap(map); setEoSrc(src); }
-          } catch (e) {
-            if (mounted) { setEoMap(null); setEoSrc('error'); setEoErr(String(e?.message || e)); }
-          }
-        }
-      };
-      refresh();
-      return () => { mounted = false; };
-    }, [sample])
-  );
+      } else if (mounted) {
+        setEoMap(null);
+        setEoSrc('none');
+      }
+    };
+
+    refreshOnFocus();
+    return () => { mounted = false; };
+  }, [fetchGames, sample])
+);
+
+
+const sortedData = useMemo(() => {
+  const copy = (data || []).slice();
+  return copy.sort((a, b) => {
+    const A = gameSortMetrics(a, eoMap, myExposure);
+    const B = gameSortMetrics(b, eoMap, myExposure);
+
+    if (sortBy === 'live') {
+      // live first, then chronological
+      if (A.isLive !== B.isLive) return A.isLive ? -1 : 1;
+      const at = A.kickoff?.getTime?.() ?? Infinity;
+      const bt = B.kickoff?.getTime?.() ?? Infinity;
+      return at - bt;
+    }
+
+    if (sortBy === 'net') {
+      // biggest absolute gain/loss first
+      if (B.absNet !== A.absNet) return B.absNet - A.absNet;
+      // tie-break chrono
+      const at = A.kickoff?.getTime?.() ?? Infinity;
+      const bt = B.kickoff?.getTime?.() ?? Infinity;
+      return at - bt;
+    }
+
+    if (sortBy === 'eo') {
+      // highest total EO (home+away) first
+      if (B.teamEOsum !== A.teamEOsum) return B.teamEOsum - A.teamEOsum;
+      const at = A.kickoff?.getTime?.() ?? Infinity;
+      const bt = B.kickoff?.getTime?.() ?? Infinity;
+      return at - bt;
+    }
+
+    // default: chronological
+    const at = A.kickoff?.getTime?.() ?? Infinity;
+    const bt = B.kickoff?.getTime?.() ?? Infinity;
+    return at - bt;
+  });
+}, [data, eoMap, myExposure, sortBy]);
+
+const chronoSections = useMemo(() => {
+  if (sortBy !== 'chrono') return [];
+
+  // Group by YYYY-MM-DD based on kickoff date (fallback bucket if missing)
+  const bucket = new Map();
+  for (const g of sortedData) {
+    const ko = getKickoffDate(g);
+    const dayKey = ko && !isNaN(ko) ? [
+      ko.getFullYear(),
+      String(ko.getMonth() + 1).padStart(2, '0'),
+      String(ko.getDate()).padStart(2, '0')
+    ].join('-') : 'unknown';
+
+    if (!bucket.has(dayKey)) bucket.set(dayKey, { title: ko ? formatDay(ko) : '—', data: [] });
+    bucket.get(dayKey).data.push(g);
+  }
+
+  // Keep natural chronological order of the map based on sortedData pass
+  return Array.from(bucket.values());
+}, [sortedData, sortBy]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    setExpanded(new Set());
     fetchGames(true);
   }, [fetchGames]);
 
@@ -1176,7 +2039,7 @@ function Games() {
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <SafeAreaView style={styles.safe}  edges={['left', 'right']}>
       <AppHeader />
       {err ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 8 }]}>{err}</Text> : null}
       {eoErr ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 4 }]}>EO overlay: {eoErr}</Text> : null}
@@ -1184,7 +2047,7 @@ function Games() {
       {/* EO Sample Selector with Help */}
       <View style={styles.toolbar}>
         <View style={[styles.segmentRow, { alignItems: 'center', flexWrap: 'wrap' }]}>
-          <Text style={styles.toolbarLabel}>Compare Against:</Text>
+          <Text style={styles.toolbarLabel}>Gain/Loss vs:</Text>
           {SAMPLE_OPTIONS.map((opt) => {
             const active = sample === opt.value;
             return (
@@ -1207,15 +2070,99 @@ function Games() {
         </View>
       </View>
 
-      <FlatList
-        data={data}
-        keyExtractor={(_, i) => String(i)}
-        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
-        ListHeaderComponent={<View style={{ height: 10 }} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
-        renderItem={({ item }) => <GameCard game={item} eoMap={eoMap} myExposure={myExposure} styles={styles} colors={colors} />}
-        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-      />
+{/* GW header + sort dropdown */}
+<View style={styles.gwHeaderRow}>
+  <Text style={styles.gwHeaderText}>
+    {gwTitle ? `Gameweek ${gwTitle}` : 'Gameweek'}
+  </Text>
+
+  <SortDropdown
+    value={sortBy}
+    onChange={setSort}
+    options={SORT_OPTIONS}
+    styles={styles}
+    colors={colors}
+  />
+</View>
+
+
+
+     {sortBy === 'chrono' ? (
+        <SectionList
+          sections={chronoSections}
+          keyExtractor={(_, i) => String(i)}
+          extraData={openIndex}
+          stickySectionHeadersEnabled={false}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
+          ListHeaderComponent={<View style={{ height: 10 }} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
+          }
+          renderSectionHeader={({ section }) => (
+            <View style={styles.dayHeader}>
+              <Text style={styles.dayHeaderText}>{section.title}</Text>
+            </View>
+          )}
+          renderItem={({ item }) => {
+            const index = sortedData.indexOf(item); // stable index for expand/collapse
+            return openIndex === index ? (
+              <GameCard
+                game={item}
+                eoMap={eoMap}
+                myExposure={myExposure}
+                styles={styles}
+                colors={colors}
+                onCollapse={() => toggleAt(index)}
+              />
+            ) : (
+              <CompactGameRow
+                game={item}
+                eoMap={eoMap}
+                myExposure={myExposure}
+                styles={styles}
+                colors={colors}
+                onPress={() => toggleAt(index)}
+              />
+            );
+          }}
+          SectionSeparatorComponent={() => <View style={{ height: 8 }} />}
+          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        />
+      ) : (
+        <FlatList
+          data={sortedData}
+          keyExtractor={(_, i) => String(i)}
+          extraData={openIndex}
+          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
+          ListHeaderComponent={<View style={{ height: 10 }} />}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
+          renderItem={({ item, index }) =>
+            openIndex === index ? (
+              <GameCard
+                game={item}
+                eoMap={eoMap}
+                myExposure={myExposure}
+                styles={styles}
+                colors={colors}
+                onCollapse={() => toggleAt(index)}
+              />
+            ) : (
+              <CompactGameRow
+                game={item}
+                eoMap={eoMap}
+                myExposure={myExposure}
+                styles={styles}
+                colors={colors}
+                onPress={() => toggleAt(index)}
+              />
+            )
+          }
+          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+        />
+      )}
+
+
+
 
       {/* Sample explanation modal */}
       <SampleInfoHelp visible={showSampleHelp} onClose={() => setShowSampleHelp(false)} styles={styles} colors={colors} />
@@ -1226,10 +2173,154 @@ function Games() {
 /* --------------------------- Styles (theme-aware) --------------------------- */
 function makeStyles(colors) {
   return StyleSheet.create({
-    safe: { flex: 1, backgroundColor: colors.bg, paddingTop: 48 },
+    safe: { flex: 1, backgroundColor: colors.bg },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     muted: { color: colors.muted },
     mutedSmall: { color: colors.muted, fontSize: 12 },
+    compactRow: {
+  backgroundColor: colors.card,
+  borderColor: colors.border,
+  borderWidth: 1,
+  borderRadius: 12,
+  paddingVertical: 10,
+  paddingHorizontal: 12,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+iconBtn: {
+    height: 32,
+    width: 32,
+    borderRadius: 999,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 6,
+  },
+  ddButton: {
+  minWidth: 170,
+  maxWidth: 240,
+  height: 36,
+  paddingHorizontal: 10,
+  borderWidth: 1,
+  borderColor: colors.border2,
+  backgroundColor: colors.chip,
+  borderRadius: 10,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+ddButtonText: {
+  color: colors.ink,
+  fontWeight: '800',
+  fontSize: 12,
+  flex: 1,
+  marginRight: 6,
+},
+ddBackdrop: {
+  position: 'absolute',
+  left: 0, right: 0, top: 0, bottom: 0,
+  backgroundColor: 'rgba(0,0,0,0.15)',
+},
+ddFloatingWrap: {
+  // Position the menu near the header (top-right). Adjust top value to taste.
+  position: 'absolute',
+  right: 12,
+  top: 64,
+},
+ddMenu: {
+  backgroundColor: colors.card,
+  borderWidth: 1,
+  borderColor: colors.border,
+  borderRadius: 12,
+  minWidth: 220,
+  paddingVertical: 4,
+  shadowColor: '#000',
+  shadowOpacity: 0.2,
+  shadowRadius: 16,
+  shadowOffset: { width: 0, height: 6 },
+  elevation: 10,
+},
+ddItem: {
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+ddItemActive: {
+  backgroundColor: colors.stripBg,
+},
+ddItemText: {
+  color: colors.ink,
+  fontSize: 13,
+  fontWeight: '600',
+},
+ddItemTextActive: {
+  color: colors.accent,
+  fontWeight: '800',
+},
+
+compEO: {
+  marginTop: 1,
+  fontSize: 11,
+  color: colors.muted,
+},
+compChevronWrap: {
+  marginLeft: 6,
+  alignSelf: 'center',
+},
+ compTeam: {
+   flexShrink: 1,
+   flexBasis: '35%',
+   flexDirection: 'row',
+   alignItems: 'center',
+   gap: 6,
+ },
+compTeamTextWrap: {
+  flexShrink: 1,
+  minWidth: 0,
+},
+compNet: {
+  marginTop: 2,
+  fontSize: 11,
+  // color is set inline to ok/red/muted based on value
+},
+ compTeamText: {
+   color: colors.ink,
+   fontSize: 13,
+   fontWeight: '800',
+   maxWidth: 120,
+ },
+compTeamEO: {
+  marginTop: 1,
+  fontSize: 11,
+  color: colors.muted,
+},
+
+compCrest: {
+  width: 22 * rem,
+  height: 22 * rem,
+  resizeMode: 'contain',
+},
+
+compCenter: {
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingHorizontal: 8,
+  flexBasis: '30%',
+},
+compScore: {
+  color: colors.ink,
+  fontSize: 18,
+  fontWeight: '900',
+  letterSpacing: 0.3,
+},
+compStatus: {
+  marginBottom: 2,
+  fontSize: 12,
+},
+
 
     card: {
       backgroundColor: colors.card,
@@ -1242,7 +2333,120 @@ function makeStyles(colors) {
       shadowRadius: 16,
       shadowOffset: { width: 0, height: 6 },
       elevation: 6,
+      position: 'relative',
     },
+    cardChevronBtn: {
+   position: 'absolute',
+   top: 6,
+   right: 6,
+   padding: 2,
+   borderRadius: 999,
+   backgroundColor: colors.stripBg,
+   borderWidth: 1,
+   borderColor: colors.border2,
+ },
+
+ fixtureRow: {
+  backgroundColor: colors.card,
+  borderColor: colors.border,
+  borderWidth: 1,
+  borderRadius: 12,
+  paddingVertical: 8,
+  paddingHorizontal: 10,
+  flexDirection: 'row',
+  alignItems: 'stretch',
+},
+
+/* left status rail */
+fxLeft: {
+  width: 52,
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingVertical: 2,
+  marginRight: 8,
+  borderRightWidth: 1,
+  borderRightColor: colors.border2,
+},
+fxPhase: { fontSize: 11, fontWeight: '800' },
+fxLiveDot: {
+  width: 6, height: 6, borderRadius: 999, marginTop: 4,
+  backgroundColor: colors.yellow,
+},
+
+/* middle stacked teams (Flashscore-like) */
+fxMiddle: { flex: 1, gap: 6, justifyContent: 'center' },
+fxTeamLine: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+},
+fxCrest: { width: 20 * rem, height: 20 * rem, resizeMode: 'contain' },
+fxTeamName: { color: colors.ink, fontSize: 14, fontWeight: '800', flex: 1, minWidth: 0 },
+fxScore: { color: colors.ink, fontSize: 16, fontWeight: '900', minWidth: 18, textAlign: 'right' },
+
+/* right info column (EO + gain + chevron) */
+fxRight: { alignItems: 'flex-end', justifyContent: 'center', marginLeft: 8 },
+fxPill: {
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 999,
+  backgroundColor: colors.stripBg,
+  borderWidth: 1,
+  borderColor: colors.border2,
+  marginBottom: 4,
+  minWidth: 64,
+  alignItems: 'center',
+},
+fxPillText: { color: colors.muted, fontSize: 11, fontWeight: '700' },
+
+// in makeStyles(colors)
+fxTeamNameWrap: { flex: 1, minWidth: 0 },
+fxEOText: { color: colors.muted, fontSize: 10, marginTop: 1 },
+
+// make scores align across rows regardless of right chip width
+fxScore: {
+  color: colors.ink,
+  fontSize: 16,
+  fontWeight: '900',
+  width: 28,              // <- fixed width for alignment
+  textAlign: 'right',
+},
+
+// right column: fixed width so gain chip never pushes middle
+fxRight: {
+  width: 84,              // <- fixed; tune as you like
+  alignItems: 'flex-end',
+  justifyContent: 'center',
+  marginLeft: 8,
+},
+
+// gain chip: keep consistent width
+fxGain: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  paddingHorizontal: 8,
+  paddingVertical: 3,
+  borderRadius: 999,
+  borderWidth: 1,
+  marginBottom: 4,
+  minWidth: 64,           // <- chip doesn't shrink smaller
+  justifyContent: 'center'
+},
+
+// optional: subtle row tints by phase
+fixtureRowLive:  { borderColor: colors.yellow },
+fixtureRowDone:  { borderColor: colors.border },
+fixtureRowIdle:  { borderColor: colors.border2 },
+
+
+
+
+fxGainText: { color: colors.ink, fontWeight: '800', fontSize: 12 },
+fxGainPos: { backgroundColor: colors.stripBg, borderColor: colors.ok },
+fxGainNeg: { backgroundColor: colors.stripBg, borderColor: colors.red },
+fxGainZero: { backgroundColor: colors.stripBg, borderColor: colors.border2 },
+
 
     headerRow: {
       flexDirection: 'row',
@@ -1267,6 +2471,34 @@ function makeStyles(colors) {
       marginRight: 8,
       minWidth: 112,
     },
+    collapseLeft: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  flex: 1,           // take remaining space
+  minWidth: 0,       // allow text truncation
+},
+collapseRight: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 8,
+  flexShrink: 0,     // never shrink (keeps chevron visible)
+},
+rightClamp: {
+  maxWidth: 160,     // adjust if you like; keeps pill from growing too wide
+  flexShrink: 1,
+},
+netChip: {
+  marginTop: 3,
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 999,
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  maxWidth: 160,     // matches rightClamp above
+},
+
     chipName: { color: colors.ink, fontWeight: '800', fontSize: 12 },
     chipMeta: { color: colors.muted, fontSize: 11, marginTop: 2 },
 
@@ -1274,6 +2506,71 @@ function makeStyles(colors) {
     scoreText: { color: colors.ink, fontSize: 22, fontWeight: '900' },
     statusWrap: { alignItems: 'center', gap: 6, marginTop: 2, justifyContent: 'center', width: '100%' },
     statusText: { fontWeight: '800', textAlign: 'center' },
+    // inside makeStyles
+metaRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+  marginTop: 2,
+},
+metaPill: {
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 999,
+  backgroundColor: colors.stripBg,
+  borderWidth: 1,
+  borderColor: colors.border2,
+},
+metaPillText: {
+  color: colors.muted,
+  fontSize: 11,
+  fontWeight: '700',
+  letterSpacing: 0.2,
+},
+
+statusPill: {
+  paddingHorizontal: 8,
+  paddingVertical: 2,
+  borderRadius: 999,
+  borderWidth: 1,
+  marginBottom: 3,
+},
+statusLive: { backgroundColor: 'rgba(255, 213, 79, 0.12)', borderColor: colors.yellow },
+statusDone: { backgroundColor: 'rgba(76, 175, 80, 0.14)', borderColor: colors.ok },
+statusIdle: { backgroundColor: colors.stripBg, borderColor: colors.border2 },
+statusPillText: { color: colors.ink, fontSize: 11, fontWeight: '800' },
+   dayHeader: {
+      paddingVertical: 6,
+      paddingHorizontal: 8,
+      backgroundColor: colors.stripBg,
+      borderColor: colors.border2,
+      borderWidth: 1,
+      borderRadius: 10,
+      marginTop: 8,
+      marginBottom: 6,
+    },
+    dayHeaderText: {
+      color: colors.ink,
+      fontWeight: '900',
+      fontSize: 13,
+      letterSpacing: 0.2,
+      textAlign:'center'
+    },
+
+netChip: {
+  marginTop: 3,
+  paddingHorizontal: 6,
+  paddingVertical: 2,
+  borderRadius: 999,
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: 6,
+},
+netChipPos: { backgroundColor: colors.stripBg, },
+netChipNeg: { backgroundColor: colors.stripBg, },
+netChipZero: { backgroundColor: colors.stripBg, },
+netChipText: { color: colors.ink, fontWeight: '800', fontSize: 10 },
+
 
     playersBtn: {
       marginTop: 8,
@@ -1294,7 +2591,7 @@ function makeStyles(colors) {
       marginTop: 8,
       marginBottom: 4,
     },
-    sectionTitleText: { color: colors.muted, fontWeight: '800', fontSize: 12, letterSpacing: 0.4 },
+    sectionTitleText: { color: colors.ink, fontWeight: '800', fontSize: 12, letterSpacing: 0.4 },
     hintText: { color: colors.muted, fontSize: 11, marginLeft: 6 },
 
     collapseHeader: {
@@ -1360,6 +2657,40 @@ function makeStyles(colors) {
 
     toggleBtn: { alignSelf: 'center', paddingVertical: 6, paddingHorizontal: 10 },
     toggleText: { color: colors.muted, fontSize: 12 },
+    tableWrap: {
+  backgroundColor: colors.stripBg,
+  borderColor: colors.border2,
+  borderWidth: 1,
+  borderRadius: 12,
+  overflow: 'hidden',
+  marginTop: 4,
+},
+tableHead: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 6,
+  paddingHorizontal: 8,
+  borderBottomWidth: 1,
+  borderBottomColor: colors.border2,
+  backgroundColor: colors.chip, // subtle header bg
+},
+tableBody: {},
+tr: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingVertical: 6,
+  paddingHorizontal: 8,
+  borderTopWidth: 1,
+  borderTopColor: colors.border2,
+},
+trAlt: { backgroundColor: colors.chipBorder2 },
+td: { color: colors.ink, fontSize: 12, minWidth: 0 },
+cellRight: { textAlign: 'right' },
+colPlayer: { flex: XS ? 3.0 : SM ? 2.6 : 2.4, minWidth: 0, paddingRight: 8 },
+ colNum:    { flex: XS ? 0.7 : 0.85, minWidth: XS ? 44 : 56 },
+ colRisk:   { width: XS ? 24 : 36, textAlign: 'center' },
+
+
 
     /* Toolbar (EO sample selector) */
     toolbar: {
@@ -1377,6 +2708,50 @@ function makeStyles(colors) {
       flexDirection: 'row',
       gap: 8,
     },
+    gwHeaderRow: {
+  paddingHorizontal: 12,
+  paddingTop: 6,
+  paddingBottom: 2,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+gwHeaderText: {
+  color: colors.ink,
+  fontWeight: '900',
+  fontSize: 16,
+  letterSpacing: 0.2,
+},
+gwHeaderRow: {
+  paddingHorizontal: 12,
+  paddingTop: 6,
+  paddingBottom: 2,
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+},
+gwHeaderText: {
+  color: colors.ink,
+  fontWeight: '900',
+  fontSize: 16,
+  letterSpacing: 0.2,
+},
+sortPickerWrap: {
+  minWidth: 170,
+  maxWidth: 240,
+  borderWidth: 1,
+  borderColor: colors.border2,
+  backgroundColor: colors.chip,
+  borderRadius: 10,
+  overflow: 'hidden',
+},
+sortPicker: {
+  height: 36,
+  paddingHorizontal: 8,
+  color: colors.ink,
+},
+
+
     segment: {
       borderWidth: 1,
       borderColor: colors.border2,
@@ -1411,6 +2786,7 @@ function makeStyles(colors) {
 
     /* Help chip/button */
     helpBtn: {
+      display:'none',
       flexDirection: 'row',
       alignItems: 'center',
       gap: 6,
@@ -1489,6 +2865,19 @@ function makeStyles(colors) {
       padding: 8,
       backgroundColor: colors.stripBg,
     },
+    gwHeaderWrap: {
+  paddingHorizontal: 12,
+  paddingTop: 6,
+  paddingBottom: 2,
+},
+gwHeaderText: {
+  color: colors.ink,
+  fontWeight: '900',
+  fontSize: 16,
+  letterSpacing: 0.2,
+  textAlign:'center'
+},
+
     tableHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
     crestSmall: { width: 22, height: 22, resizeMode: 'contain' },
     tableTeamName: { color: colors.ink, fontWeight: '800' },
@@ -1504,7 +2893,8 @@ function makeStyles(colors) {
       borderTopWidth: 1,
       borderTopColor: colors.border2,
     },
-    td: { color: colors.ink, fontSize: 12, minWidth: 0 },
+    
+    td: { color: colors.ink, fontSize: 12, minWidth: 0, flexShrink: 1 },
     tdSM: { fontSize: 11 },
 
     cellPlayer: { minWidth: 0 },

@@ -69,7 +69,11 @@ export default function StatsStrip({ items = [] }) {
           marginTop: 1,
           marginLeft: 6, // spacing from value
         },
-
+titleNode: {
+        alignItems: 'center',
+         justifyContent: 'center',
+         marginBottom: 2,
+       },
         sub: {
           fontSize: 10,
           color: C.muted,
@@ -94,10 +98,16 @@ export default function StatsStrip({ items = [] }) {
           ]}
         >
           {!!it.title && (
-            <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
-              {it.title}
-            </Text>
-          )}
+           typeof it.title === 'string' ? (
+             <Text style={styles.title} numberOfLines={1} ellipsizeMode="tail">
+               {it.title}
+             </Text>
+           ) : (
+             <View style={styles.titleNode}>
+               {it.title}
+             </View>
+           )
+         )}
 
           <View style={styles.valueRow}>
             <Text

@@ -12,6 +12,7 @@ const DARK = {
   bg: '#0b0c10',
   pageBg: '#0b0c10',
   card: '#0f1525',
+  card2: '#0f1525',
   border: '#1e2638',
   border2: '#2a3348',
   ink: '#e6eefc',
@@ -58,6 +59,9 @@ const DARK = {
   // Code blocks (ChangeID)
   codeBg: '#0b1328',
   codeInk: '#e2ecff',
+
+  chipBg: '#0f172a',
+  chipBgSelected: '#1f2a44',
 };
 
 const LIGHT = {
@@ -65,6 +69,7 @@ const LIGHT = {
   bg: '#ffffff',
   pageBg: '#f8fafc',
   card: '#ffffff',
+  card2: '#e9ecef',
   border: '#e5e7eb',
   border2: '#d1d5db',
   ink: '#0b1320',
@@ -111,6 +116,9 @@ const LIGHT = {
   // Code blocks (ChangeID)
   codeBg: '#f3f4f6',
   codeInk: '#0b1320',
+
+  chipBg: '#f4f5f8',
+  chipBgSelected: '#eef0f6',
 };
 
 // Navigation theme (React Navigation)

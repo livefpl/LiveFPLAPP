@@ -1,47 +1,70 @@
 // components/AppHeader.js
 import React from 'react';
-import { SafeAreaView, View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { SafeAreaView, View, Image, Text, StyleSheet, TouchableOpacity, StatusBar, Platform } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme, useColors } from './theme';
 import { assetImages } from './clubs';
 
 const DEFAULT_LOGO = assetImages?.livefplLogo ?? assetImages?.logo;
+const SIDE_WIDTH = 66; // same on both sides to keep the logo centered
 
 export default function AppHeader({
   logoSource = DEFAULT_LOGO,
   showModeToggle = true,
+  showChangeId = true, // show ID button on the LEFT
+  onPressChangeId,
   style,
-  pillBg,       // optional override for the logo pill background
-  pillBorder,   // optional override for the pill border
+  pillBg,
+  pillBorder,
 }) {
+  const { navTheme, mode, setMode } = useTheme();
   const colors = useColors();
-  const { mode, setMode } = useTheme();
+  const navigation = useNavigation();
 
-  // cycle: dark -> light -> system -> dark
-  const onToggleMode = () => {
-    if (mode === 'dark') setMode('light');
-    
-    else setMode('dark');
-  };
+  const headerBg = navTheme?.colors?.background ?? colors.bg;
+  const isDark = !!navTheme?.dark;
+  const iconName = mode === 'dark' ? 'moon-waning-crescent' : 'white-balance-sunny';
 
-  const iconName =
-    mode === 'light' ? 'white-balance-sunny' :
-    mode === 'dark'  ? 'moon-waning-crescent' :
-                       'theme-light-dark';
+  const onToggleMode = () => setMode(mode === 'dark' ? 'light' : 'dark');
+  const handleGoChangeId = () =>
+    typeof onPressChangeId === 'function' ? onPressChangeId() : navigation.navigate('ID');
 
   return (
-    <SafeAreaView style={[styles.safe, style]}>
-      <View style={styles.row}>
-        {/* left spacer keeps logo centered */}
-        <View style={styles.sideSpacer} />
+    <SafeAreaView style={[styles.safe, style, { backgroundColor: headerBg }]}>
+      {/* Control the OS status bar color *from here* so Android doesn't show white above the header */}
+      <StatusBar
+        barStyle={isDark ? 'light-content' : 'dark-content'}
+        backgroundColor={headerBg}      // Android uses this
+        translucent={false}             // don't draw under the status bar
+      />
 
-        {/* centered logo in a compact pill */}
+      <View style={styles.row}>
+        {/* LEFT controls (mirrors right): ID */}
+        <View style={styles.sideLeft}>
+          <View style={styles.iconRowLeft}>
+            {showChangeId && (
+              <TouchableOpacity
+                onPress={handleGoChangeId}
+                activeOpacity={0.85}
+                style={[styles.iconBtn, { backgroundColor: colors.stripBg, borderColor: colors.border2 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Open Change ID"
+                testID="btn-change-id"
+              >
+                <MaterialCommunityIcons name="account-edit" size={18} color={colors.ink} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* CENTER logo pill */}
         <View
           style={[
             styles.logoPill,
             {
-              backgroundColor: pillBg ?? '#0b0c10',        // fixed dark for contrast in light mode
-              borderColor: pillBorder ?? colors.border,    // themed border
+              backgroundColor: pillBg ?? '#0b0c10',
+              borderColor: pillBorder ?? colors.border,
             },
           ]}
         >
@@ -52,22 +75,23 @@ export default function AppHeader({
           )}
         </View>
 
-        {/* right side: tiny icon toggle */}
+        {/* RIGHT controls: theme toggle */}
         <View style={styles.sideRight}>
-          {showModeToggle && (
-            <TouchableOpacity
-              onPress={onToggleMode}
-              onLongPress={() => setMode('system')}
-              activeOpacity={0.8}
-              style={[
-                styles.iconBtn,
-                { backgroundColor: colors.stripBg, borderColor: colors.border2 },
-              ]}
-              accessibilityLabel="Toggle theme"
-            >
-              <MaterialCommunityIcons name={iconName} size={18} color={colors.ink} />
-            </TouchableOpacity>
-          )}
+          <View style={styles.iconRowRight}>
+            {showModeToggle && (
+              <TouchableOpacity
+                onPress={onToggleMode}
+                onLongPress={() => setMode('system')}
+                activeOpacity={0.85}
+                style={[styles.iconBtn, { backgroundColor: colors.stripBg, borderColor: colors.border2 }]}
+                accessibilityRole="button"
+                accessibilityLabel="Toggle theme"
+                testID="btn-toggle-theme"
+              >
+                <MaterialCommunityIcons name={iconName} size={18} color={colors.ink} />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </View>
     </SafeAreaView>
@@ -76,7 +100,7 @@ export default function AppHeader({
 
 const styles = StyleSheet.create({
   safe: {
-    backgroundColor: 'transparent',
+    // bg is provided dynamically via headerBg
   },
   row: {
     height: 44,
@@ -85,11 +109,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  sideSpacer: { width: 44 },  // roughly matches the toggle width so center stays centered
-  sideRight: {
-    width: 44,
-    alignItems: 'flex-end',
-  },
+
+  // symmetric side containers
+  sideLeft:  { width: SIDE_WIDTH, alignItems: 'flex-start',  justifyContent: 'center' },
+  sideRight: { width: SIDE_WIDTH, alignItems: 'flex-end',    justifyContent: 'center' },
+
+  iconRowLeft:  { flexDirection: 'row', gap: 8 },
+  iconRowRight: { flexDirection: 'row', gap: 8 },
+
   logoPill: {
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -100,14 +127,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignSelf: 'center',
   },
-  logo: {
-    height: 24,
-    width: 160,
-  },
-  title: {
-    fontWeight: '900',
-    fontSize: 16,
-  },
+  logo: { height: 24, width: 160 },
+  title: { fontWeight: '900', fontSize: 16 },
+
   iconBtn: {
     height: 32,
     width: 32,

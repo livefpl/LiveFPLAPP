@@ -10,7 +10,7 @@ export default function InfoBanner({ text, link }) {
 
   const styles = StyleSheet.create({
     container: {
-      paddingVertical: 6,
+      paddingVertical: 8,
       paddingHorizontal: 10,
       backgroundColor: C.card,
       borderBottomWidth: 1,

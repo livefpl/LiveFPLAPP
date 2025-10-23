@@ -12,6 +12,8 @@
     "orientation": "portrait",
     "icon": "./icon.png",
 "android": {
+ "package": "com.pocketgamerguides.livefpl",
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./adaptive-foreground-1024.png",
         "backgroundImage": "./adaptive-background-1024.png"
@@ -38,7 +40,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "net.livefpl.app",
+      "bundleIdentifier": "com.pocketgamerguides.livefpl",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }

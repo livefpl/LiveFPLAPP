@@ -1,5 +1,5 @@
 // SettingsModal.js
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -10,6 +10,7 @@ import {
   ScrollView,
   Linking,
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import { useTheme, useColors } from './theme';
 
 export default function SettingsModal({
@@ -18,9 +19,20 @@ export default function SettingsModal({
   displaySettings,
   setDisplaySettings,
 }) {
-  const [glossaryOpen, setGlossaryOpen] = useState(false);
+  // Expanded by default
+  const [glossaryOpen, setGlossaryOpen] = useState(true);
+
+  // ✅ Local copy that controls all switches while the modal is open
+  const [localSettings, setLocalSettings] = useState(displaySettings || {});
+
   const { mode, setMode } = useTheme();
   const C = useColors();
+  const navigation = useNavigation();
+
+  // Seed local settings ONLY when the modal becomes visible (prevents snap-back)
+  useEffect(() => {
+    if (visible) setLocalSettings(displaySettings || {});
+  }, [visible]); // intentionally NOT depending on displaySettings
 
   const toggles = useMemo(
     () => [
@@ -32,8 +44,24 @@ export default function SettingsModal({
     []
   );
 
+  // Update local state (not the parent) while open
   const toggleKey = (key) => (val) =>
-    setDisplaySettings((prev) => ({ ...prev, [key]: val }));
+    setLocalSettings((prev) => ({ ...prev, [key]: val }));
+
+  // Commit local → parent then close
+  const handleClose = () => {
+    setDisplaySettings(localSettings);
+    onClose && onClose();
+  };
+
+  const handleChangeId = () => {
+    // Commit settings, navigate, then close modal
+    setDisplaySettings(localSettings);
+    try {
+      navigation.navigate('ID');
+    } catch {}
+    onClose && onClose();
+  };
 
   const styles = useMemo(
     () =>
@@ -100,15 +128,30 @@ export default function SettingsModal({
         bold: { fontWeight: '700' },
         link: { color: C.accent, textDecorationLine: 'underline' },
 
+        // Buttons
+        actionsRow: {
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 10,
+          marginTop: 12,
+        },
         closeBtn: {
-          marginTop: 10,
-          alignSelf: 'center',
           paddingHorizontal: 16,
           paddingVertical: 8,
           borderRadius: 10,
           backgroundColor: C.accent,
         },
         closeText: { color: '#fff', fontWeight: '700' },
+        idBtn: {
+          paddingHorizontal: 16,
+          paddingVertical: 8,
+          borderRadius: 10,
+          backgroundColor: C.card,
+          borderWidth: 1,
+          borderColor: C.border,
+        },
+        idText: { color: C.ink, fontWeight: '700' },
 
         glossaryToggle: {
           flexDirection: 'row',
@@ -121,7 +164,12 @@ export default function SettingsModal({
   );
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={handleClose} // ensure hardware back commits too
+    >
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <Text style={styles.title}>Display Settings</Text>
@@ -129,7 +177,7 @@ export default function SettingsModal({
           {/* Appearance */}
           <Text style={styles.sectionTitle}>Appearance</Text>
           <View style={styles.modeRow}>
-            {[ 'light', 'dark'].map((m) => {
+            {['light', 'dark'].map((m) => {
               const active = mode === m;
               return (
                 <Pressable
@@ -140,7 +188,7 @@ export default function SettingsModal({
                   accessibilityLabel={`Set theme: ${m}`}
                 >
                   <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>
-                    {m === 'Light' ? 'Light' : m[0].toUpperCase() + m.slice(1)}
+                    {m[0].toUpperCase() + m.slice(1)}
                   </Text>
                 </Pressable>
               );
@@ -152,11 +200,11 @@ export default function SettingsModal({
             <View key={key} style={styles.row}>
               <Text style={styles.rowLabel}>{label}</Text>
               <Switch
-                value={!!displaySettings[key]}
+                value={!!localSettings[key]}
                 onValueChange={toggleKey(key)}
                 trackColor={{ false: C.border2, true: C.ok }}
                 ios_backgroundColor={C.border2}
-                thumbColor={displaySettings[key] ? '#fff' : '#ddd'}
+                thumbColor={localSettings[key] ? '#fff' : '#ddd'}
               />
             </View>
           ))}
@@ -183,7 +231,7 @@ export default function SettingsModal({
 
           <View style={styles.divider} />
 
-          {/* Collapsible Glossary */}
+          {/* Collapsible Glossary (expanded by default) */}
           <Pressable
             style={styles.glossaryToggle}
             onPress={() => setGlossaryOpen((o) => !o)}
@@ -199,11 +247,11 @@ export default function SettingsModal({
               {/* EO quick explainer */}
               <Text style={styles.glossItem}>
                 <Text style={styles.bold}>EO:</Text> Effective Ownership = own% + captain% + triple-captain%.
-                It’s the sample’s average multiplier on that player.
+                It is the true effect of that player accounting for captaincy and benching.
               </Text>
               <Text style={styles.glossItem}>
-                <Text style={styles.bold}>Example:</Text> EO 50% → each point adds 0.5 to the sample; everyone
-                owning + captaining → EO 200%.
+                <Text style={styles.bold}>Example:</Text> EO 50% → each point he scores adds 0.5 to the average. If everyone
+                owns + captains a player → EO 200%.
               </Text>
 
               {/* Emoji legend */}
@@ -218,9 +266,16 @@ export default function SettingsModal({
             </ScrollView>
           )}
 
-          <Pressable style={styles.closeBtn} onPress={onClose}>
-            <Text style={styles.closeText}>Close</Text>
-          </Pressable>
+          {/* Actions */}
+          <View style={styles.actionsRow}>
+            <Pressable style={styles.idBtn} onPress={handleChangeId} accessibilityRole="button" accessibilityLabel="Change ID">
+              <Text style={styles.idText}>Change ID</Text>
+            </Pressable>
+
+            <Pressable style={styles.closeBtn} onPress={handleClose} accessibilityRole="button" accessibilityLabel="Close settings">
+              <Text style={styles.closeText}>Close</Text>
+            </Pressable>
+          </View>
         </View>
       </View>
     </Modal>
