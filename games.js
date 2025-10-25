@@ -484,7 +484,7 @@ const COL_FLEX = XS
 
 // Fixed columns for progress bars so tracks align perfectly
 const NAME_COL_W = XS ? 96 : SM ? 112 : 140;  // left label column
-const VALUE_COL_W = XS ? 50 : 56;             // right value column
+const VALUE_COL_W = XS ? 62 : 72; // more room for value + small badge
 
 /* ---------------------- Helpers (pure JS) ---------------------- */
 const safe = (v, fallback) => (v ?? fallback);
@@ -642,23 +642,32 @@ function Chip({ children, color, borderColor, styles }) {
 }
 
 function BarRow({
-  name, value, max, cap, unit, checkAt, color,
-  styles, colors,
-  // NEW (optional) for custom inline badge (e.g. +3/+2/+1 on Bonus Race)
-  badgeText,       // e.g. "+3"
-  badgeColor,      // e.g. colors.accent
+  name,
+  value,
+  max,
+  cap,
+  unit,
+  checkAt,
+  color,
+  styles,
+  colors,
+  // optional medal-style badge (e.g. "+3" for Bonus Race)
+  badgeText,
+  badgeColor,
 }) {
   const barColor = color || colors.accent;
-  const capped = typeof cap === 'number' ? Math.min(value, cap) : value;
-  const widthPct = max > 0 ? Math.round((capped / max) * 100) : 0;
-  const hit = typeof checkAt === 'number' ? value >= checkAt : false;
+  const val = Number(value ?? 0);
+  const capped = typeof cap === 'number' ? Math.min(val, cap) : val;
+  const widthPct = max > 0 ? Math.min(100, Math.round((capped / max) * 100)) : 0;
 
-  // legacy badge (Defensive Contributions +2) only if no custom badge provided
+  // legacy +2 for Defensive Contributions if value hits threshold (only when no custom badge)
+  const hit = typeof checkAt === 'number' ? val >= checkAt : false;
   const showHitBadge = !badgeText && hit;
   const showCustomBadge = !!badgeText;
 
   return (
     <View style={styles.barRow}>
+      {/* Fixed label column so all meters align */}
       <Text
         style={[styles.barName, { width: NAME_COL_W }]}
         numberOfLines={1}
@@ -667,28 +676,54 @@ function BarRow({
         {name}
       </Text>
 
+      {/* Track (flexes), fill uses % so every track width is identical row-to-row */}
       <View style={styles.barMeter}>
-        <View style={[styles.barFill, { width: `${widthPct}%`, backgroundColor: barColor }]} />
+        <View
+          style={[
+            styles.barFill,
+            { width: `${widthPct}%`, backgroundColor: barColor },
+          ]}
+        />
       </View>
 
-      <View style={{ width: VALUE_COL_W, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' }}>
-        <Text style={styles.barValue}>
-          {value}{unit ? unit : ''}
+      {/* Fixed value/badge column (single line, right-aligned) */}
+      <View
+        style={{
+          width: VALUE_COL_W,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          // ensure one line; if it's ever too tight, widen VALUE_COL_W a bit
+        }}
+      >
+        <Text style={styles.barValue} numberOfLines={1}>
+          {val}{unit ? unit : ''}
         </Text>
 
-        {/* Defensive Contributions “+2” when hitting target (legacy) */}
+        {/* Inline badge (no stacking) */}
         {showHitBadge ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 4 }}>
-            <MaterialCommunityIcons name="plus-circle" size={8} color={colors.ok} />
-            <Text style={[styles.barValue, { color: colors.ok, marginLeft: 2 }]}>+2</Text>
+            <MaterialCommunityIcons name="plus-circle" size={10} color={colors.ok} />
+            <Text style={[styles.barValue, { fontSize: 11, color: colors.ok, marginLeft: 2 }]}>
+              +2
+            </Text>
           </View>
         ) : null}
 
-        {/* Bonus Race awards (+3/+2/+1) */}
         {showCustomBadge ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 4 }}>
-            <MaterialCommunityIcons name="plus-circle" size={8} color={badgeColor || colors.accent} />
-            <Text style={[styles.barValue, { color: badgeColor || colors.accent, marginLeft: 2 }]}>
+            <MaterialCommunityIcons
+              name="plus-circle"
+              size={10}
+              color={badgeColor || colors.accent}
+            />
+            <Text
+              style={[
+                styles.barValue,
+                { fontSize: 11, color: badgeColor || colors.accent, marginLeft: 2 },
+              ]}
+              numberOfLines={1}
+            >
               {badgeText}
             </Text>
           </View>
@@ -697,6 +732,7 @@ function BarRow({
     </View>
   );
 }
+
 
 function TwoColumnList({ home, away, bullet = '•', styles, colors }) {
   return (

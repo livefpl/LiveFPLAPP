@@ -39,7 +39,7 @@ const COUNTER_URL = (gw) => `https://livefpl.us/${gw}/counter_${gw}.json`;
 const CACHE_TTL_MS = 30000;
 const EO_TTL_MS = 10 * 60 * 1000;
 
-const DIMINISH_K = 0.7;
+const DIMINISH_K = 0.4;
 const SATURATE_K = 30;
 
 const TYPE_LABEL = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
@@ -746,35 +746,47 @@ const deltaGC = (allowDef && defEligible)
     return m;
   }, [players, fake, give90, allowDef, teamCS, teamConceded]);
 
-  const returnsIntensity = useMemo(() => {
-    const m = new Map();
-    for (const p of players) {
-      const g = Math.max(0, Number(fake.goals.get(p.id) || 0));
-      const a = Math.max(0, Number(fake.assists.get(p.id) || 0) + Number(fake.goalAssists.get(p.id) || 0));
-      const b = Math.max(0, Number(fake.bonus.get(p.id) || 0));
-      const d = Math.max(0, Number(fake.defcon.get(p.id) || 0));
-      const totalPosReturns = g + a + b + d;
-      if (totalPosReturns > 0) m.set(p.id, totalPosReturns);
+  
+
+  // REPLACE the existing returnsIntensity useMemo with this:
+const returnsPosPts = useMemo(() => {
+  const m = new Map();
+  for (const p of players) {
+    const g = Math.max(0, Number(fake.goals.get(p.id) || 0)) * goalPoints(p.type);
+    const a = Math.max(0, Number(fake.assists.get(p.id) || 0) + Number(fake.goalAssists.get(p.id) || 0)) * 3;
+    const b = Math.max(0, Number(fake.bonus.get(p.id) || 0)) * 1;
+    const d = Math.max(0, Number(fake.defcon.get(p.id) || 0)) * 2;
+    const totalPositivePts = g + a + b + d; // only positive-return points
+    if (totalPositivePts > 0) m.set(p.id, totalPositivePts);
+  }
+  return m;
+}, [players, fake.goals, fake.assists, fake.goalAssists, fake.bonus, fake.defcon]);
+
+// In simAgg useMemo, change the lines that read mPos/returnsIntensity:
+const simAgg = useMemo(() => {
+  let myDelta = 0, fieldDelta = 0;
+  const getMul = (p) => overrideMul.get(p.id) ?? Number(p.myMul || 0);
+  for (const p of players) {
+    const delta = playerDeltaMap.get(p.id) || 0;
+    if (!delta) continue;
+    const myMul = getMul(p);
+
+    // cumulative positive points from *this* edit-set *before* this delta
+    const posPtsSoFar = Number(returnsPosPts.get(p.id) || 0);
+
+    let eoEff = effectiveEOMult(p.eo, posPtsSoFar, delta);
+
+    // First positive pop safety: if this is the first positive chunk for an owned player
+    if (SAFE_CLAMP_FIRST_RETURN && delta > 0 && posPtsSoFar === 0 && myMul > 0) {
+      eoEff = Math.min(eoEff, myMul);
     }
-    return m;
-  }, [players, fake.goals, fake.assists, fake.goalAssists, fake.bonus, fake.defcon]);
 
-  const simAgg = useMemo(() => {
-    let myDelta = 0, fieldDelta = 0;
-    const getMul = (p) => overrideMul.get(p.id) ?? Number(p.myMul || 0);
-    for (const p of players) {
-      const delta = playerDeltaMap.get(p.id) || 0;
-      if (!delta) continue;
-      const myMul = getMul(p);
+    myDelta   += myMul * delta;
+    fieldDelta += eoEff * delta;
+  }
+  return { myDelta, fieldDelta, net: myDelta - fieldDelta };
+}, [players, playerDeltaMap, returnsPosPts, overrideMul]);
 
-      const mPos = Number(returnsIntensity.get(p.id) || 0);
-      const eoEff = effectiveEOMult(p.eo, mPos, delta);
-
-      myDelta += myMul * delta;
-      fieldDelta += eoEff * delta;
-    }
-    return { myDelta, fieldDelta, net: myDelta - fieldDelta };
-  }, [players, playerDeltaMap, returnsIntensity, overrideMul]);
 
   const gwBasePtsByPid = useMemo(() => {
     const m = new Map();
@@ -1584,32 +1596,50 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
 
 /* ------------------------------ Small pieces ------------------------------- */
 
-function effectiveEOMult(eoPercent, mPos, delta) {
-  // eoPercent is in [0..300], where 100 = 100% EO, 170 = 170% (C), 300 caps TC
+// Tuneables
+const START_DECAY_AT = 4;  // begin attenuation on the *3rd* positive return
+const SAFE_CLAMP_FIRST_RETURN = true;
+
+/**
+ * EO → effective EO multiplier used for fieldDelta.
+ * - eoPercent: 0..300 (100 = 100% EO, 200 = cap, 300 = TC)
+ * - mPos: count of positive returns already credited in this edit-set (goals, assists, bonus, defcon)
+ * - delta: signed points delta for the player (used only to bypass for non-positive)
+ */
+// Tuneables — put near your other constants
+const DECAY_START_AT_PTS = 11;   // start attenuation once positive points exceed this
+const DECAY_PER_POINT    = 0.02; // how fast to increase attenuation per point past the threshold
+
+/**
+ * EO → effective EO multiplier used for fieldDelta.
+ * - eoPercent: 0..300 (100 = 100% EO, 200 = cap, 300 = TC)
+ * - posPtsSoFar: cumulative positive-return points already credited in this edit-set (before this delta)
+ * - delta: signed points delta for the player (used to skip for non-positive)
+ */
+function effectiveEOMult(eoPercent, posPtsSoFar, delta) {
   const raw = Math.max(0, Number(eoPercent) || 0) / 100; // 0..3
 
-  // For non-positive returns, just use linear multiplier (captaincy still doubles negatives in FPL scoring)
-  if (!(delta > 0 && mPos > 0)) return Math.min(3, raw);
+  // Linear for non-positive deltas
+  if (!(delta > 0)) return Math.min(3, raw);
 
-  // Split raw into "ownership up to 100%" and "extra" (C/TC spillover).
-  const ownership = Math.min(raw, 1);     // 0..1
-  const extra     = Math.max(0, raw - 1); // 0..2 (C/TC)
+  // Split ownership (≤1) vs. captaincy spillover (>1)
+  const ownPart   = Math.min(raw, 1);
+  const extraPart = Math.max(0, raw - 1); // up to 2 (C/TC)
 
-  // Diminish ONLY after the first positive return:
-  // mPos counts positive returns credited so far for this player in this edit-set.
-  // For the first return, pow = 1 → baseEff ≈ ownership (no attenuation).
-  // From the second return onward, pow > 1 → diminishing kicks in smoothly.
-  const pow = 1 + DIMINISH_K * Math.max(0, mPos - 1);
+  // No decay until cumulative positive points cross the threshold
+  const overPts = Math.max(0, Number(posPtsSoFar || 0) - DECAY_START_AT_PTS);
+  if (overPts <= 0) return Math.min(3, raw);
 
-  const baseEff = ownership === 0 ? 0 : 1 - Math.pow(1 - ownership, pow);
+  // Smoothly increase attenuation as positive points stack up
+  // We compress only the ≤100% ownership slice, then scale C/TC proportionally.
+  const pow = 1 + DECAY_PER_POINT * overPts;         // e.g., +0.05 per point over
+  const baseEff = ownPart === 0 ? 0 : 1 - Math.pow(1 - ownPart, pow);
+  const scale = ownPart > 0 ? (baseEff / ownPart) : 1;
+  const eff = baseEff + extraPart * scale;
 
-  // Keep captaincy/triple-captain proportional to the same attenuation ratio.
-  const scale = ownership > 0 ? (baseEff / ownership) : 1;
-  const eff   = baseEff + extra * scale;
-
-  // Cap at TC ceiling (3×)
   return Math.min(3, Math.max(0, eff));
 }
+
 
 
 

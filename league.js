@@ -1137,11 +1137,12 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
 
   // Hide "Yet" if every entry is 0
   let showYet = useMemo(() => {
+    return false;
     const rows = league?.rows || [];
     if (!rows.length) return true; // show by default while loading/empty
     return rows.some(r => Number(r?.yet ?? r?.played_rem ?? 0) > 0);
   }, [league?.rows]);
-
+  
   // Rebalance widths when Yet is hidden (steal its width and give to Manager + GW)
   const COLS = useMemo(() => {
     if (showYet) return COL;
@@ -1324,7 +1325,7 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
             activeOpacity={0.7}
             accessibilityLabel="League analytics (EO & Chips)"
           >
-            <MaterialCommunityIcons name="chart-pie" size={18} color={C.ink} />
+            <MaterialCommunityIcons name="chart-box-outline" size={18} color={C.ink} />
           </TouchableOpacity>
         )}
 
@@ -1536,6 +1537,9 @@ activeOpacity={0.7}
             ) : (
               <>
                 <Text style={S.tableTitle}>Player EO & captains (%)</Text>
+                <Text style={[S.muted, { fontSize: 11, marginTop: -2, marginBottom: 6 }]}>
+    Tip: tap the group icon next to a player to see which managers started, captained, triple-captained, or benched him.
+  </Text>
 
                 {/* EO search */}
                 <TextInput
@@ -2209,12 +2213,17 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
         {(() => {
           const gwGross = Number(row.gw_gross ?? row.gwgross ?? row.gw ?? 0);
           const gwHits = Number(row.gw_hits ?? row.hits ?? row.hit ?? 0);
+          const yetCount = Number(row?.yet ?? row?.played_rem ?? 0) || 0;
+
           return (
             <View style={S.gwStack}>
               <Text style={[S.gwMain, me && S.gwMainMine]}>{gwGross}</Text>
               {!!gwHits && (
                 <Text style={[S.gwHit, { color: badColor }]}>({gwHits > 0 ? `+${gwHits}` : gwHits})</Text>
               )}
+              { yetCount > 0 && (
+      <Text style={S.gwYet}>Yet {yetCount}</Text>
+    )}
             </View>
           );
         })()}
@@ -2694,6 +2703,7 @@ dropdownItem: {
     teamName: { color: C.text ?? '#111827', fontWeight: '700', fontSize: 11, maxWidth: '100%' },
     teamNameMine: { color: C.ink },
     managerName: { color: C.ink, marginTop: 2, fontSize: 10 },
+gwYet: { color: C.muted, fontSize: 8, marginTop: 1, fontWeight: '700' },
 
     chipsRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, marginTop: 2, flexWrap: 'nowrap' },
 

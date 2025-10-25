@@ -796,6 +796,12 @@ modalView: {
         },
         modalBtnText: { color: C.ink, fontWeight: '700' },
 
+
+pitchDarkOverlay: {
+  ...StyleSheet.absoluteFillObject,
+  backgroundColor: 'rgba(0,0,0,0.35)', // tweak the 0.35 to taste (0.25–0.5)
+}
+,
         eoLegendInline: { marginLeft: 8, alignItems: 'center' },
         eoLegendCell: { fontSize: 7, lineHeight: 14 },
 trophyPill: {
@@ -2084,6 +2090,7 @@ const handleShare = useCallback(async () => {
               style={[styles.pitchBg, isDark && { opacity: 1 }]}
               imageStyle={{ resizeMode: 'cover' }}  // optional: ensures full cover
             >
+
                
 
               <View style={styles.switch}>
@@ -2092,7 +2099,7 @@ const handleShare = useCallback(async () => {
   <TouchableOpacity
     onPress={() => navigation.navigate('Trophies')}
     activeOpacity={0.85}
-    style={[styles.trophyPill, { borderColor: C.border, backgroundColor: C.card2 }]}
+    style={[styles.trophyPill, { borderColor: C.border, backgroundColor: C.card2, display:'none'}]}
     accessibilityRole="button"
     accessibilityLabel="Open Trophies"
   >

@@ -594,13 +594,18 @@ try {
       }
     }
 
-    const flopsPool = enriched.filter((x) => x.mul > 0 && x.statusOwned && x.statusOwned !== 'yet');
-    const flopPick = flopsPool.length
-      ? flopsPool.slice().sort((a, b) =>
-          (Number(a.pts) || 0) - (Number(b.pts) || 0) ||
-          (Number(a.eoPct) || 0) - (Number(b.eoPct) || 0)
-        )[0]
-      : null;
+    
+    const flopsPool = enriched.filter(
+  (x) => x.mul > 0 && x.statusOwned && x.statusOwned !== 'yet' && Number(x.pts || 0) <= 3
+);
+    let flopPick = null;
+if (flopsPool.length) {
+  const flopsSorted = flopsPool.slice().sort((a, b) =>
+    (Number(a.pts) || 0) - (Number(b.pts) || 0) ||
+    (Number(a.eoPct) || 0) - (Number(b.eoPct) || 0)
+  );
+  flopPick = flopsSorted.find((p) => !starPick || p.id !== starPick.id) || null;
+}
 
     // ——— Your Differentials and Threats (lists) ———
     const diffs = enriched
