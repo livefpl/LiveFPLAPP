@@ -1,14 +1,16 @@
 // App.js
 import React from 'react';
-import { View, StyleSheet, StatusBar } from 'react-native';
+import { View, StyleSheet, StatusBar, Platform } from 'react-native';
 import { NavigationContainer, CommonActions } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { ProProvider } from './ProContext';
 
 import { setTrigger, setConfig, bump } from './meter';
 import { showOnce } from './AdInterstitial';
 import { ThemeProvider, useTheme, useColors } from './theme';
 import { Text, TextInput } from 'react-native';
+import { getTrackingPermissionsAsync, requestTrackingPermissionsAsync } from 'expo-tracking-transparency';
 
 Text.defaultProps = Text.defaultProps || {};
 Text.defaultProps.allowFontScaling = false;
@@ -46,7 +48,7 @@ function MyTabs() {
     <Tab.Navigator
       initialRouteName="Rank"
       screenOptions={({ route }) => ({
-        tabBarIcon: ({ color, size }) => {
+        tabBarIcon: ({ color }) => {
           let iconName;
           switch (route.name) {
             case 'Battle': iconName = 'sword-cross'; break;
@@ -56,8 +58,8 @@ function MyTabs() {
             case 'ID': iconName = 'account-edit'; break;
             case 'Games': iconName = 'soccer'; break;
             case 'Trophies': iconName = 'medal'; break;
-            case 'Planner': iconName = 'calendar-edit';break;
-            case 'What If': iconName = 'lightbulb-on-outline';break;
+            case 'Planner': iconName = 'calendar-edit'; break;
+            case 'What If': iconName = 'lightbulb-on-outline'; break;
             default: iconName = 'account'; break;
           }
           return <MaterialCommunityIcons name={iconName} size={19} color={color} />;
@@ -104,34 +106,58 @@ function MyTabs() {
           },
         })}
       />
-      
+
       <Tab.Screen name="Battle" component={Threats} />
       <Tab.Screen name="Leagues" component={Leagues} />
       <Tab.Screen name="Prices" component={PricesPage} />
       <Tab.Screen name="Games" component={Games} />
-      
+
       <Tab.Screen name="What If" component={WhatIf} />
       <Tab.Screen name="Planner" component={PlannerScreen} />
-      <Tab.Screen name="Trophies" component={Achievements} options={{
-    tabBarButton: () => null,   // hides it from the bottom bar
-    tabBarIcon: () => null,     // (optional) don’t reserve icon space
-    tabBarLabel: () => null,    // (optional) belt & suspenders
-  }} />
-      <Tab.Screen name="ID" component={ChangeID} options={{
-    tabBarButton: () => null,   // hides it from the bottom bar
-    tabBarIcon: () => null,     // (optional) don’t reserve icon space
-    tabBarLabel: () => null,    // (optional) belt & suspenders
-  }} />
+      <Tab.Screen
+        name="Trophies"
+        component={Achievements}
+        options={{
+          tabBarButton: () => null,   // hides it from the bottom bar
+          tabBarIcon: () => null,     // (optional) don’t reserve icon space
+          tabBarLabel: () => null,    // (optional) belt & suspenders
+        }}
+      />
+      <Tab.Screen
+        name="ID"
+        component={ChangeID}
+        options={{
+          tabBarButton: () => null,   // hides it from the bottom bar
+          tabBarIcon: () => null,     // (optional) don’t reserve icon space
+          tabBarLabel: () => null,    // (optional) belt & suspenders
+        }}
+      />
     </Tab.Navigator>
   );
 }
 
 /* -------- Root navigation (needs theme) -------- */
-function RootNavigation({ navRef, onReady, onStateChange }) {
+function RootNavigation({ navRef, onReady, onStateChange, attStatus }) {
   const { navTheme } = useTheme();
+  const C = useColors();
+  const isDark = navTheme?.dark;
+
   return (
     <>
-      <StatusBar barStyle={navTheme.dark ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      {/* Tiny non-interactive badge to show ATT status */}
+      <View
+        pointerEvents="none"
+        style={[
+          styles.attBadge,
+          { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', borderColor: C.border }
+        ]}
+      >
+        <Text style={{ fontSize: 11, fontWeight: '800', color: C.ink }}>
+          ATT: {attStatus}
+        </Text>
+      </View>
+
       <NavigationContainer ref={navRef} onReady={onReady} onStateChange={onStateChange} theme={navTheme}>
         <MyTabs />
       </NavigationContainer>
@@ -143,6 +169,28 @@ function RootNavigation({ navRef, onReady, onStateChange }) {
 export default function App() {
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
+
+  // --- Track and show ATT status in UI ---
+  const [attStatus, setAttStatus] = React.useState(Platform.OS === 'ios' ? 'checking…' : 'N/A');
+
+  React.useEffect(() => {
+    (async () => {
+      try {
+        if (Platform.OS !== 'ios') return;
+        const first = await getTrackingPermissionsAsync();
+        setAttStatus(first?.status ?? 'unknown');
+
+        if (first?.status === 'undetermined' || (first?.status === 'denied' && first?.canAskAgain)) {
+          // Give the app a moment to fully mount before prompting
+          await new Promise(r => setTimeout(r, 400));
+          const after = await requestTrackingPermissionsAsync();
+          setAttStatus(after?.status ?? 'unknown');
+        }
+      } catch {
+        setAttStatus('unavailable');
+      }
+    })();
+  }, []);
 
   const onReady = () => {
     prevRouteNameRef.current = navRef.current?.getCurrentRoute?.()?.name ?? null;
@@ -158,13 +206,20 @@ export default function App() {
 
   return (
     <ThemeProvider>
-    <ForceUpdateGate localBuild={LOCAL_BUILD} configUrl={CONFIG_URL} defaultRemote={DEFAULT_REMOTE_VERSION}>
-      <FplIdProvider>
-        <ThemeProvider>
-          <RootNavigation navRef={navRef} onReady={onReady} onStateChange={onStateChange} />
-        </ThemeProvider>
-      </FplIdProvider>
-    </ForceUpdateGate>
+      <ForceUpdateGate localBuild={LOCAL_BUILD} configUrl={CONFIG_URL} defaultRemote={DEFAULT_REMOTE_VERSION}>
+        <FplIdProvider>
+          <ThemeProvider>
+            <ProProvider>
+              <RootNavigation
+                navRef={navRef}
+                onReady={onReady}
+                onStateChange={onStateChange}
+                attStatus={attStatus}
+              />
+            </ProProvider>
+          </ThemeProvider>
+        </FplIdProvider>
+      </ForceUpdateGate>
     </ThemeProvider>
   );
 }
@@ -175,5 +230,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#f2f2f2', // unused, safe to keep
+  },
+  attBadge: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    zIndex: 9999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    display:'none'
   },
 });

@@ -37,7 +37,7 @@
         "ascAppId": "6753036580",
 	"ascApiKeyId": "Z66KHJRNR2",
         "ascApiKeyIssuerId": "69a6de75-8cda-47e3-e053-5b8c7c11a4d1",
-        "ascApiKeyPath": " ../AuthKey_Z66KHJRNR2.p8"
+        "ascApiKeyPath": "../AuthKey_Z66KHJRNR2.p8"
       },
 "android": { "track": "internal", "releaseStatus": "draft" } 
     },

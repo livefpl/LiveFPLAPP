@@ -1458,7 +1458,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
           </View>
 
           <Text style={S.modalLabel}>Bench (pick one)</Text>
-          <ScrollView style={{maxHeight:140}}>
+          <ScrollView style={{maxHeight:200}}>
             {allPlayers
               .filter(p => getMulFor(p.id) === 0)
               .map(p=>(
@@ -1469,7 +1469,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
           </ScrollView>
 
           <Text style={[S.modalLabel,{marginTop:6}]}>Starter to replace</Text>
-          <ScrollView style={{maxHeight:140}}>
+          <ScrollView style={{maxHeight:250}}>
             {allPlayers
               .filter(p => getMulFor(p.id) > 0)
               .filter(p => !swapB || swapKeepsFormation(swapB, p.id))

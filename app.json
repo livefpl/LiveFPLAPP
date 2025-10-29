@@ -11,8 +11,8 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./icon.png",
-"android": {
- "package": "com.pocketgamerguides.livefpl",
+    "android": {
+      "package": "com.pocketgamerguides.livefpl",
       "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./adaptive-foreground-1024.png",
@@ -22,31 +22,18 @@
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-            "resizeMode": "contain",
+      "resizeMode": "contain",
       "backgroundColor": "#ffffff",
-      "plugins": [
-        [
-          "react-native-google-mobile-ads",
-          {
-            "androidAppId": "ca-app-pub-7466981426984905~5242246091",
-            "iosAppId": "ca-app-pub-7466981426984905~5242246091"
-          }
-        ]
-      ]
+      
     },
-    "react-native-google-mobile-ads": {
-      "androidAppId": "ca-app-pub-7466981426984905~5242246091",
-      "iosAppId": "ca-app-pub-7466981426984905~5242246091"
-    },
-    "ios": {
+        "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.pocketgamerguides.livefpl",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+"NSUserTrackingUsageDescription": "This identifier is used to show you relevant, less intrusive ads and to measure ad performance.",
       }
     },
-    
-    
     "description": "github.com/livefpl/disrespectful-croissant @ Apr 30, 2023",
     "extra": {
       "eas": {
@@ -54,14 +41,9 @@
       }
     },
     "plugins": [
-      [
-        "react-native-google-mobile-ads",
-        {
-          "androidAppId": "ca-app-pub-7466981426984905~5242246091",
-          "iosAppId": "ca-app-pub-7466981426984905~5242246091"
-        }
-      ],
-      "expo-font"
+      
+      "expo-font",
+      "expo-tracking-transparency"
     ],
     "runtimeVersion": {
       "policy": "appVersion"

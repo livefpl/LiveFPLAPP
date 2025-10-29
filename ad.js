@@ -1,8 +1,8 @@
 // ad.js
-import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { useColors } from './theme';
-import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
+import { usePro } from './ProContext';
 
 export const AD_FOOTER_HEIGHT = 50;
 
@@ -16,22 +16,12 @@ const COPY = {
   Default: 'Your ad here',
 };
 
-// TODO: replace with your *real* ad unit IDs per platform
-const ANDROID_BANNER_ID = 'ca-app-pub-7466981426984905/7940807725';
-const IOS_BANNER_ID     = 'ca-app-pub-7466981426984905/7940807725';
-
-const PROD_UNIT_ID = Platform.select({
-  android: ANDROID_BANNER_ID,
-  ios: IOS_BANNER_ID,
-});
-
-export default function AdFooter({
-  slot = 'Default',
-  // You can swap to BannerAdSize.ANCHORED_ADAPTIVE_BANNER later if you want adaptive height.
-  size = BannerAdSize.BANNER,
-  requestNonPersonalizedAdsOnly = true,
-}) {
+export default function AdFooter({ slot = 'Default' }) {
   const C = useColors();
+  const { isPro } = usePro();
+
+  // Hide banner/footer entirely for Pro
+  if (isPro) return null;
   const styles = useMemo(
     () =>
       StyleSheet.create({
@@ -43,37 +33,14 @@ export default function AdFooter({
           alignItems: 'center',
           justifyContent: 'center',
         },
-        testLabel: {
-          position: 'absolute',
-          top: 4,
-          fontSize: 11,
-          color: C.muted,
-        },
-        fallbackText: { fontSize: 12, color: C.muted },
+        text: { fontSize: 12, color: C.muted },
       }),
     [C]
   );
 
-  const [failed, setFailed] = useState(false);
-
-  // Test ad in dev, real ad in prod
-  const unitId = __DEV__ ? TestIds.BANNER : PROD_UNIT_ID;
-
   return (
-    <View style={styles.container} accessibilityLabel="Ad footer">
-      {failed ? (
-        <Text style={styles.fallbackText}>{COPY[slot] || COPY.Default}</Text>
-      ) : (
-        <>
-          {__DEV__ && <Text style={styles.testLabel}>Test Ad • {slot}</Text>}
-          <BannerAd
-            unitId={unitId}
-            size={size}
-            requestOptions={{ requestNonPersonalizedAdsOnly }}
-            onAdFailedToLoad={() => setFailed(true)}
-          />
-        </>
-      )}
+    <View style={styles.container}>
+      <Text style={styles.text}>{COPY[slot] || COPY.Default}</Text>
     </View>
   );
 }
