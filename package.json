@@ -10,7 +10,7 @@
   "dependencies": {
     "@expo/vector-icons": "^14.1.0",
     "@fortawesome/free-solid-svg-icons": "*",
-        "@react-native-async-storage/async-storage": "2.1.2",
+    "@react-native-async-storage/async-storage": "2.1.2",
     "@react-native-firebase/app": "11.5.0",
     "@react-native-picker/picker": "2.11.1",
     "@react-navigation/bottom-tabs": "^6.0.0",
@@ -39,7 +39,8 @@
     "react-native-vector-icons": "*",
     "react-native-view-shot": "^4.0.3",
     "sync-storage": "*",
-    "expo-tracking-transparency": "~5.2.4"
+    "expo-tracking-transparency": "~5.2.4",
+    "expo-clipboard": "~7.1.5"
   },
   "devDependencies": {
     "@babel/core": "^7.20.0",

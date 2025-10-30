@@ -43,7 +43,6 @@
     "plugins": [
       
       "expo-font",
-"react-native-purchases",
       "expo-tracking-transparency"
     ],
     "runtimeVersion": {

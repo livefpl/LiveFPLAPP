@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import Constants from 'expo-constants';
 import Purchases from 'react-native-purchases';
-
+import * as Clipboard from 'expo-clipboard';
 import AppHeader from './AppHeader';
 import { useColors } from './theme';
 import { usePro } from './ProContext';
@@ -25,6 +25,7 @@ export default function PaywallScreen(props) {
   const [appUserId, setAppUserId] = useState(null);
   const [info, setInfo] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   const isExpoGo = Constants.appOwnership === 'expo';
   const isIOS = Platform.OS === 'ios';
@@ -98,6 +99,18 @@ export default function PaywallScreen(props) {
     ? 'itms-apps://apps.apple.com/account/subscriptions'
     : 'https://play.google.com/store/account/subscriptions';
 
+  // Strip "$RCAnonymousID:" prefix and enable copy
+  const cleanId = useMemo(
+    () => (appUserId ? appUserId.replace(/^\$RCAnonymousID:/, '') : null),
+    [appUserId]
+  );
+  const copyId = async () => {
+    if (!cleanId) return;
+    await Clipboard.setStringAsync(cleanId);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1200);
+  };
+
   const disabledReason = useMemo(() => {
     if (isExpoGo) return 'Not available in Expo Go';
     if (!isIOS) return 'Google Play billing not enabled yet.';
@@ -138,7 +151,6 @@ export default function PaywallScreen(props) {
       {/* Avoid Go-Pro/Change-ID in this header to prevent recursion/overlap */}
       <AppHeader showGoPro={false} showChangeId={false} />
 
-      
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: 24 }]}
         showsVerticalScrollIndicator={false}
@@ -162,9 +174,29 @@ export default function PaywallScreen(props) {
 
           <View style={styles.kvRow}>
             <Text style={[styles.kKey, { color: C.muted }]}>Anonymous ID</Text>
-            <Text selectable style={[styles.kValMono, { color: C.ink }]}>
-              {appUserId || '—'}
-            </Text>
+            {/* Cleaned ID with copy chip */}
+            <View style={styles.idRow}>
+              <Text
+                selectable
+                numberOfLines={1}
+                style={[styles.kValMono, { color: C.ink, flexShrink: 1 }]}
+              >
+                {cleanId || '—'}
+              </Text>
+              {cleanId ? (
+                <TouchableOpacity
+                  onPress={copyId}
+                  style={[styles.copyBtn, { backgroundColor: C.stripBg, borderColor: C.border2 }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Copy Anonymous ID"
+                >
+                  <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={14} color={C.ink} />
+                  <Text style={[styles.copyText, { color: C.ink }]}>
+                    {copied ? 'Copied' : 'Copy'}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
           </View>
 
           <View style={styles.kvRow}>
@@ -249,6 +281,20 @@ export default function PaywallScreen(props) {
             </TouchableOpacity>
           </View>
 
+          {/* Privacy note under the subscription buttons */}
+          <View style={[styles.legalWrap, { borderTopColor: C.border2 }]}>
+            <Text style={[styles.legalText, { color: C.muted }]}>
+              By subscribing, you agree to our{' '}
+              <Text
+                style={[styles.legalLink, { color: C.link }]}
+                onPress={() => Linking.openURL('https://www.livefpl.net/privacy.pdf')}
+              >
+                Privacy Policy
+              </Text>
+              .
+            </Text>
+          </View>
+
           <TouchableOpacity
             style={[styles.linkBtn, { borderColor: C.border2 }]}
             onPress={onRestore}
@@ -307,6 +353,23 @@ const styles = StyleSheet.create({
   kVal: { fontSize: 14, fontWeight: '700' },
   kValMono: { fontSize: 13, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace' }) },
 
+  idRow: {
+    marginTop: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  copyBtn: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  copyText: { fontSize: 12, fontWeight: '700' },
+
   actionsRow: {
     flexDirection: 'row',
     gap: 10,
@@ -339,8 +402,17 @@ const styles = StyleSheet.create({
   buyText: { fontSize: 15, fontWeight: '700' },
   btnDisabled: { opacity: 0.5 },
 
-  linkBtn: {
+  // Privacy under buy buttons
+  legalWrap: {
     marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+  },
+  legalText: { fontSize: 12, lineHeight: 18 },
+  legalLink: { fontWeight: '700', textDecorationLine: 'underline' },
+
+  linkBtn: {
+    marginTop: 12,
     paddingVertical: 10,
     alignItems: 'center',
     borderTopWidth: 0,
