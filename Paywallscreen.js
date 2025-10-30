@@ -201,7 +201,7 @@ export default function PaywallScreen(props) {
 
           <View style={styles.kvRow}>
             <Text style={[styles.kKey, { color: C.muted }]}>Status</Text>
-            <Text style={[styles.kVal, { color: isProActive ? C.good : C.ink }]}>{statusLine}</Text>
+            <Text style={[styles.kVal, { color:  C.ink }]}>{statusLine}</Text>
           </View>
 
           <View style={[styles.actionsRow, { borderTopColor: C.border2 }]}>
@@ -296,12 +296,13 @@ export default function PaywallScreen(props) {
           </View>
 
           <TouchableOpacity
-            style={[styles.linkBtn, { borderColor: C.border2 }]}
-            onPress={onRestore}
-            disabled={!!disabledReason}
-          >
-            <Text style={[styles.linkText, { color: C.ink }]}>Restore Purchases</Text>
-          </TouchableOpacity>
+  style={[styles.linkBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
+  onPress={onRestore}
+  disabled={!!disabledReason}
+>
+  <Text style={[styles.linkText, { color: C.ink }]}>Restore Purchases</Text>
+</TouchableOpacity>
+
 
           <Text style={[styles.disclaimer, { color: C.muted }]}>
             Payments are processed by Apple. Subscriptions auto-renew; cancel any time in store.
@@ -412,14 +413,14 @@ const styles = StyleSheet.create({
   legalLink: { fontWeight: '700', textDecorationLine: 'underline' },
 
   linkBtn: {
-    marginTop: 12,
-    paddingVertical: 10,
-    alignItems: 'center',
-    borderTopWidth: 0,
-    borderBottomWidth: 0,
-    borderWidth: 1,
-    borderRadius: 10,
-  },
+  marginTop: 12,
+  paddingVertical: 10,
+  paddingHorizontal: 14,
+  alignItems: 'center',
+  borderWidth: 1,
+  borderRadius: 10,
+},
+
   linkText: { fontSize: 14, fontWeight: '700' },
 
   disclaimer: { fontSize: 12, marginTop: 10, lineHeight: 16 },

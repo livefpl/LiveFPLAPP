@@ -49,11 +49,18 @@ export default function AppHeader({
     setPaywallOpen(true);
   };
 
-  // Automatically close the overlay whenever this screen loses focus (navigate away)
-  useEffect(() => {
-    const unsubBlur = navigation.addListener('blur', () => setPaywallOpen(false));
-    return unsubBlur;
-  }, [navigation]);
+useEffect(() => {
+  const unsubBlur = navigation.addListener('blur', () => setPaywallOpen(false));
+  const unsubTabPress = navigation.addListener('tabPress', () => setPaywallOpen(false));
+  const unsubFocus = navigation.addListener('focus', () => setPaywallOpen(false));
+
+  return () => {
+    unsubBlur();
+    unsubTabPress();
+    unsubFocus();
+  };
+}, [navigation]);
+
 
   return (
     <>
@@ -73,29 +80,42 @@ export default function AppHeader({
           {/* LEFT controls (mirrors right): Go Pro pill */}
           <View style={styles.sideLeft}>
             <View style={styles.iconRowLeft}>
-              {showGoPro && !isPro && (
-                <TouchableOpacity
-                  onPress={handleGoPro}
-                  activeOpacity={0.9}
-                  style={[
-                    styles.proPill,
-                    { borderColor: colors.border2, backgroundColor: colors.stripBg },
-                  ]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open Go Pro"
-                  testID="btn-go-pro"
-                >
-                  <MaterialCommunityIcons
-                    name="crown-outline"
-                    size={12}
-                    color={isDark ? '#ffd76a' : '#8a5a00'}
-                    style={{ marginRight: 6 }}
-                  />
-                  <Text numberOfLines={1} style={[styles.proText, { color: colors.ink }]}>
-                    No Ads
-                  </Text>
-                </TouchableOpacity>
-              )}
+              {showGoPro && (
+  <TouchableOpacity
+    onPress={ handleGoPro}
+    activeOpacity={isPro ? 1 : 0.9}
+    style={[
+      styles.proPill,
+      {
+        borderColor: colors.border2,
+        backgroundColor:  colors.stripBg,
+      },
+    ]}
+    accessibilityRole="button"
+    accessibilityLabel={isPro ? 'Premium' : 'Open Go Pro'}
+    testID="btn-go-pro"
+  >
+    <MaterialCommunityIcons
+      name="crown-outline"
+      size={12}
+      color={isDark ? '#ffd76a' : '#8a5a00'}
+      style={{ marginRight: 6 }}
+    />
+    <Text
+      numberOfLines={1}
+      style={[
+        styles.proText,
+        {
+          color: colors.ink,
+          fontWeight:  '700',
+        },
+      ]}
+    >
+      {isPro ? 'Premium' : 'No Ads'}
+    </Text>
+  </TouchableOpacity>
+)}
+
             </View>
           </View>
 
