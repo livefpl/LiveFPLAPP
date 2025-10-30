@@ -23,7 +23,7 @@
     "newArchEnabled": true,
     "splash": {
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff",
+      "backgroundColor": "#ffffff"
       
     },
         "ios": {
@@ -43,6 +43,7 @@
     "plugins": [
       
       "expo-font",
+"react-native-purchases",
       "expo-tracking-transparency"
     ],
     "runtimeVersion": {
