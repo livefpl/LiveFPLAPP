@@ -8,7 +8,7 @@
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {

@@ -43,6 +43,7 @@
 
 
 import { InteractionManager } from 'react-native';
+import PlayerInfoModal from './PlayerInfoModal';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -558,6 +559,8 @@ for (const { metric } of concrete) {
   };
   const poly = vals => vals.map((t, i) => toXY(i, t || 0)).map(([x,y]) => `${x},${y}`).join(' ');
 
+
+
   // ---- editor ----
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const addKey = k => {
@@ -839,6 +842,15 @@ export default function Planner() {
 const [picker, setPicker] = useState({ visible: false, type: null }); // 'team' | 'pos' | 'stat' | null
 const openPicker  = (type) => setPicker({ visible: true, type });
 const closePicker = () => setPicker({ visible: false, type: null });
+// PlayerInfoModal state
+   const [infoOpen, setInfoOpen] = useState(false);
+   const [infoPid, setInfoPid] = useState(null);
+
+   const openInfo = useCallback((pid) => {
+     setInfoPid(pid);
+     setInfoOpen(true);
+   }, []);
+   const closeInfo = useCallback(() => setInfoOpen(false), []);
 
     // Dynamically size pitch so it never sits under the ad or system bars
   const pitchHeight = useMemo(() => {
@@ -2507,7 +2519,7 @@ chipMiniTxt: {
   flexDirection: 'row',
   gap: 2,
   marginTop: 4,
-  maxWidth: '50%',
+  maxWidth: '80%',
 },
 expandWrap: {
   marginTop: 6,
@@ -2546,6 +2558,7 @@ marketMiniCell: {
   paddingVertical: 2,
   borderRadius: 6,
   overflow: 'hidden',
+  marginRight:3,
 },
 
 
@@ -3231,17 +3244,28 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
             
 
             {!!fixtures.length && (
-   <View style={S.marketMiniRow}>
-     {fixtures.slice(0, 7).map((f, i) => (
-       <Text
-         key={`asfx-${i}`}
-         numberOfLines={1}
-         style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
-       >
-         {tinyFixture(f.label)}
-       </Text>
-     ))}
-   </View>
+  <View style={[S.marketMiniRow, { flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}>
+    <View style={{ flex: 1, flexDirection:'row', flexWrap:'wrap' }}>
+      {fixtures.slice(0, 7).map((f, i) => (
+        <Text
+          key={`asfx-${i}`}
+          numberOfLines={1}
+          style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+        >
+          {tinyFixture(f.label)}
+        </Text>
+      ))}
+    </View>
+    <TouchableOpacity
+      onPress={() => openInfo(pid)}
+      style={{ marginLeft: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: C.border, flexShrink: 0, flexDirection:'row', alignItems:'center', gap:6 }}
+      hitSlop={{ top:8, bottom:8, left:8, right:8 }}
+      accessibilityLabel="Expand fixtures"
+    >
+      <MaterialCommunityIcons name="open-in-new" size={14} color={C.ink} />
+      <Text style={{ color: C.ink, fontWeight: '700' }}>All Fixtures</Text>
+    </TouchableOpacity>
+  </View>
  )}
             
 
@@ -4340,17 +4364,28 @@ const SeasonStatsModal = () => {
 
         {/* Fixtures chips */}
         {!!fixtures.length && (
-          <View style={[S.marketMiniRow, { paddingHorizontal:16 }]}>
-            {fixtures.slice(0, 12).map((f, i) => (
-              <Text
-                key={`ssfx-${i}`}
-                numberOfLines={1}
-                style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
-              >
-                {tinyFixture(f.label)}
-              </Text>
-            ))}
-          </View>
+          <View style={[S.marketMiniRow, { paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}>
+    <View style={{ flex:1, flexDirection:'row', flexWrap:'wrap' }}>
+      {fixtures.slice(0, 12).map((f, i) => (
+        <Text
+          key={`ssfx-${i}`}
+          numberOfLines={1}
+          style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+        >
+          {tinyFixture(f.label)}
+        </Text>
+      ))}
+    </View>
+    <TouchableOpacity
+      onPress={() => openInfo(statsPid)}
+      style={{ marginLeft: 8, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: StyleSheet.hairlineWidth, borderColor: C.border, flexShrink: 0, flexDirection:'row', alignItems:'center', gap:6 }}
+      hitSlop={{ top:8, bottom:8, left:8, right:8 }}
+      accessibilityLabel="Expand fixtures"
+    >
+      <MaterialCommunityIcons name="open-in-new" size={14} color={C.ink} />
+      <Text style={{ color: C.ink, fontWeight: '700' }}>All Fixtures</Text>
+    </TouchableOpacity>
+  </View>
         )}
 
         {/* Optional news */}
@@ -5155,6 +5190,7 @@ function RankLine({ label, rank, den, suffix, style }) {
   const TickerOverlay = () => {
     const CELL_W = 56;
     const MINE_W = 92;
+    const DIFF_W = 56;
     const BASE_CELL_H = 36;
 
     const [rowHeights, setRowHeights] = useState({});
@@ -5165,6 +5201,8 @@ function RankLine({ label, rank, den, suffix, style }) {
     const [lookahead, setLookahead] = useState(5); // default 5 GWs
     const [sortByDiff, setSortByDiff] = useState(true);
     const [ascDiff, setAscDiff] = useState(true);
+
+
 
     // persist helpers
     const saveOverrides = useCallback(async (next) => {
@@ -5206,7 +5244,18 @@ function RankLine({ label, rank, den, suffix, style }) {
     const startCol0 = Math.min(gwCount - 1, Math.max(0, (gw || 1) - 1));
     const endCol = Math.min(gwCount - 1, startCol0 + Math.max(1, lookahead) - 1);
     const range = useMemo(() => Array.from({ length: endCol - startCol0 + 1 }, (_, i) => startCol0 + i), [startCol0, endCol]);
-
+const sumForTeam = useCallback((team) => {
+  let sum = 0, has = false;
+  for (const gi of range) {
+    const perGw = (fdr?.[team] || [])[gi] || [];
+    if (perGw.length === 0) continue;
+    for (const [label] of perGw) {
+      const d = diffOf(label); // respects custom overrides
+      if (Number.isFinite(d)) { sum += d; has = true; }
+    }
+  }
+  return has ? sum : null;
+}, [fdr, range, diffOf]);
     const picksNow = useMemo(
       () => (current?.chip === 'bboost' ? (current?.picks || []) : (current?.picks || []).slice(0, 15)),
       [current?.picks, current?.chip]
@@ -5332,7 +5381,7 @@ const cycleSort = useCallback(() => {
 
               {/* Options */}
               <View style={S.tickOpts}>
-                <Text style={{ color:C.muted, fontWeight:'800' }}>Lookahead:</Text>
+                <Text style={{ color:C.muted, fontWeight:'800' }}>Gameweeks:</Text>
                 <View style={{ flexDirection:'row', alignItems:'center', gap:6 }}>
                   <TouchableOpacity style={S.smallBtn} onPress={()=> setLookahead(v=> Math.max(1, v-1))}><Text style={S.smallBtnTxt}>–</Text></TouchableOpacity>
                   <Text style={[S.smallBtnTxt, { minWidth:40, textAlign:'center' }]}>{lookahead}</Text>
@@ -5389,6 +5438,10 @@ const cycleSort = useCallback(() => {
                         <View style={[S.tickMine, { width: MINE_W }]}>
                           <Text style={[S.tickCellTxt, { color: C.ink }]}>Mine</Text>
                         </View>
+                        {/* NEW: Diff header cell */}
+    <View style={[S.tickMine, { width: DIFF_W }]}>
+      <Text style={[S.tickCellTxt, { color: C.ink }]}>Score</Text>
+    </View>
                         <View style={[S.tickCellsWrap, { borderWidth:0 }]}>
                           <View style={S.tickCells}>
                             {range.map((gi) => (
@@ -5412,6 +5465,15 @@ const cycleSort = useCallback(() => {
                             </Text>
                           </View>
 
+{/* NEW: Diff value cell */}
+      <View style={[S.tickMine, { width: DIFF_W }]}>
+        <Text style={[S.tickCellTxt, { color: C.ink }]}>
+          {(() => {
+            const v = sumForTeam(team);
+            return Number.isFinite(v) ? String(v) : '—';
+          })()}
+        </Text>
+      </View>
                           <View style={S.tickCellsWrap}>
                             <View style={S.tickCells}>
                               {range.map((gi) => {
@@ -5755,6 +5817,13 @@ const cycleSort = useCallback(() => {
         <SummaryModal />
         <TickerOverlay />
         <SeasonStatsModal />
+        <PlayerInfoModal
+          visible={infoOpen}
+          onClose={closeInfo}
+          playerId={infoPid}
+          playerName={infoPid ? (namesById?.[infoPid] || String(infoPid)) : ''}
+          position={""}
+        />
         <CompareModal />
         
         <BankEditor />

@@ -99,7 +99,7 @@ useEffect(() => {
       name="crown-outline"
       size={12}
       color={isDark ? '#ffd76a' : '#8a5a00'}
-      style={{ marginRight: 6 }}
+      
     />
     <Text
       numberOfLines={1}
@@ -223,18 +223,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // small “Go Pro” pill (fits in the SIDE_WIDTH lane)
   proPill: {
-    height: 26,
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    
-    
-  },
-  proText: { fontWeight: '700', fontSize: 12, lineHeight: 14 },
+  height: 26,
+  borderRadius: 999,
+  borderWidth: 1,
+  paddingHorizontal: 8,
+  flexDirection: 'row',
+  alignItems: 'center',      // vertical center (row axis)
+  justifyContent: 'center',  // <-- horizontal center
+  gap: 4,                    // space between icon & text
+  alignSelf: 'center',       // (optional) center pill within the LEFT lane
+},
+proText: {
+  fontWeight: '700',
+  fontSize: 11,
+  lineHeight: 14,
+  textAlign: 'center',       // keep text centered if it wraps
+},
 
   // Fullscreen overlay container for PaywallScreen
   fullscreen: {

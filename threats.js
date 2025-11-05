@@ -715,12 +715,22 @@ const [myHit, setMyHit] = useState(0); // points (usually negative)
     for (const x of liveOnly) {
       const gap = x.mul - x.eoFrac;
       const contrib = gap * (Number(x.pts) || 0);
-      const row = { id: x.id, name: x.name, teamId: x.teamId, pts: Number(x.pts) || 0, value: contrib };
+      const row = { id: x.id, name: x.name, teamId: x.teamId, pts: Number(x.pts) || 0, value: contrib, eo: x.eoFrac, };
       if (x.mul > 0 && gap > 0) gains.push(row);
       else losses.push(row);
     }
-    gains.sort((a, b) => (b.value - a.value) || (b.pts - a.pts));
-    losses.sort((a, b) => (Math.abs(b.value) - Math.abs(a.pts)) || (b.pts - a.pts));
+    gains.sort((a, b) =>
+  (b.eo - a.eo) ||            // primary: higher EO first
+  (b.pts - a.pts) ||          // then higher points
+  a.name.localeCompare(b.name)
+);
+
+losses.sort((a, b) =>
+  (b.eo - a.eo) ||            // primary: higher EO first
+  (b.pts - a.pts) ||          // then higher points
+  a.name.localeCompare(b.name)
+);
+
     const totalGain  = gains.reduce((s, r) => s + r.value, 0);
     const totalLoss  = losses.reduce((s, r) => s + r.value, 0);
     const netTotal   = totalGain + totalLoss;
@@ -1606,6 +1616,22 @@ const [myHit, setMyHit] = useState(0); // points (usually negative)
             ))}
           </View>
         </View>
+{/* Totals footer */}
+<View style={styles.lbFooter}>
+  <View style={[styles.lbCol, styles.lbColRightBorder]}>
+    <Text style={styles.lbTotalLabel}>Total Gain</Text>
+    <Text style={[styles.lbValGain, { textAlign: 'right', marginTop: 4 }]}>
+      {liveBattle.totalGain >= 0 ? '+' : ''}{liveBattle.totalGain.toFixed(2)}
+    </Text>
+  </View>
+
+  <View style={styles.lbCol}>
+    <Text style={styles.lbTotalLabel}>Total Loss</Text>
+    <Text style={[styles.lbValLoss, { textAlign: 'right', marginTop: 4 }]}>
+      {liveBattle.totalLoss.toFixed(2)}
+    </Text>
+  </View>
+</View>
 
         {(liveBattle.gains.length > 11 || liveBattle.losses.length > 11) && (
           <View style={{ alignItems: 'center', paddingTop: 6 }}>

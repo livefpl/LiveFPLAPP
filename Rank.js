@@ -4,6 +4,7 @@ import AppHeader from './AppHeader';
 import { useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
+import PlayerInfoModal from './PlayerInfoModal';
 
 import { TouchableWithoutFeedback } from 'react-native';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
@@ -372,7 +373,59 @@ const atMax = pitchScale >= MAX_SCALE - EPS;
 
   const viewFplId = route?.params?.viewFplId;
   const { fplId, triggerRefetch } = useFplId();
-  const C = useColors();
+ // Rank.js (inside component)
+const C = useColors();
+
+const [infoOpen, setInfoOpen] = useState(false);
+const [infoPlayer, setInfoPlayer] = useState({
+  id: null,
+  name: '',
+  teamShort: '',
+  position: '',
+});
+
+const openPlayerInfo = (pOrId) => {
+  const p = typeof pOrId === 'object' && pOrId !== null ? pOrId : { pid: pOrId };
+
+  const id =
+    p?.pid ??
+    p?.id ??
+    p?.element ??
+    p?.playerId ??
+    p?.data?.id ??
+    null;
+
+  // Try to get a decent display name
+  const name =
+    p?.name ??
+    p?.web_name ??
+    p?.second_name ??
+    p?.data?.web_name ??
+    (id ? `Player #${id}` : '');
+
+  // Map your numeric positions to short labels (same logic you use in the header)
+  const posMap = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD', Bench: 'Bench' };
+  const position =
+    posMap[p?.position] ??
+    p?.position_short ??
+    p?.posShort ??
+    p?.position ??
+    '';
+
+  // We don’t have a team short in this file—leave blank; the modal can still
+  // resolve opponent shorts internally if you later pass getTeamShort
+  const teamShort =
+    p?.team_short ??
+    p?.team_short_name ??
+    p?.team?.short_name ??
+    '';
+
+  setInfoPlayer({ id, name, teamShort, position });
+  setInfoOpen(true);
+};
+
+
+  
   const SubsToggle = ({ value, onChange }) => {
   // value === true  -> Post (include subs)
   // value === false -> Pre  (no subs)
@@ -1748,6 +1801,15 @@ const handleShare = useCallback(async () => {
               </View>
             </View>
           </Modal>
+          <PlayerInfoModal
+  visible={infoOpen}
+  onClose={() => setInfoOpen(false)}
+  playerId={infoPlayer.id}
+  playerName={infoPlayer.name}
+  teamShort={infoPlayer.teamShort}
+  position={infoPlayer.position}
+/>
+
 <Modal
   animationType="fade"
   transparent
@@ -1859,30 +1921,46 @@ const handleShare = useCallback(async () => {
             </View>
 
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              {!!selectedPlayer?.pid && (
-                <TouchableOpacity
-                  onPress={() => {
-                    setModalVisible(false);
-                    navigation.navigate('Planner', { openCompareWithPid: selectedPlayer.pid });
-                  }}
-                  style={styles.ghostBtn}
-                  accessibilityRole="button"
-                  accessibilityLabel="Compare this player in Planner"
-                >
-                  <MaterialCommunityIcons name="scale-balance" size={18} color={C.ink} />
-                  <Text style={styles.ghostBtnText}>Compare</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                onPress={() => setModalVisible(false)}
-                style={styles.iconBtn}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityRole="button"
-                accessibilityLabel="Close player stats"
-              >
-                <MaterialCommunityIcons name="close" size={20} color={C.ink} />
-              </TouchableOpacity>
-            </View>
+  {!!selectedPlayer?.pid && (
+    <TouchableOpacity
+      onPress={() => {
+        setModalVisible(false);
+        navigation.navigate('Planner', { openCompareWithPid: selectedPlayer.pid });
+      }}
+      style={styles.ghostBtn}
+      accessibilityRole="button"
+      accessibilityLabel="Compare this player in Planner"
+    >
+      <MaterialCommunityIcons name="scale-balance" size={18} color={C.ink} />
+      <Text style={styles.ghostBtnText}>Compare</Text>
+    </TouchableOpacity>
+  )}
+  <TouchableOpacity
+    onPress={() => {
+      setModalVisible(false);
+      openPlayerInfo(selectedPlayer);
+    }}
+    style={[styles.ghostBtn, { marginLeft: 4 }]}
+    hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
+    accessibilityRole="button"
+    accessibilityLabel="Open player info"
+  >
+    <MaterialCommunityIcons name="information-outline" size={18} color={C.ink} />
+    <Text style={styles.ghostBtnText}>Info</Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    onPress={() => setModalVisible(false)}
+    style={styles.iconBtn}
+    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    accessibilityRole="button"
+    accessibilityLabel="Close player stats"
+  >
+    <MaterialCommunityIcons name="close" size={20} color={C.ink} />
+  </TouchableOpacity>
+</View>
+
+
           </View>
 
           {/* Content scroll */}

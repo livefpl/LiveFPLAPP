@@ -281,19 +281,26 @@ export default function PaywallScreen(props) {
             </TouchableOpacity>
           </View>
 
-          {/* Privacy note under the subscription buttons */}
           <View style={[styles.legalWrap, { borderTopColor: C.border2 }]}>
-            <Text style={[styles.legalText, { color: C.muted }]}>
-              By subscribing, you agree to our{' '}
-              <Text
-                style={[styles.legalLink, { color: C.link }]}
-                onPress={() => Linking.openURL('https://www.livefpl.net/privacy.pdf')}
-              >
-                Privacy Policy
-              </Text>
-              .
-            </Text>
-          </View>
+  <Text style={[styles.legalText, { color: C.muted }]}>
+    By subscribing, you agree to our{' '}
+    <Text
+      style={[styles.legalLink, { color: C.link }]}
+      onPress={() => Linking.openURL('https://www.livefpl.net/privacy.pdf')}
+    >
+      Privacy Policy
+    </Text>{' '}
+    and{' '}
+    <Text
+      style={[styles.legalLink, { color: C.link }]}
+      onPress={() => Linking.openURL('https://www.apple.com/legal/internet-services/itunes/dev/stdeula/')}
+    >
+      Terms of Use
+    </Text>
+    .
+  </Text>
+</View>
+
 
           <TouchableOpacity
   style={[styles.linkBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
