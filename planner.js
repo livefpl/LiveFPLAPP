@@ -2519,7 +2519,7 @@ chipMiniTxt: {
   flexDirection: 'row',
   gap: 2,
   marginTop: 4,
-  maxWidth: '80%',
+  maxWidth: '85%',
 },
 expandWrap: {
   marginTop: 6,
@@ -2552,13 +2552,13 @@ expandText: {
 marketMiniCell: {
   flex: 1,
   textAlign: 'center',
-  fontSize: 10,
+  fontSize: 8,
   fontWeight: '800',
   paddingHorizontal: 4,
   paddingVertical: 2,
   borderRadius: 6,
   overflow: 'hidden',
-  marginRight:3,
+  marginRight:1,
 },
 
 

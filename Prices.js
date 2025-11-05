@@ -1207,7 +1207,7 @@ const sortOptions = useMemo(() => ([
 
  const currentSortLabel = useMemo(() => {
    if (sortMode === 'time') return 'Sort: Time';
-   return `Sort: Target ${sortDir === 'desc' ? '↓' : '↑'}`;
+   return `Sort: ${sortDir === 'desc' ? 'Rises' : 'Falls'}`;
  }, [sortMode, sortDir]);
 
 // When switching to Summary: clear filters (and search) so the summary actually renders
