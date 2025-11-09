@@ -1,5 +1,6 @@
-// PlayerInfoModal.js — centered modal, compact UI, FDR chips, xGC, DC + bonus tag, minutes chip, GW-first Recent, crest in Upcoming, xG toggle
-import React, { useMemo, useState } from 'react';
+// PlayerInfoModal.js — tabbed (Results/Fixtures), full scrolling fixtures, clearer active tab in dark mode,
+// fixtures: opponent column shows crest + FDR pill only (no separate FDR/More columns)
+import React, { useMemo, useState, useCallback } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -9,6 +10,9 @@ import {
   TouchableOpacity,
   View,
   Image,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import useCachedJson from './useCachedJson';
@@ -22,10 +26,8 @@ const SCALE = 0.88;
 const S = (x) => Math.round(x * SCALE);
 
 /* ---------- Layout sizing (compact) ---------- */
-const H_FIXTURE_ROW = S(44);
-const H_RECENT_ROW  = S(92);
-const V_GAP         = S(6);
-const CAP_N         = 5;
+const ROW_H = S(56);
+const V_GAP = S(8);
 
 /* ---------- Chip sizing (fixed but compact) ---------- */
 const CHIP_W = S(64);
@@ -34,23 +36,22 @@ const CHIP_RADIUS = S(11);
 
 /* ---------- Team short mapping ---------- */
 const TEAM_SHORT_MAP = {
-  'Arsenal': 'ARS','Aston Villa': 'AVL','Bournemouth': 'BOU','AFC Bournemouth': 'BOU',
-  'Brentford': 'BRE','Brighton': 'BHA','Brighton and Hove Albion': 'BHA','Chelsea': 'CHE',
+  'Arsenal': 'ARS','Aston Villa': 'AVL','Bournemouth': 'BOU','AFC Bournemouth':'BOU',
+  'Brentford': 'BRE','Brighton': 'BHA','Brighton and Hove Albion':'BHA','Chelsea': 'CHE',
   'Crystal Palace': 'CRY','Everton': 'EVE','Fulham': 'FUL','Ipswich Town': 'IPS',
   'Leeds United': 'LEE','Leicester City': 'LEI','Liverpool': 'LIV','Luton Town': 'LUT',
   'Manchester City': 'MCI','Man City': 'MCI','Manchester United': 'MUN','Man Utd': 'MUN',
   'Newcastle United': 'NEW',"Nott'm Forest": 'NFO','Sheffield United': 'SHU',
-  'Southampton': 'SOU','Tottenham Hotspur': 'TOT','Spurs': 'TOT','West Ham United': 'WHU',
-  'West Ham': 'WHU','Wolverhampton Wanderers': 'WOL','Wolves': 'WOL','Burnley': 'BUR',
-  'West Bromwich Albion': 'WBA','Sunderland': 'SUN',
+  'Southampton': 'SOU','Tottenham Hotspur': 'TOT','Spurs':'TOT','West Ham United': 'WHU',
+  'West Ham': 'WHU','Wolverhampton Wanderers': 'WOL','Wolves': 'WOL','Burnley':'BUR',
+  'West Bromwich Albion':'WBA','Sunderland':'SUN',
 };
-
 function toShort(teamName) {
   if (!teamName) return '';
   if (TEAM_SHORT_MAP[teamName]) return TEAM_SHORT_MAP[teamName];
-  const simple = teamName.replace(/[^A-Z]/gi, ' ').trim().split(/\s+/).map(w=>w[0]).join('').toUpperCase();
+  const simple = teamName.replace(/[^A-Z]/gi,' ').trim().split(/\s+/).map(w=>w[0]).join('').toUpperCase();
   if (simple.length >= 2 && simple.length <= 4) return simple;
-  return teamName.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+  return teamName.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase();
 }
 
 /* ---------- color helpers ---------- */
@@ -62,20 +63,20 @@ function parseHex(hex) {
   const h = m[1];
   return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
 }
-function luminanceRgb([r, g, b]) {
-  const [R, G, B] = [r, g, b].map((v) => v / 255);
+function luminanceRgb([r,g,b]) {
+  const [R,G,B] = [r,g,b].map(v=>v/255);
   return 0.2126*R + 0.7152*G + 0.0722*B;
 }
-function rgbToCss([r, g, b]) {
-  const clamp = (x) => Math.max(0, Math.min(255, Math.round(x)));
+function rgbToCss([r,g,b]) {
+  const clamp = x => Math.max(0, Math.min(255, Math.round(x)));
   return `rgb(${clamp(r)}, ${clamp(g)}, ${clamp(b)})`;
 }
-function idealTextOnRgb([r, g, b]) {
+function idealTextOnRgb([r,g,b]) {
   const lum = luminanceRgb([r,g,b]);
   return lum < 0.55 ? '#fff' : '#000';
 }
 function darkenRgb([r,g,b], k=0.85) {
-  return [r*k, g*k, b*k].map((x)=>Math.max(0, Math.min(255, Math.round(x))));
+  return [r*k,g*k,b*k].map(x => Math.max(0, Math.min(255, Math.round(x))));
 }
 
 /* ---------- Tiny letter circle ---------- */
@@ -92,12 +93,11 @@ function LetterCircle({ label='A', size=S(12), bg='transparent', fg='white', str
 /* ---------- Event & expected-stat pills ---------- */
 function EventsPills({ h, C, position }) {
   if (!h) return null;
-
   const mins = Number(h.minutes || 0);
-  if (mins === 0) return <Text style={{ color: C.muted, fontStyle: 'italic', fontSize: S(12) }}>Didn’t play</Text>;
+  if (mins === 0) return <Text style={{ color: C.muted, fontStyle:'italic', fontSize:S(12) }}>Didn’t play</Text>;
 
   const darkBlue = (() => {
-    const baseHex = String(C.bg || C.card || '#000').replace('#', '');
+    const baseHex = String(C.bg || C.card || '#000').replace('#','');
     if (baseHex.length !== 6) return 'white';
     const bgRgb = [parseInt(baseHex.slice(0,2),16), parseInt(baseHex.slice(2,4),16), parseInt(baseHex.slice(4,6),16)];
     return luminanceRgb(bgRgb) < 0.5 ? 'white' : 'darkblue';
@@ -110,9 +110,8 @@ function EventsPills({ h, C, position }) {
   const yc  = Number(h.yellow_cards || 0);
   const rc  = Number(h.red_cards || 0);
   const bns = Number(h.bonus || 0);
-  const dc  = Number(h.defensive_contribution ?? h.def_contrib ?? 0); // DC
+  const dc  = Number(h.defensive_contribution ?? h.def_contrib ?? 0);
 
-  // Determine DEF and threshold for +2
   const posStr = String(position ?? '').toUpperCase();
   const posNum = Number(position);
   const isDef  = (posNum === 2) || posStr.startsWith('D') || posStr === 'DEF' || posStr === 'DEFENDER';
@@ -134,7 +133,7 @@ function EventsPills({ h, C, position }) {
   pills.push(
     <Pill key="mins">
       <MaterialCommunityIcons name="clock-time-four-outline" size={S(14)} color={darkBlue} />
-      <Text style={{ color: C.ink, fontWeight: '700', fontSize: S(12) }}>{mins}′</Text>
+      <Text style={{ color:C.ink, fontWeight:'700', fontSize:S(12) }}>{mins}′</Text>
     </Pill>
   );
   if (g > 0)  pills.push(<Pill key="g"><MaterialCommunityIcons name="soccer" size={S(14)} color={darkBlue} /><Text style={{ color:C.ink, fontWeight:'700', fontSize:S(12) }}>{g}</Text></Pill>);
@@ -171,7 +170,6 @@ function ExpectedPills({ h, C }) {
     </View>
   );
 
-  // No outer margin here; we'll add spacing only when we actually render these pills.
   return (
     <Row>
       {xg  ? <Pill key="xg"  label="xG"  value={xg} />  : null}
@@ -183,6 +181,10 @@ function ExpectedPills({ h, C }) {
 }
 
 /* ---------- Main ---------- */
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 export default function PlayerInfoModal({
   visible,
   onClose,
@@ -193,6 +195,8 @@ export default function PlayerInfoModal({
   getTeamShort,
 }) {
   const C = useColors();
+  const [activeTab, setActiveTab] = useState('results'); // 'results' | 'fixtures'
+  const [expanded, setExpanded] = useState(new Set());
   const [showXG, setShowXG] = useState(false);
 
   const url = playerId ? `https://fantasy.premierleague.com/api/element-summary/${playerId}/` : null;
@@ -258,12 +262,6 @@ export default function PlayerInfoModal({
       ? new Date(iso).toLocaleString(undefined, { weekday:'short', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })
       : 'TBD';
 
-  const fixVisibleCount    = Math.min(CAP_N, fixturesAll.length || 0) || 1;
-  const recentVisibleCount = Math.min(CAP_N, historyAll.length || 0) || 1;
-  const fixturesMaxH       = fixVisibleCount * H_FIXTURE_ROW + (fixVisibleCount - 1) * V_GAP + 4;
-  const recentMaxH         = recentVisibleCount * H_RECENT_ROW + (recentVisibleCount - 1) * V_GAP + 4;
-
-  // theme luminance for FDR contrast tweak
   const themeRgb = parseHex(C.card || C.bg || '#111111') || [17,17,17];
   const isLightTheme = luminanceRgb(themeRgb) > 0.6;
 
@@ -293,230 +291,246 @@ export default function PlayerInfoModal({
     );
   }
 
-  function ScoreBadge({ text }) {
-    return (
-      <View style={{ marginLeft:S(6), paddingHorizontal:S(8), paddingVertical:S(3), borderRadius:999, borderWidth:StyleSheet.hairlineWidth, borderColor:C.border, backgroundColor:C.card }}>
-        <Text style={{ color:C.text, fontWeight:'800', fontSize:S(12) }}>{text}</Text>
-      </View>
-    );
-  }
-
   function PointsBadge({ pts }) {
     return (
-      <View style={{ paddingHorizontal:S(8), paddingVertical:S(3), borderRadius:999, borderWidth:StyleSheet.hairlineWidth, borderColor:C.border, backgroundColor:C.card }}>
-        <Text style={{ color:C.text, fontWeight:'800', fontSize:S(12) }}>{`Pts ${pts}`}</Text>
-      </View>
+      <Text style={{ color:C.text, fontWeight:'800', fontSize:S(13) }}>
+        {pts} pts
+      </Text>
     );
   }
 
   function GWBadge({ round }) {
     return (
-      <View style={{ paddingHorizontal:S(8), paddingVertical:S(3), borderRadius:999, borderWidth:StyleSheet.hairlineWidth, borderColor:C.border, backgroundColor:C.card }}>
-        <Text style={{ color:C.text, fontWeight:'800', fontSize:S(12) }}>{`GW ${round}`}</Text>
+      <Text style={{ color:C.text, fontWeight:'800', fontSize:S(12) }}>
+        {round}
+      </Text>
+    );
+  }
+
+  const scoreBadge = (us, them) => {
+    if (!Number.isFinite(us) || !Number.isFinite(them)) {
+      return { text: '—', bg: C.card2, fg: C.text };
+    }
+    let bg = '#9CA3AF'; // draw
+    if (us > them) bg = '#22C55E';
+    else if (us < them) bg = '#EF4444';
+    const fg = '#fff';
+    return { text: `${us} - ${them}`, bg, fg };
+  };
+
+  function ScorePill({ text, bg, fg }) {
+    return (
+      <View style={{ paddingHorizontal:S(10), paddingVertical:S(4), borderRadius:999, backgroundColor:bg, alignItems:'center', justifyContent:'center' }}>
+        <Text style={{ color:fg, fontWeight:'800', fontSize:S(12) }}>{text}</Text>
       </View>
     );
   }
 
-  // Small header toggle for xG pills
-  function XGToggle() {
+  const toggleExpand = useCallback((key) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }, []);
+
+  function TabBar() {
+    const onSel = (t) => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setActiveTab(t);
+    };
     return (
-      <TouchableOpacity
-        onPress={() => setShowXG(v => !v)}
-        style={{
-          flexDirection:'row',
-          alignItems:'center',
-          gap:S(6),
-          paddingHorizontal:S(10),
-          paddingVertical:S(6),
-          borderRadius:999,
-          borderWidth:StyleSheet.hairlineWidth,
-          borderColor:C.border,
-          backgroundColor: showXG ? C.card2 : C.card,
-        }}
-        accessibilityRole="button"
-        accessibilityLabel="Toggle expected stats"
-        hitSlop={{ top:6, bottom:6, left:6, right:6 }}
-      >
-        <MaterialCommunityIcons
-          name="chart-line"
-          size={S(14)}
-          color={showXG ? C.text : C.ink}
-        />
-        <Text style={{ color: showXG ? C.text : C.ink, fontWeight:'700', fontSize:S(12) }}>
-          {showXG ? ' Hide xG' : ' Show xG'}
-        </Text>
-      </TouchableOpacity>
+      <View style={[styles.tabsWrap, { backgroundColor: C.card2, borderColor: C.border }]}>
+        <TouchableOpacity
+          onPress={()=>onSel('results')}
+          style={[
+            styles.tabBtn,
+            activeTab==='results' && { backgroundColor: C.card, borderColor: C.primary, borderWidth: 1 }
+          ]}
+          accessibilityRole="button"
+        >
+          <Text style={[
+            styles.tabText,
+            { color: activeTab==='results' ? C.text : C.ink, fontWeight: activeTab==='results' ? '800' : '700' }
+          ]}>Results</Text>
+          {activeTab==='results' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          onPress={()=>onSel('fixtures')}
+          style={[
+            styles.tabBtn,
+            activeTab==='fixtures' && { backgroundColor: C.card, borderColor: C.primary, borderWidth: 1 }
+          ]}
+          accessibilityRole="button"
+        >
+          <Text style={[
+            styles.tabText,
+            { color: activeTab==='fixtures' ? C.text : C.ink, fontWeight: activeTab==='fixtures' ? '800' : '700' }
+          ]}>Fixtures</Text>
+          {activeTab==='fixtures' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
+        </TouchableOpacity>
+
+        <View style={{ flex:1 }} />
+        <TouchableOpacity
+          onPress={()=>setShowXG(v=>!v)}
+          style={[styles.xgToggle, { borderColor: C.border, backgroundColor: showXG ? C.card2 : 'transparent' }]}
+          accessibilityRole="button"
+        >
+          <MaterialCommunityIcons name="chart-line" size={S(14)} color={showXG ? C.text : C.ink} />
+          <Text style={{ marginLeft:S(6), color: showXG ? C.text : C.ink, fontWeight:'700', fontSize:S(12) }}>{showXG ? 'xG on' : 'xG off'}</Text>
+        </TouchableOpacity>
+      </View>
     );
   }
 
+  // list max height to keep modal tidy; still shows ALL items via scrolling
+  const listMaxH = Math.min(ROW_H * 9 + V_GAP * 8, S(520));
+
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      {/* exactly ONE child under Modal to avoid adjacent JSX error */}
       <View style={styles.modalRoot}>
-        {/* Backdrop */}
         <View style={[styles.backdrop, { backgroundColor: C.backdrop }]} />
-        {/* Centered container (like Rank) */}
         <View style={styles.centerWrap} pointerEvents="box-none">
           <View style={[styles.sheet, { backgroundColor: C.card, borderColor: C.border }]}>
-            {/* ------- Header ------- */}
             <View style={[styles.header, { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: C.border }]}>
               <View style={styles.headerLeft}>
-                <Image source={{ uri: crestUri }} style={{ width:S(24), height:S(24), borderRadius:S(12), marginRight:S(6) }} />
-                <View style={{ flexShrink: 1 }}>
-                  <Text style={[styles.title, { color: C.text }]} numberOfLines={1}>
-                    {playerName || `Player #${playerId || '?'}`}
-                  </Text>
-                  <Text style={[styles.subtitle, { color: C.ink }]} numberOfLines={1}>
+                <Image source={{ uri: clubCrestUri(Number(priceRow?.team_code) || 1) }} style={{ width:S(26), height:S(26), borderRadius:S(13), marginRight:S(8) }} />
+                <View style={{ flexShrink:1 }}>
+                  <Text style={[styles.title, { color:C.text }]} numberOfLines={1}>{playerName || `Player #${playerId || '?'}`}</Text>
+                  <Text style={[styles.subtitle, { color:C.ink }]} numberOfLines={1}>
                     {[teamShortResolved || null, position || null].filter(Boolean).join(' · ')}
                   </Text>
                 </View>
               </View>
-              <TouchableOpacity onPress={onClose} hitSlop={{ top:10, left:10, right:10, bottom:10 }} accessibilityLabel="Close player info">
+              <TouchableOpacity onPress={onClose} hitSlop={{ top:10, left:10, right:10, bottom:10 }} accessibilityLabel="Close">
                 <MaterialCommunityIcons name="close" size={S(22)} color={C.text} />
               </TouchableOpacity>
             </View>
 
-            {/* ------- Body ------- */}
             {status === 'loading' ? (
               <View style={styles.center}>
                 <ActivityIndicator color={C.text} />
-                <Text style={{ color: C.ink, marginTop: S(6), fontSize: S(12) }}>Loading player info…</Text>
+                <Text style={{ color:C.ink, marginTop:S(6), fontSize:S(12) }}>Loading…</Text>
               </View>
             ) : status === 'error' ? (
               <View style={styles.center}>
                 <MaterialCommunityIcons name="cloud-alert" size={S(30)} color={C.ink} />
-                <Text style={{ color: C.ink, marginTop: S(6), fontSize: S(12) }}>Couldn’t load latest. Showing cache if available.</Text>
-                {!!error && <Text style={{ color: C.ink, marginTop: S(4), fontSize: S(11) }}>{String(error)}</Text>}
+                <Text style={{ color:C.ink, marginTop:S(6), fontSize:S(12) }}>Couldn’t load latest. Showing cache if available.</Text>
+                {!!error && <Text style={{ color:C.ink, marginTop:S(4), fontSize:S(11) }}>{String(error)}</Text>}
               </View>
             ) : (
-              <ScrollView style={styles.scroll} contentContainerStyle={{ paddingBottom: S(18) }} showsVerticalScrollIndicator={false}>
-                <>
-                  {/* ---------------- Upcoming fixtures ---------------- */}
-                  <Section title="Upcoming fixtures" color={C.text}>
-                    {fixturesAll.length === 0 ? (
-                      <Text style={{ color: C.ink, fontSize: S(12) }}>No upcoming fixtures found.</Text>
-                    ) : (
-                      <View>
-                        <ScrollView
-                          style={{ maxHeight: fixturesMaxH }}
-                          contentContainerStyle={{ paddingBottom: S(2) }}
-                          nestedScrollEnabled
-                          showsVerticalScrollIndicator
-                          keyboardShouldPersistTaps="handled"
-                        >
-                          {fixturesAll.map((f, idx) => {
-                            const home = !!f.is_home;
-                            const oppId = home ? f.team_a : f.team_h;
-                            const side = home ? 'H' : 'A';
-                            const oppShort = idToShort(oppId);
-                            const fdr = fdrFor(oppShort, side);
-                            const chipBg = fdr?.bg || C.card;
-                            const chipFg = fdr?.fg || C.text;
-                            const oppCrest = clubCrestUri(oppId || 1);
+              <ScrollView style={styles.scroll} contentContainerStyle={{ paddingBottom:S(16) }} showsVerticalScrollIndicator={false}>
+                <TabBar />
 
-                            return (
-                              <View
-                                key={`fix-${f.id}-${idx}`}
-                                style={[styles.fixtRow, { borderColor: C.border, backgroundColor: C.card2, marginBottom: V_GAP }]}
-                              >
-                                <Text style={[styles.fixtGW, { color: C.text }]}>{`GW ${f.event}`}</Text>
-                                <Image source={{ uri: oppCrest }} style={{ width:S(22), height:S(22), borderRadius:S(11), marginRight:S(6) }} />
+                {activeTab === 'results' ? (
+                  <View>
+                    <TableHeader C={C} cols={['GW','Opponent','Result','Points','More']} />
+                    <ScrollView style={{ maxHeight:listMaxH }} nestedScrollEnabled showsVerticalScrollIndicator>
+                      {historyAll.map((h, idx) => {
+                        const oppId = h.opponent_team;
+                        const home = !!h.was_home;
+                        const side = home ? 'H' : 'A';
+                        const oppShort = idToShort(oppId);
+                        const crest = clubCrestUri(oppId || 1);
+
+                        const scoreUs   = home ? h.team_h_score : h.team_a_score;
+                        const scoreThem = home ? h.team_a_score : h.team_h_score;
+                        const { text, bg, fg } = scoreBadge(scoreUs, scoreThem);
+
+                        const fdr = fdrFor(oppShort, side);
+                        const chipBg = fdr?.bg || C.card2;
+                        const chipFg = fdr?.fg || C.text;
+
+                        const key = `hist-${h.element}-${h.fixture}-${idx}`;
+                        const isOpen = expanded.has(key);
+
+                        return (
+                          <View key={key} style={[styles.rowWrap, { borderColor:C.border }]}>
+                            <View style={styles.row}>
+                              <View style={[styles.colGW]}><GWBadge round={h.round} /></View>
+
+                              <View style={[styles.colOpponent]}>
+                                <Image source={{ uri: crest }} style={{ width:S(22), height:S(22), borderRadius:S(11), marginRight:S(8) }} />
                                 <FDRChip label={`${oppShort}[${side}]`} bg={chipBg} fg={chipFg} borderColor={C.border} />
-                                <Text style={[styles.fixtWhen, { color: C.ink, marginLeft: 'auto' }]}>{prettyTime(f.kickoff_time)}</Text>
                               </View>
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
-                    )}
-                  </Section>
 
-                  {/* ---------------- Recent matches ---------------- */}
-                  <Section title="Recent matches" color={C.text} rightSlot={<XGToggle />}>
-                    {historyAll.length === 0 ? (
-                      <Text style={{ color: C.ink, fontSize: S(12) }}>No recent history.</Text>
-                    ) : (
-                      <View>
-                        <ScrollView
-                          style={{ maxHeight: recentMaxH }}
-                          contentContainerStyle={{ paddingBottom: S(2) }}
-                          nestedScrollEnabled
-                          showsVerticalScrollIndicator
-                          keyboardShouldPersistTaps="handled"
-                        >
-                          {historyAll.map((h, idx) => {
-                            const oppId = h.opponent_team;
-                            const home = !!h.was_home;
-                            const side = home ? 'H' : 'A';
-                            const oppShort = idToShort(oppId);
-
-                            const fdr = fdrFor(oppShort, side);
-                            const chipBg = fdr?.bg || C.card;
-                            const chipFg = fdr?.fg || C.text;
-
-                            const crest = clubCrestUri(oppId || 1);
-                            const scoreUs = home ? h.team_h_score : h.team_a_score;
-                            const scoreThem = home ? h.team_a_score : h.team_h_score;
-                            const score = (Number.isFinite(scoreUs) && Number.isFinite(scoreThem)) ? `${scoreUs}–${scoreThem}` : '—';
-
-                            const mins = Number(h.minutes || 0);
-
-                            return (
-                              <View
-   key={`hist-${h.element}-${h.fixture}-${idx}`}
-   style={[
-     styles.recentCard,
-     { 
-       borderColor: C.border,
-       backgroundColor: C.card2,
-       marginBottom: V_GAP,
-       // Only reserve extra height when xG is shown
-       minHeight: (mins > 0 && showXG) ? H_RECENT_ROW : undefined,
-     }
-   ]}
- >
-                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: S(8) }}>
-                                  <GWBadge round={h.round} />
-                                  <Image source={{ uri: crest }} style={{ width: S(24), height: S(24), borderRadius: S(12) }} />
-                                  <FDRChip label={`${oppShort}[${side}]`} bg={chipBg} fg={chipFg} borderColor={C.border} />
-                                  <ScoreBadge text={score} />
-                                  <View style={{ flex: 1 }} />
-                                  <PointsBadge pts={h.total_points ?? 0} />
-                                </View>
-
-                                {/* No top margin unless xG is actually visible */}
-                                <View>
-                                  <EventsPills h={h} C={C} position={position} />
-                                  {mins > 0 && showXG ? (
-                                    <View style={{ marginTop: S(6) }}>
-                                      <ExpectedPills h={h} C={C} />
-                                    </View>
-                                  ) : null}
-                                </View>
+                              <View style={[styles.colResult]}>
+                                <ScorePill text={text} bg={bg} fg={fg} />
                               </View>
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
-                    )}
-                  </Section>
 
-                  {/* ---------------- Past Seasons ---------------- */}
-                  <Section title="Past seasons" color={C.text}>
-                    {past.length === 0 ? (
-                      <Text style={{ color: C.ink, fontSize: S(12) }}>No past seasons on record.</Text>
-                    ) : (
-                      <View>
-                        {past.slice(-3).reverse().map((p) => (
-                          <View key={p.season_name} style={[styles.pastRow, { borderColor: C.border }]}>
-                            <Text style={[styles.pastSeason, { color: C.text }]}>{p.season_name}</Text>
-                            <Text style={[styles.pastStat, { color: C.ink }]}>{`Pts ${p.total_points} · G ${p.goals_scored} · A ${p.assists}`}</Text>
+                              <View style={[styles.colPoints]}>
+                                <PointsBadge pts={h.total_points ?? 0} />
+                              </View>
+
+                              <TouchableOpacity onPress={()=>toggleExpand(key)} style={styles.colMore} accessibilityRole="button">
+                                <MaterialCommunityIcons name={isOpen ? 'chevron-up' : 'plus'} size={S(20)} color={C.text} />
+                              </TouchableOpacity>
+                            </View>
+
+                            {isOpen ? (
+                              <View style={{ paddingHorizontal:S(10), paddingBottom:S(10), gap:S(6) }}>
+                                <EventsPills h={h} C={C} position={position} />
+                                {showXG ? <ExpectedPills h={h} C={C} /> : null}
+                              </View>
+                            ) : null}
                           </View>
-                        ))}
-                      </View>
-                    )}
-                  </Section>
-                </>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                ) : (
+                  <View>
+                    <TableHeader C={C} cols={['GW','Opponent','Kickoff']} />
+                    <ScrollView style={{ maxHeight:listMaxH }} nestedScrollEnabled showsVerticalScrollIndicator>
+                      {fixturesAll.map((f, idx) => {
+                        const home = !!f.is_home;
+                        const oppId = home ? f.team_a : f.team_h;
+                        const side = home ? 'H' : 'A';
+                        const oppShort = idToShort(oppId);
+                        const crest = clubCrestUri(oppId || 1);
+
+                        const fdr = fdrFor(oppShort, side);
+                        const chipBg = fdr?.bg || C.card2;
+                        const chipFg = fdr?.fg || C.text;
+
+                        return (
+                          <View key={`fix-${f.id}-${idx}`} style={[styles.rowWrap, { borderColor:C.border }]}>
+                            <View style={styles.row}>
+                              <View style={[styles.colGW]}><GWBadge round={f.event} /></View>
+
+                              <View style={[styles.colOpponent]}>
+                                <Image source={{ uri: crest }} style={{ width:S(22), height:S(22), borderRadius:S(11), marginRight:S(8) }} />
+                                <FDRChip label={`${oppShort}[${side}]`} bg={chipBg} fg={chipFg} borderColor={C.border} />
+                              </View>
+
+                              <View style={[styles.colKickoff]}>
+                                <Text style={{ color:C.ink, fontSize:S(12) }}>{prettyTime(f.kickoff_time)}</Text>
+                              </View>
+                            </View>
+                          </View>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+
+                <View style={{ marginTop:S(14) }}>
+                  <Text style={[styles.sectionTitle, { color:C.text, marginBottom:S(6) }]}>Past seasons</Text>
+                  {past.length === 0 ? (
+                    <Text style={{ color:C.ink, fontSize:S(12) }}>No past seasons on record.</Text>
+                  ) : (
+                    <View>
+                      {past.slice(-3).reverse().map((p) => (
+                        <View key={p.season_name} style={[styles.pastRow, { borderColor:C.border }]}>
+                          <Text style={[styles.pastSeason, { color:C.text }]}>{p.season_name}</Text>
+                          <Text style={[styles.pastStat, { color:C.ink }]}>{`Pts ${p.total_points} · G ${p.goals_scored} · A ${p.assists}`}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
               </ScrollView>
             )}
           </View>
@@ -526,71 +540,85 @@ export default function PlayerInfoModal({
   );
 }
 
-function Section({ title, children, color, rightSlot }) {
-  // Always a single wrapper around children to avoid adjacent JSX
+function TableHeader({ C, cols }) {
+  const [c0, c1, c2, c3, c4] = cols;
   return (
-    <View style={{ marginBottom: S(14) }}>
-      <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom:S(6) }}>
-        <Text style={[styles.sectionTitle, { color }]}>{title}</Text>
-        {rightSlot ? <View>{rightSlot}</View> : <View />}
+    <View style={{ marginTop:S(8), marginBottom:S(6), paddingHorizontal:S(8) }}>
+      <View style={{ flexDirection:'row', alignItems:'center', opacity:0.9 }}>
+        <Text style={{ flexBasis:S(36), width:S(36), color:C.ink, fontWeight:'800', fontSize:S(12) }}>{c0}</Text>
+        <Text style={{ flex:1, color:C.ink, fontWeight:'800', fontSize:S(12) }}>{c1}</Text>
+        <Text style={{ flexBasis:S(110), width:S(110), color:C.ink, fontWeight:'800', fontSize:S(12), textAlign:'center' }}>{c2 ?? ''}</Text>
+        {c3 ? <Text style={{ flexBasis:S(80), width:S(80), color:C.ink, fontWeight:'800', fontSize:S(12), textAlign:'center' }}>{c3}</Text> : null}
+        {c4 ? <Text style={{ flexBasis:S(36), width:S(36), color:C.ink, fontWeight:'800', fontSize:S(12), textAlign:'right' }}>{c4}</Text> : null}
       </View>
-      <View>{children}</View>
     </View>
   );
 }
 
+/* ---------- Styles ---------- */
 const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    opacity: 0.6,
-  },
-  modalRoot: {
-    flex: 1,
-  },
-  /* Centered overlay like Rank modal */
+  backdrop: { ...StyleSheet.absoluteFillObject, opacity:0.6 },
+  modalRoot: { flex:1 },
+
   centerWrap: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: S(12),
+    position:'absolute', top:0, left:0, right:0, bottom:0,
+    alignItems:'center', justifyContent:'center', paddingHorizontal:S(12),
   },
   sheet: {
-    maxHeight: '70%',
-    width: '96%',
-    maxWidth: 640,
-    borderRadius: S(16),
-    overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
+    maxHeight:'68%', width:'96%', maxWidth:680,
+    borderRadius:S(16), overflow:'hidden', borderWidth:StyleSheet.hairlineWidth,
   },
+
   header: {
-    paddingHorizontal: S(14), paddingTop: S(12), paddingBottom: S(8),
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal:S(14), paddingTop:S(12), paddingBottom:S(8),
+    flexDirection:'row', alignItems:'center', justifyContent:'space-between',
   },
-  headerLeft: { flexDirection: 'row', alignItems: 'center' },
-  title: { fontSize: S(16), fontWeight: '700' },
-  subtitle: { fontSize: S(11) },
-  center: { alignItems: 'center', paddingVertical: S(22) },
-  scroll: { paddingHorizontal: S(14) },
-  sectionTitle: { fontSize: S(13), fontWeight: '700', opacity: 0.9 },
+  headerLeft: { flexDirection:'row', alignItems:'center' },
+  title: { fontSize:S(16), fontWeight:'700' },
+  subtitle: { fontSize:S(11) },
+  center: { alignItems:'center', paddingVertical:S(22) },
+  scroll: { paddingHorizontal:S(14) },
+  sectionTitle: { fontSize:S(13), fontWeight:'700', opacity:0.9 },
 
-  /* Fixture row */
-  fixtRow: {
-    flexDirection: 'row', alignItems: 'center', gap: S(6), padding: S(8),
-    borderRadius: S(8), borderWidth: StyleSheet.hairlineWidth,
-    minHeight: H_FIXTURE_ROW,
+  /* Tabs */
+  tabsWrap: {
+    flexDirection:'row', alignItems:'center',
+    borderWidth:StyleSheet.hairlineWidth,
+    borderRadius:S(12), padding:S(6), gap:S(6), marginTop:S(8), marginBottom:S(6),
   },
-  fixtGW: { fontWeight: '700', fontSize: S(12), marginRight: S(4) },
-  fixtWhen: { fontSize: S(11) },
+  tabBtn: { paddingVertical:S(8), paddingHorizontal:S(14), borderRadius:S(10), position:'relative' },
+  tabText:{ fontWeight:'800', fontSize:S(13) },
+  tabIndicator:{ position:'absolute', height:S(3), left:S(8), right:S(8), bottom:S(4), borderRadius:S(2) },
+  xgToggle:{ flexDirection:'row', alignItems:'center', paddingHorizontal:S(10), paddingVertical:S(6), borderRadius:999, borderWidth:StyleSheet.hairlineWidth },
 
-  /* Recent card */
-  recentCard: { padding: S(8), borderRadius: S(8), borderWidth: StyleSheet.hairlineWidth, minHeight: H_RECENT_ROW },
+  /* Table rows */
+  rowWrap: {
+    borderWidth:StyleSheet.hairlineWidth,
+    borderRadius:S(10),
+    marginHorizontal:S(8),
+    marginBottom:V_GAP,
+    overflow:'hidden',
+  },
+  row: {
+    minHeight:ROW_H,
+    paddingHorizontal:S(10),
+    flexDirection:'row',
+    alignItems:'center',
+    gap:S(8),
+  },
+
+  colGW: { flexBasis:S(36), width:S(36), alignItems:'flex-start' },
+  colOpponent: { flex:1, flexDirection:'row', alignItems:'center' },
+  colResult: { flexBasis:S(110), width:S(110), alignItems:'center' },
+  colKickoff:{ flexBasis:S(160), width:S(160), alignItems:'center' },
+  colPoints:{ flexBasis:S(80),  width:S(80),  alignItems:'center' },
+  colMore:  { flexBasis:S(36),  width:S(36),  alignItems:'flex-end', paddingVertical:S(6) },
 
   /* Past seasons */
   pastRow: {
-    flexDirection: 'row', justifyContent: 'space-between', paddingVertical: S(6),
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection:'row', justifyContent:'space-between', paddingVertical:S(6),
+    borderBottomWidth:StyleSheet.hairlineWidth,
   },
-  pastSeason: { fontWeight: '700', fontSize: S(12) },
-  pastStat: { fontSize: S(11) },
+  pastSeason: { fontWeight:'700', fontSize:S(12) },
+  pastStat: { fontSize:S(11) },
 });

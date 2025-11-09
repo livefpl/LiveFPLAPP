@@ -237,6 +237,7 @@ let vrem = Dimensions.get('window').height / 380;
 const imgwidth = Math.round(rem * 55);
 const imgheight = 12;
 
+
 // Unified shirt sizing/positions
 const SHIRT_SCALE = 0.7; // tune once for both platforms
 const SHIRT_ASPECT = 5.6 / 5; // width / height
@@ -274,6 +275,7 @@ function getEventCounts(pl) {
     saves: 0,
     bonus: 0,
     defensive_contribution: 0,
+    minutes: 0,
   };
   (pl.stats || []).forEach(([raw, c]) => {
     const key = String(raw).toLowerCase();
@@ -281,6 +283,8 @@ function getEventCounts(pl) {
   });
   return counts;
 }
+
+
 
 function find_emoji(s) {
   const d = { d: '🎲', t: '😴', s: '🕵', ds: '⭐', '': '', f: '🔥', sub: '🔃' };
@@ -755,21 +759,42 @@ modalView: {
           overflow: 'hidden',
         },
 
-        eventsSlot: { minHeight: 18, justifyContent: 'center', alignItems: 'center' },
-        eventsChip: {
+        eventsSlot: {
+  minHeight: 18,                 // one-line height
+   justifyContent: 'center',
+   alignItems: 'center',
+ },
+eventsIconsRow: {
+  flexDirection: 'row',
+   alignItems: 'center',
+   justifyContent: 'center',
+   // no wrap; ScrollView keeps it one line and scrolls if needed
+   paddingHorizontal: 2,
+   gap: 1,
+ }   ,    eventsChip: {
           alignSelf: 'center',
           paddingHorizontal: 0,
           paddingVertical: 2,
           borderRadius: 10,
           backgroundColor: 'rgba(255,255,255,0.04)',
         },
-        eventsIconsRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' },
         cardYellow: { width: 10, height: 14, borderRadius: 2, backgroundColor: '#ffd400', borderWidth: 0.5, borderColor: '#333' },
         cardRed: { width: 10, height: 14, borderRadius: 2, backgroundColor: '#e11d48', borderWidth: 0.5, borderColor: '#333' },
         assistPill: {  borderRadius: 6, paddingHorizontal: 2, paddingVertical: 0, borderWidth: 0.5 },
         assistText: { fontSize: 10, fontWeight: '700' },
 
         arrow: { width: 12 * rem, height: 12 * rem, marginBottom: 20 },
+        statusPill: {
+  paddingHorizontal: 3,
+  paddingVertical: 2,
+  borderRadius: 999,
+  borderWidth: 1,
+  marginBottom: 3,
+},
+statusLive: { backgroundColor: 'rgba(255, 213, 79, 0.12)', borderColor: C.yellow },
+statusPillText: { color: C.goal, fontSize: 9, fontWeight: '600' },
+fxLiveDot: { width: 6, height: 6, borderRadius: 999, marginTop: 4, backgroundColor: C.yellow },
+
 
         playerName: {
           fontSize: 10,
@@ -925,6 +950,17 @@ eoLegendBlock: {
             <Count />
           </View>
         );
+        case 'minutes':
+      return (
+        <View style={wrap}>
+          <MaterialCommunityIcons
+            name="clock-outline"
+            size={size}
+            color={forModal ?  iconColor:  K.goal }
+          />
+          <Count />
+        </View>
+      );
     case 'assists':
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginHorizontal: 2 }}>
@@ -1009,7 +1045,7 @@ eoLegendBlock: {
     );
   };
 
-  const EventsRow = ({ counts }) => {
+  const EventsRow = ({ counts, isLive = false }) => {
     const sum =
       counts.goals_scored +
       counts.assists +
@@ -1018,13 +1054,23 @@ eoLegendBlock: {
       counts.clean_sheets +
       counts.saves +
       counts.bonus +
-      counts.defensive_contribution;
+     counts.defensive_contribution +
+    (isLive ? counts.minutes : 0);
 
     if (!sum) return null;
 
     return (
       <View style={styles.eventsChip}>
         <View style={styles.eventsIconsRow}>
+        {isLive && (
+  <>
+    <View style={[styles.statusPill, styles.statusLive]}>
+      <Text style={styles.statusPillText}>{counts.minutes}'</Text>
+    </View>
+   
+  </>
+)}
+
           <EventIcon type="goals_scored" count={counts.goals_scored} />
           <EventIcon type="assists" count={counts.assists} />
           <EventIcon type="yellow_cards" count={counts.yellow_cards} />
@@ -1033,6 +1079,7 @@ eoLegendBlock: {
           <EventIcon type="saves" count={counts.saves} />
           <EventIcon type="bonus" count={counts.bonus} />
           <EventIcon type="defensive_contribution" count={counts.defensive_contribution} />
+
         </View>
       </View>
     );
@@ -2306,7 +2353,7 @@ const handleShare = useCallback(async () => {
 
 
                             {/* Events chip (icons) */}
-                            <View style={styles.eventsSlot}>{displaySettings.showEvents && <EventsRow counts={counts} />}</View>
+                            <View style={styles.eventsSlot}>{displaySettings.showEvents && <EventsRow counts={counts} isLive={player.Status === 'live'}/>}</View>
                           </View>
                         </View>
                       );
@@ -2417,7 +2464,7 @@ const handleShare = useCallback(async () => {
                                 </View>
                               )}
                               <View style={styles.eventsSlot}>
-                                {displaySettings.showEvents && <EventsRow counts={counts} />}
+                                {displaySettings.showEvents && <EventsRow counts={counts} isLive={player.Status === 'live'} />}
                               </View>
                             </View>
                           </View>

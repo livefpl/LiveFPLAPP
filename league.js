@@ -66,6 +66,27 @@ const countYetFromTeam = (teamArr = []) => {
   }
   return yet;
 };
+// Multiplier: 1 normal, 2 captain, 3 TC (fallback to role if multiplier missing)
+const capMultOf = (p) => {
+  const role = String(p?.role || '').toLowerCase();
+  const mul  = Number(p?.multiplier ?? p?.mul ?? (role === 'c' ? 2 : 1));
+  return Math.max(1, mul);
+};
+
+// Label: append (C) or (TC)
+const displayName = (p) => {
+  const mul = capMultOf(p);
+  const name = String(p?.name ?? '');
+  if (mul >= 3) return `${name} (TC)`;
+  if (mul === 2) return `${name} (C)`;
+  return name;
+};
+
+// Points shown in table: base * multiplier
+const displayPts = (p) => {
+  const base = Number(p?.pts ?? p?.points ?? p?.score ?? 0);
+  return base * capMultOf(p);
+};
 
 // Convert Rank payload -> roster expected by League rows
 const buildRosterFromRank = (payload) => {
@@ -427,6 +448,14 @@ const compactNumber = (n) => {
   if (!Number.isFinite(x)) return '-';
   return Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(x);
 };
+// Resolve Captain / Vice from row or fallback to roster roles
+const capViceOf = (row) => {
+  const roster = Array.isArray(row?.roster) ? row.roster : [];
+  const cap  = row?.captain || roster.find(p => String(p?.role).toLowerCase() === 'c')?.name || '';
+  const vice = row?.vice     || roster.find(p => String(p?.role).toLowerCase() === 'v')?.name || '';
+  return { cap, vice };
+};
+
 const emojiToChar = (s) => {
   if (!s) return '';
   const m = { template: '😴', differential: '🎲', spy: '🕵' };
@@ -655,6 +684,33 @@ const chipsOverallRows = useMemo(() => {
       key === eoSortKey ? (prev === 'asc' ? 'desc' : 'asc')
                         : (key === 'name' ? 'asc' : 'desc'));
   };
+
+// Rank player "type" (accepts several common fields)
+const typeRank = (p) => {
+  const t = (p.type ?? p.pos ?? p.position ?? p.element_type ?? '').toString().toLowerCase();
+  if (t === 'gk' || t === 'g' || t === '1' || t === 'goalkeeper') return 0;
+  if (t === 'def' || t === 'd' || t === '2' || t === 'defender')   return 1;
+  if (t === 'mid' || t === 'm' || t === '3' || t === 'midfielder') return 2;
+  if (t === 'fwd' || t === 'fw' || t === 'f' || t === '4' || t === 'forward') return 3;
+  return 9; // unknown types at the end
+};
+
+const nameKey = (p) => String(p?.name ?? '').toLowerCase();
+
+const cmpTypeAlpha = (a, b) => {
+  const dt = typeRank(a) - typeRank(b);
+  return dt !== 0 ? dt : nameKey(a).localeCompare(nameKey(b));
+};
+
+// Sort only non-hidden (priority === 0) and keep the rest after, stable
+const sortVisible = (arr, side) => {
+  const pri = side === 'A' ? priA : priB;
+  const visible = [];
+  const hidden  = [];
+  for (const p of arr) (pri(p) > 0 ? hidden : visible).push(p);
+  visible.sort(cmpTypeAlpha);
+  return [...visible, ...hidden];
+};
 
   // Build EO detail buckets for a given player (by id, falls back to name match if id missing)
 const buildEoDetail = useCallback((player) => {
@@ -1854,7 +1910,18 @@ activeOpacity={0.7}
 
         const starters = (r) => (Array.isArray(r.roster)? r.roster:[]).filter(p => p.role !== 'b');
         const bench    = (r) => (Array.isArray(r.roster)? r.roster:[]).filter(p => p.role === 'b');
-        const keyOf = (p) => String(p?.id ?? p?.name ?? '');
+        // Before:
+// const keyOf = (p) => String(p?.id ?? p?.name ?? '');
+
+// After — captain/TC are treated as a different key:
+const keyOf = (p) => {
+  const base = String(p?.id ?? p?.name ?? '');
+  const role = String(p?.role || '').toLowerCase();
+  const mul  = Number(p?.multiplier ?? p?.mul ?? 1);
+  const isCap = role === 'c' || mul >= 2; // includes TC (mul ≥ 3)
+  return isCap ? `${base}#C` : base;
+};
+
 
         const aStar = starters(A), bStar = starters(B);
         const aBench = bench(A),   bBench = bench(B);
@@ -1892,25 +1959,33 @@ const listA = applyCompareSort([...aStar, ...aBench], priA);
 const listB = applyCompareSort([...bStar, ...bBench], priB);
 
 
-        const playerRow = (p, side) => {
-          const priority = side === 'A' ? priA(p) : priB(p);
-          const muted = priority > 0;
-          const isBench = p.role === 'b';
-          return (
-            <View key={`${side}-${keyOf(p)}`} style={S.cRow}>
-              <Text numberOfLines={1} style={[
-                S.cName,
-                muted && S.cMuted,
-                isBench && S.cBench,
-              ]}>
-                {p.name}
-              </Text>
-              <Text style={[S.cPts, muted && S.cMuted]}>
-                {Number(p.gw_points ?? 0) * Math.max(1, Number(p.multiplier ?? 1))}
-              </Text>
-            </View>
-          );
-        };
+      const playerRow = (p, side) => {
+  const priority = side === 'A' ? priA(p) : priB(p);
+  const muted = priority > 0;
+  const isBench = p.role === 'b';
+
+  // minimal captain handling
+  const mult = Math.max(
+    1,
+    Number(p?.multiplier ?? (String(p?.role || '').toLowerCase() === 'c' ? 2 : 1))
+  );
+  const name =
+    mult >= 3 ? `${p.name} (TC)` :
+    mult === 2 ? `${p.name} (C)`  :
+    p.name;
+
+  return (
+    <View key={`${side}-${keyOf(p)}`} style={S.cRow}>
+      <Text numberOfLines={1} style={[S.cName, muted && S.cMuted, isBench && S.cBench]}>
+        {name}
+      </Text>
+      <Text style={[S.cPts, muted && S.cMuted]}>
+        {Number(p?.gw_points ?? 0) * mult}
+      </Text>
+    </View>
+  );
+};
+
 
         return (
           <View style={S.compareResultWrap}>
@@ -1975,6 +2050,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
 
     {/* list A */}
     {listA.map(p => playerRow(p,'A'))}
+    
   </View>
 
   <View style={S.cCol}>
@@ -2703,7 +2779,7 @@ dropdownItem: {
     teamName: { color: C.text ?? '#111827', fontWeight: '700', fontSize: 11, maxWidth: '100%' },
     teamNameMine: { color: C.ink },
     managerName: { color: C.ink, marginTop: 2, fontSize: 10 },
-gwYet: { color: C.muted, fontSize: 8, marginTop: 1, fontWeight: '700' },
+gwYet: { color: C.ink, fontSize: 8, marginTop: 1, fontWeight: '700' },
 
     chipsRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, marginTop: 2, flexWrap: 'nowrap' },
 
