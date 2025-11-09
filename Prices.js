@@ -757,7 +757,8 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
   const progNow = Number(player.progress) || 0;
   const progTonight = Number(player.progress_tonight) || 0;
   const perHr = Number(player.per_hour) || 0;
-
+const trendIsUp = perHr >= 0;
+  const trendCol  = trendIsUp ? upColor : downColor;
   const nowFill = Math.min(1, Math.max(0, Math.abs(progNow))) * 100;
   const tonightFill = Math.min(1, Math.max(0, Math.abs(progTonight))) * 100;
 
@@ -857,7 +858,7 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
             <View style={sheetS.statRow}>
               <View style={[sheetS.statBox, { borderColor: br, backgroundColor: isDark ? '#0f172a' : '#f8fafc' }]}>
                 <Text style={[sheetS.statLabel, { color: muted }]}>Direction</Text>
-                <Text style={[sheetS.statValue, { color: fillNowCol }]}>{progNow >= 0 ? 'Upwards' : 'Downwards'}</Text>
+               <Text style={[sheetS.statValue, { color: ink }]}>{trendIsUp ? 'Upwards' : 'Downwards'}</Text>
               </View>
               <View style={[sheetS.statBox, { borderColor: br, backgroundColor: isDark ? '#0f172a' : '#f8fafc' }]}>
                 <Text style={[sheetS.statLabel, { color: muted }]}>Distance to Threshold</Text>

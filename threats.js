@@ -1,6 +1,6 @@
-// threats.js — Averages picker + Most-Selected XI + redesigned Live/Diffs/All
+// threats.js — Averages picker + Most-Selected XI + redesigned Live/Diffs/All (+ fast search + status icons legend)
 import AppHeader from './AppHeader';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue, memo } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import {
@@ -15,7 +15,9 @@ import {
   Alert,
   View,
   Modal,
-  Linking
+  Linking,
+  FlatList,
+  TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
@@ -350,12 +352,12 @@ export default function Threats() {
     return l < 0.5;
   }, [P.bg]);
 
-const [tableSearch, setTableSearch] = useState('');
+  const [tableSearch, setTableSearch] = useState('');
 
   const [introOpen, setIntroOpen] = useState(false);
   const [localGroupNum, setLocalGroupNum] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
-const [myHit, setMyHit] = useState(0); // points (usually negative)
+  const [myHit, setMyHit] = useState(0); // points (usually negative)
   const [lbExpanded, setLbExpanded] = useState(false);
 
   const [sample, setSample] = useState('local');
@@ -425,8 +427,8 @@ const [myHit, setMyHit] = useState(0); // points (usually negative)
           }
         }
       }
-       setMyHit(0);
-       
+      setMyHit(0);
+
       if (!payload?.team?.length) {
         const rawExp =
           (id && (await AsyncStorage.getItem(`myExposure:${id}`))) ||
@@ -694,7 +696,7 @@ const [myHit, setMyHit] = useState(0); // points (usually negative)
           ptsVsYou,
           emoji,
         };
-      });
+      }).filter(r => String(r.name || '').trim().length > 0);
     const tableThreats = tableThreatsBase.slice().sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
       if (sortKey === 'name') return dir * a.name.localeCompare(b.name);
@@ -720,16 +722,16 @@ const [myHit, setMyHit] = useState(0); // points (usually negative)
       else losses.push(row);
     }
     gains.sort((a, b) =>
-  (b.eo - a.eo) ||            // primary: higher EO first
-  (b.pts - a.pts) ||          // then higher points
-  a.name.localeCompare(b.name)
-);
+      (b.eo - a.eo) ||            // primary: higher EO first
+      (b.pts - a.pts) ||          // then higher points
+      a.name.localeCompare(b.name)
+    );
 
-losses.sort((a, b) =>
-  (b.eo - a.eo) ||            // primary: higher EO first
-  (b.pts - a.pts) ||          // then higher points
-  a.name.localeCompare(b.name)
-);
+    losses.sort((a, b) =>
+      (b.eo - a.eo) ||            // primary: higher EO first
+      (b.pts - a.pts) ||          // then higher points
+      a.name.localeCompare(b.name)
+    );
 
     const totalGain  = gains.reduce((s, r) => s + r.value, 0);
     const totalLoss  = losses.reduce((s, r) => s + r.value, 0);
@@ -743,9 +745,9 @@ losses.sort((a, b) =>
       const mul = Number(x.mul) || 0;
       const f   = Number(x.eoFrac) || 0;
       const pts = Number(x.pts) || 0;
-      youScore += pts * mul  ;
+      youScore += pts * mul;
       youScore += Number(myHit || 0);
-      
+
       smpScore += pts * f;
       if (s === 'live') { youLive += mul; smpLive += f; }
       else if (s === 'played' || s === 'missed') { youPlayed += mul; smpPlayed += f; }
@@ -769,7 +771,7 @@ losses.sort((a, b) =>
       liveBattle: { gains, losses, totalGain, totalLoss, netTotal },
       averages
     };
-  }, [dataGames, eoMap, myExposure, ownedStatus, sortKey, sortDir, sampleHits, byId,myHit]);
+  }, [dataGames, eoMap, myExposure, ownedStatus, sortKey, sortDir, sampleHits, byId, myHit]);
 
   // After the useMemo that defines star, killer, flop, ...
   const trioData = useMemo(() => [star, killer, flop].filter(Boolean), [star, killer, flop]);
@@ -790,8 +792,10 @@ losses.sort((a, b) =>
     // header tabs
     tabsRow: {
       flexDirection: 'row',
+      justifyContent: 'space-between',
       gap: 8,
       paddingHorizontal: 12,
+      flexWrap: 'nowrap',
       paddingTop: 8,
       paddingBottom: 6,
       borderBottomWidth: StyleSheet.hairlineWidth,
@@ -799,9 +803,10 @@ losses.sort((a, b) =>
       backgroundColor: P.bg,
     },
     tabBtn: {
-      flex: 1,
+      paddingHorizontal: 12,
       alignItems: 'center',
       paddingVertical: 10,
+      flexShrink: 0,
       borderWidth: StyleSheet.hairlineWidth,
       borderRadius: 10,
       backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
@@ -1117,15 +1122,15 @@ losses.sort((a, b) =>
       borderWidth: StyleSheet.hairlineWidth, borderColor: P.border2
     },
     xiTileOwned: {
-    borderWidth: 2,
-    borderColor: P.accent,
-    backgroundColor: isDark ? 'rgba(96,165,250,0.10)' : 'rgba(96,165,250,0.10)',
-  },
+      borderWidth: 2,
+      borderColor: P.accent,
+      backgroundColor: isDark ? 'rgba(96,165,250,0.10)' : 'rgba(96,165,250,0.10)',
+    },
     xiName: { fontSize: 11, fontWeight: '800', color: P.ink },
     xiEO: { fontSize: 11, ...NUM, color: P.ink },
     xiStatBlock: { marginTop: 2, alignItems: 'center', gap: 2 },
-  xiEOline: { fontSize: 11, ...NUM, color: P.ink },
-  xiGainLine: { fontSize: 11, ...NUM },
+    xiEOline: { fontSize: 11, ...NUM, color: P.ink },
+    xiGainLine: { fontSize: 11, ...NUM },
     xiDeltaPos: { color: P.ok, fontWeight: '900' },
     xiDeltaNeg: { color: P.red, fontWeight: '900' },
     xiCrest: { width: 24, height: 24, resizeMode: 'contain', marginBottom: 4 },
@@ -1137,6 +1142,49 @@ losses.sort((a, b) =>
     },
     eoBarFill: { height: '100%', borderRadius: 999, backgroundColor: P.accent },
     statusRow: { marginTop: 2, alignItems: 'center' },
+
+    // search + status legend (Danger Table)
+    searchRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      marginTop: 8,
+      marginBottom: 8,
+    },
+    searchInput: {
+      flex: 1,
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: 10,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: P.border2,
+      backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : '#ffffff',
+      color: P.ink,
+      fontSize: 13,
+    },
+    legendRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      gap: 8,
+      marginBottom: 6,
+    },
+    legendPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      borderRadius: 999,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: P.border2,
+      backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#fff',
+    },
+    statusDot: {
+      width: 10,
+      height: 10,
+      borderRadius: 999,
+    },
   }), [P, isDark]);
 
   /* ---------------------- UI micro-components ---------------------- */
@@ -1186,7 +1234,7 @@ losses.sort((a, b) =>
     { key: 'live',  label: 'Live Battle' },
     { key: 'diffs', label: 'Your Differentials' },
     { key: 'all',   label: 'Danger Table' },
-    { key: 'avgs',  label: 'Templates, Chips & Averages' },
+    //{ key: 'avgs',  label: 'Templates, Chips & Averages' },
   ];
 
   /* ---------------------- Averages Picker + Tables ---------------------- */
@@ -1215,16 +1263,13 @@ losses.sort((a, b) =>
     if (avgPickKey && avgPickKey.startsWith('local:')) {
       const nStr = avgPickKey.split(':')[1];
       const n = Number(nStr);
-      // match by numeric index value for locals_<gw>.json known locals,
-      // else fallback to string equality on index
       const hit =
         (Number.isFinite(n) ? L.find(x => Number(x.index) === n) : null) ||
         L.find(x => String(x.index) === nStr);
       if (hit) return hit;
     }
     if (avgPickKey && avgPickKey.startsWith('index:')) {
-      const token = avgPickKey.split(':')[1]; // could be "2", "overall", "top1m", "elite", ...
-      // Try numeric match first, else string index match, else by name (case-insensitively)
+      const token = avgPickKey.split(':')[1];
       const asNum = Number(token);
       const hit =
         (Number.isFinite(asNum) ? L.find(x => Number(x.index) === asNum) : null) ||
@@ -1232,13 +1277,10 @@ losses.sort((a, b) =>
         L.find(x => String(x.name).toLowerCase() === String(token).toLowerCase());
       if (hit) return hit;
     }
-    // Additionally accept raw keys like "overall" or "top1m"
     if (avgPickKey === 'overall' || avgPickKey === 'top1m') {
       const t = avgPickKey.toLowerCase();
       return L.find(x => String(x.index).toLowerCase() === t || String(x.name).toLowerCase() === (t === 'top1m' ? 'top 1m' : t)) || null;
     }
-
-    // fallback none
     return null;
   }, [localsMeta, avgPickKey]);
 
@@ -1280,12 +1322,11 @@ losses.sort((a, b) =>
   // Apply locals adjustment to the sample score (only for display)
   const adjustedSampleScore = useMemo(() => {
     if (!averages) return 0;
-    // Add autosubs, subtract hitsMean (interpreted as points)
     return averages.sample.score + (autosubsInc - hitsMean);
   }, [averages, autosubsInc, hitsMean]);
 
   function AvgPicker() {
-     const relShort = SAMPLE_SHORT[sample] || 'field';
+    const relShort = SAMPLE_SHORT[sample] || 'field';
     return (
       <View style={styles.card}>
         <View style={styles.avgHeader}>
@@ -1454,7 +1495,6 @@ losses.sort((a, b) =>
     const overlay = eoMap instanceof Map ? eoMap : new Map();
     if (!overlay || overlay.size === 0) return null;
 
-    // Make rows with id, eoFrac, name, type, teamId, your mul for delta
     const rows = [];
     for (const [k, v] of overlay.entries()) {
       const id = Number(k);
@@ -1498,16 +1538,14 @@ losses.sort((a, b) =>
       <View style={[styles.xiTile, owned && styles.xiTileOwned]}>
         {!!crest && <Image source={crest} style={styles.xiCrest} />}
         <Text numberOfLines={1} style={styles.xiName}>{r.name}</Text>
-       <View style={styles.xiStatBlock}>
-       <Text style={styles.xiEOline}>{(r.eo * 100).toFixed(1)}% EO</Text>
-        
-      </View>
+        <View style={styles.xiStatBlock}>
+          <Text style={styles.xiEOline}>{(r.eo * 100).toFixed(1)}% EO</Text>
+        </View>
         <EoBar frac={r.eo} />
         <Text style={[styles.xiGainLine, deltaStyle]}>
           {delta >= 0 ? '+' : ''}{(delta * 100).toFixed(1)}%
         </Text>
       </View>
-      
     );
   }
 
@@ -1520,20 +1558,12 @@ losses.sort((a, b) =>
       <View style={styles.xiCard}>
         <SectionTitle icon="soccer-field">Highest EO Players in the {relShort} sample</SectionTitle>
         <Text style={styles.sectionSub}>Gain/loss % shown at bottom. Players you own are highlighted.</Text>
-        {/* 2 GK row */}
         <View style={styles.xiRow}>
           {xi.gk.map(p => <XiTile key={`gk-${p.id}`} r={p} />)}
           {xi.gk.length < 2 ? <View style={[styles.xiTile, { opacity: 0.4 }]} /> : null}
         </View>
-        {/* 5 DEF one row */}
-        <View style={styles.xiRow}>
-          {xi.df.map(p => <XiTile key={`df-${p.id}`} r={p} />)}
-        </View>
-        {/* 5 MID one row */}
-        <View style={styles.xiRow}>
-          {xi.md.map(p => <XiTile key={`md-${p.id}`} r={p} />)}
-        </View>
-        {/* 3 FWD row */}
+        <View style={styles.xiRow}>{xi.df.map(p => <XiTile key={`df-${p.id}`} r={p} />)}</View>
+        <View style={styles.xiRow}>{xi.md.map(p => <XiTile key={`md-${p.id}`} r={p} />)}</View>
         <View style={styles.xiRow}>
           {xi.fw.map(p => <XiTile key={`fw-${p.id}`} r={p} />)}
           {xi.fw.length < 3 ? <View style={[styles.xiTile, { opacity: 0.4 }]} /> : null}
@@ -1561,8 +1591,7 @@ losses.sort((a, b) =>
         {/* Net total */}
         <View style={{flexDirection:'row', justifyContent:'space-between', paddingVertical:6, borderBottomWidth:StyleSheet.hairlineWidth, borderBottomColor:P.border2}}>
           <Text style={{ color:P.muted, fontWeight:'800' }}>Net (Gains + Losses)</Text>
-          <Text style={[{ fontWeight:'900' }, (liveBattle.netTotal >= 0) ? { color:P.ok } : { color:P.red }]}
-          >
+          <Text style={[{ fontWeight:'900' }, (liveBattle.netTotal >= 0) ? { color:P.ok } : { color:P.red }]}>
             {liveBattle.netTotal >= 0 ? '+' : ''}{liveBattle.netTotal.toFixed(2)}
           </Text>
         </View>
@@ -1616,22 +1645,23 @@ losses.sort((a, b) =>
             ))}
           </View>
         </View>
-{/* Totals footer */}
-<View style={styles.lbFooter}>
-  <View style={[styles.lbCol, styles.lbColRightBorder]}>
-    <Text style={styles.lbTotalLabel}>Total Gain</Text>
-    <Text style={[styles.lbValGain, { textAlign: 'right', marginTop: 4 }]}>
-      {liveBattle.totalGain >= 0 ? '+' : ''}{liveBattle.totalGain.toFixed(2)}
-    </Text>
-  </View>
 
-  <View style={styles.lbCol}>
-    <Text style={styles.lbTotalLabel}>Total Loss</Text>
-    <Text style={[styles.lbValLoss, { textAlign: 'right', marginTop: 4 }]}>
-      {liveBattle.totalLoss.toFixed(2)}
-    </Text>
-  </View>
-</View>
+        {/* Totals footer */}
+        <View style={styles.lbFooter}>
+          <View style={[styles.lbCol, styles.lbColRightBorder]}>
+            <Text style={styles.lbTotalLabel}>Total Gain</Text>
+            <Text style={[styles.lbValGain, { textAlign: 'right', marginTop: 4 }]}>
+              {liveBattle.totalGain >= 0 ? '+' : ''}{liveBattle.totalGain.toFixed(2)}
+            </Text>
+          </View>
+
+          <View style={styles.lbCol}>
+            <Text style={styles.lbTotalLabel}>Total Loss</Text>
+            <Text style={[styles.lbValLoss, { textAlign: 'right', marginTop: 4 }]}>
+              {liveBattle.totalLoss.toFixed(2)}
+            </Text>
+          </View>
+        </View>
 
         {(liveBattle.gains.length > 11 || liveBattle.losses.length > 11) && (
           <View style={{ alignItems: 'center', paddingTop: 6 }}>
@@ -1691,7 +1721,6 @@ losses.sort((a, b) =>
     const pctBadge = typeof item._pctDisplay === 'number' ? item._pctDisplay : null;
     const hasPctRow = showPct && pctBadge != null;
 
-    // emoji logic for tiles (kept minimal)
     const isLive = statusKey === 'live';
     const isDone = statusKey === 'played' || statusKey === 'missed';
     const delivered = Number(item.pts) > 3;
@@ -1770,11 +1799,67 @@ losses.sort((a, b) =>
     );
   }
 
-  function DangerTableCard() {
-    return (
-      <View style={styles.card}>
-        <SectionTitle icon="table" sub={labels.tableSub}>{labels.tableTitle}</SectionTitle>
+  /* --------- Status Dot + Legend (Danger Table) --------- */
+  const statusColor = (status) => {
+    if (status === 'live')   return P.yellow;
+    if (status === 'played') return isDark ? '#d1d5db' : P.graySoft;
+    if (status === 'missed') return P.red;
+    return '#1e9770'; // yet
+  };
 
+  const StatusDot = memo(function StatusDot({ status }) {
+    return <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />;
+  });
+
+  /* --------- Danger Table (fast-search, FlatList, deferred) --------- */
+  const DangerTableCard = memo(function DangerTableCardInner({ tableThreats, tableSearch, setTableSearch }) {
+    const deferredQ = useDeferredValue(tableSearch);
+
+    const filtered = useMemo(() => {
+      const q = String(deferredQ || '').trim().toLowerCase();
+      if (!q) return tableThreats;
+      return tableThreats.filter(t => String(t.name || '').toLowerCase().includes(q));
+    }, [tableThreats, deferredQ]);
+
+    const renderHeader = () => (
+      <>
+        {/* Search */}
+        <View style={styles.searchRow}>
+          <TextInput
+            value={tableSearch}
+            onChangeText={setTableSearch}
+            placeholder="Search player…"
+            placeholderTextColor={isDark ? '#8a95a6' : '#9aa3af'}
+            style={styles.searchInput}
+            returnKeyType="search"
+            autoCapitalize="none"
+            autoCorrect={false}
+            blurOnSubmit={false}
+            keyboardAppearance={isDark ? 'dark' : 'light'}
+          />
+        </View>
+
+        {/* Legend */}
+        <View style={styles.legendRow}>
+          <View style={styles.legendPill}>
+            <View style={[styles.statusDot, { backgroundColor: statusColor('live') }]} />
+            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Live</Text>
+          </View>
+          <View style={styles.legendPill}>
+            <View style={[styles.statusDot, { backgroundColor: statusColor('played') }]} />
+            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Played</Text>
+          </View>
+          <View style={styles.legendPill}>
+            <View style={[styles.statusDot, { backgroundColor: statusColor('yet') }]} />
+            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Yet</Text>
+          </View>
+          <View style={styles.legendPill}>
+            <View style={[styles.statusDot, { backgroundColor: statusColor('missed') }]} />
+            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Missed</Text>
+          </View>
+        </View>
+
+        {/* Header row */}
         <View style={[styles.tableHeaderRow, styles.tableRow]}>
           <TouchableOpacity
             style={[styles.thCell, { flex: 2.8 }]}
@@ -1820,23 +1905,33 @@ losses.sort((a, b) =>
             )}
           </TouchableOpacity>
         </View>
+      </>
+    );
 
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
+    return (
+      <View style={styles.card}>
+        <SectionTitle icon="table" sub={labels.tableSub}>{labels.tableTitle}</SectionTitle>
+
+        <FlatList
+          data={filtered}
+          keyExtractor={(t, i) => `${t.id}:${i}`}
+          keyboardShouldPersistTaps="always"
           keyboardDismissMode="none"
-          nestedScrollEnabled
-        >
-          {tableThreats.map((t, i) => (
+          initialNumToRender={24}
+          windowSize={8}
+          removeClippedSubviews
+          ListHeaderComponent={renderHeader}
+          renderItem={({ item: t, index: i }) => (
             <View
-              key={`tr-${t.id}-${i}`}
               style={[
                 styles.tableRow,
                 i % 2 ? { backgroundColor: 'rgba(255,255,255,0.04)' } : null,
                 i === 0 && styles.tableRowRoundedTop,
-                i === tableThreats.length - 1 && styles.tableRowRoundedBot,
+                i === filtered.length - 1 && styles.tableRowRoundedBot,
               ]}
             >
               <View style={{ flex: 2.8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <StatusDot status={t.status} />
                 {!!t.teamId && <Image source={{ uri: clubCrestUri(t.teamId) }} style={styles.tableCrest} />}
                 <Text style={styles.tdName} numberOfLines={1}>
                   {t.emoji ? `${t.emoji} ` : ''}{t.name}
@@ -1853,11 +1948,11 @@ losses.sort((a, b) =>
                 {t.ptsVsYou.toFixed(2)}
               </Text>
             </View>
-          ))}
-        </ScrollView>
+          )}
+        />
       </View>
     );
-  }
+  });
 
   /* ---------------------- Main Render ---------------------- */
   const inlineHint = useMemo(() => {
@@ -1949,8 +2044,11 @@ losses.sort((a, b) =>
           inlineHint={inlineHint}
         />
 
-        {/* Tabs — sticky */}
-        <View style={styles.tabsRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabsRow}
+        >
           {tabs.map(t => {
             const active = activeTab === t.key;
             return (
@@ -1958,12 +2056,13 @@ losses.sort((a, b) =>
                 key={t.key}
                 onPress={() => { userTabRef.current = true; setActiveTab(t.key); }}
                 style={[styles.tabBtn, active && styles.tabBtnActive]}
+                activeOpacity={0.8}
               >
                 <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
               </TouchableOpacity>
             );
           })}
-        </View>
+        </ScrollView>
 
         {/* Live */}
         {activeTab === 'live' && <LiveBattleCard />}
@@ -2000,7 +2099,13 @@ losses.sort((a, b) =>
         )}
 
         {/* All Threats (Danger Table) */}
-        {activeTab === 'all' && <DangerTableCard />}
+        {activeTab === 'all' && (
+          <DangerTableCard
+            tableThreats={tableThreats}
+            tableSearch={tableSearch}
+            setTableSearch={setTableSearch}
+          />
+        )}
 
         {/* Averages tab — XI first, then picker */}
         {activeTab === 'avgs' && (

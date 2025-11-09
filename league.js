@@ -1,9 +1,10 @@
 // league.js
 import InfoBanner from './InfoBanner';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState,useRef } from 'react';
 import AppHeader from './AppHeader';
 
 import {
+  
   ActivityIndicator,
   FlatList,
   Modal,
@@ -19,11 +20,12 @@ import {
   Dimensions,
   Switch,
   Platform,
-  TextInput,
-  Alert,
+ 
   Linking,
   Share,
 } from 'react-native';
+import ThemedTextInput from './ThemedTextInput';
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -489,6 +491,7 @@ const [chipsOverallSortDir, setChipsOverallSortDir] = useState('desc');
  const [compareOpen, setCompareOpen] = useState(false);
  const [compareA, setCompareA] = useState(null); // entry_id
  const [compareB, setCompareB] = useState(null); // entry_id
+ 
  const [comparePicking, setComparePicking] = useState('A'); // which slot is being set
 // below: const [comparePicking, setComparePicking] = useState('A');
 const [compareSortKey, setCompareSortKey] = useState('pts');   // 'name' | 'pts'
@@ -525,6 +528,9 @@ const toggleCompareSort = (key) => {
   const [leagueLoading, setLeagueLoading] = useState(false);
   const [leagueError, setLeagueError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+// Search + list ref
+const [tableQuery, setTableQuery] = useState('');
+const listRef = useRef(null);
 
   const [expanded, setExpanded] = useState(() => new Set());
   const [favs, setFavs] = useState(() => new Set());
@@ -1180,7 +1186,22 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
   };
 
   const dataSorted = useMemo(() => {
-    const rows = league?.rows ? [...league.rows] : [];
+    // 1) filter by search text across team/manager/players (incl. C/VC)
+    const q = tableQuery.trim().toLowerCase();
+    const base = Array.isArray(league?.rows) ? league.rows : [];
+    const rows = (!q ? [...base] : base.filter((row) => {
+      const team = String(row?.team_name || '').toLowerCase();
+      const mgr  = String(row?.manager_name || '').toLowerCase();
+      const cap  = String(row?.captain || '').toLowerCase();
+      const vice = String(row?.vice || '').toLowerCase();
+      const roster = Array.isArray(row?.roster) ? row.roster : [];
+      if (team.includes(q) || mgr.includes(q) || cap.includes(q) || vice.includes(q)) return true;
+      // search players in roster (names)
+      for (const p of roster) {
+        if (String(p?.name || '').toLowerCase().includes(q)) return true;
+      }
+      return false;
+    }));
     rows.sort((a, b) => {
       const av = getSortVal(a, sortKey);
       const bv = getSortVal(b, sortKey);
@@ -1189,7 +1210,7 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return rows;
-  }, [league?.rows, sortKey, sortDir]);
+  }, [league?.rows, sortKey, sortDir,tableQuery]);
 
   // Hide "Yet" if every entry is 0
   let showYet = useMemo(() => {
@@ -1214,6 +1235,50 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
     if (!selected?.id) return;
     Share.share({ message: `LiveFPL League: ${_leagueLink}` }).catch(() => {});
   }, [selected?.id, _leagueLink]);
+
+const scrollToIndexSafe = (index) => {
+  if (!listRef.current || index < 0) return;
+  try {
+    listRef.current.scrollToIndex({ index, viewPosition: 0.5, animated: true });
+  } catch {
+    // fallback: approximate offset if measurement missing
+    listRef.current.scrollToOffset({ offset: Math.max(0, index * 64 - 120), animated: true });
+  }
+};
+
+const scrollToFirst = (predicate) => {
+  const rows = dataSorted || [];
+  const idx = rows.findIndex(predicate);
+  if (idx < 0) return;
+
+  // Ensure the target row is expanded
+  const row = rows[idx];
+  const id = getEntryId(row);
+  setExpanded((prev) => {
+    const next = new Set(prev);
+    next.add(id);            // make sure it's open (idempotent)
+    return next;
+  });
+
+  // Scroll after the list re-renders with the expanded row
+  setTimeout(() => scrollToIndexSafe(idx), 30);
+};
+
+
+const scrollToMe = () => {
+  scrollToFirst((r) => Number(r?.entry_id ?? r?.entry ?? r?.id) === Number(fplId));
+};
+
+// Fuzzy jump by team/manager name (used by EO modal)
+const scrollToManagerByName = (name) => {
+  const q = String(name || '').trim().toLowerCase();
+  if (!q) return;
+  scrollToFirst((r) => {
+    const team = String(r?.team_name || '').toLowerCase();
+    const mgr  = String(r?.manager_name || '').toLowerCase();
+    return team === q || mgr === q;
+  });
+};
 
   const header = useMemo(() => {
     if (!league) return null;
@@ -1308,6 +1373,8 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
     }
   };
 
+const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
+
   const renderRow = useCallback(({ item }) => {
     const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
     const me = Number(fplId) === getEntryId(item);
@@ -1355,13 +1422,14 @@ const [selectedLoaded, setSelectedLoaded] = useState(false);
       <View style={{paddingHorizontal: 10}}>
 
       {/* === Toolbar: Select | Settings Cog | EO & Chips | Share === */}
-      <View style={S.toolbarRow}>
+      <View style={[S.toolbarRow, { marginTop: 8, alignItems: 'center' }]}>
         <Pressable style={[S.select, { flex: 1 }]} onPress={() => setOpen(true)}>
           <Text style={[S.selectText, !selected && S.placeholder]}>
             {selected?.name ?? 'Select a league'}
           </Text>
           <MaterialCommunityIcons name="chevron-down" size={18} color={C.muted} />
         </Pressable>
+    
 
         {/* Settings */}
         <TouchableOpacity
@@ -1418,6 +1486,40 @@ activeOpacity={0.7}
           </TouchableOpacity>
         )}
       </View>
+      {/* === Search row (new line under the buttons) === */}
+<View style={[S.toolbarRow, { marginTop: 2, alignItems: 'center' }]}>
+  <View style={{ flex: 1 }}>
+  <ThemedTextInput
+  value={tableQuery}
+  onChangeText={setTableQuery}
+  placeholder="Search league…"
+  placeholderTextColor={C.muted}
+  multiline={false}
+  textAlignVertical="center"               // Android vertical centering
+  style={[
+    S.searchInputInline,
+    { paddingTop: 9, paddingBottom: 9, lineHeight: 14 }  // keep compact height
+    // 🔴 remove lineHeight: 36
+  ]}
+  returnKeyType="search"
+/>
+
+</View>
+
+
+  <TouchableOpacity
+    style={S.findBtn}
+    onPress={scrollToMe}
+    activeOpacity={0.7}
+    accessibilityLabel="Find my row"
+  >
+    <Text style={S.findBtnText}>Find me</Text>
+  </TouchableOpacity>
+  
+</View>
+
+
+
 
       {/* League picker modal */}
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
@@ -1598,7 +1700,7 @@ activeOpacity={0.7}
   </Text>
 
                 {/* EO search */}
-                <TextInput
+                <ThemedTextInput
                   value={eoQuery}
                   onChangeText={setEoQuery}
                   placeholder="Search player…"
@@ -1665,7 +1767,7 @@ activeOpacity={0.7}
             )}
           </View>
 
-          + {eoDetailOpen && (
+           {eoDetailOpen && (
    <>
      {/* Backdrop that closes the panel */}
      <Pressable
@@ -1682,6 +1784,8 @@ activeOpacity={0.7}
            <Text style={S.link}>Close</Text>
          </TouchableOpacity>
        </View>
+
+
        {/* Total managers in this league */}
 <View style={S.eoTotalsRow}>
   <Text style={S.eoTotalsText}>
@@ -1718,10 +1822,23 @@ activeOpacity={0.7}
                  <Text style={S.eoGroupTitle}>{title} — {eoDetailPlayer.groups[k].length}</Text>
                  {eoDetailPlayer.groups[k].length ? (
                    eoDetailPlayer.groups[k].map((name, i) => (
-                     <View key={`${k}-${i}`} style={S.eoManagerItem}>
-                       <MaterialCommunityIcons name="account-outline" size={14} color={C.muted} />
-                       <Text numberOfLines={1} style={S.eoManagerName}>{name}</Text>
-                     </View>
+                     <TouchableOpacity
+  key={`${k}-${i}`}
+  style={S.eoManagerItem}
+  onPress={() => {
+    setEoDetailOpen(false);
+    setAnalyticsOpen(false);
+    scrollToManagerByName(name);
+  }}
+  activeOpacity={0.7}
+  accessibilityLabel={`Go to ${name} in the table`}
+>
+  <MaterialCommunityIcons name="account-outline" size={14} color={C.muted} />
+  <Text numberOfLines={1} style={[S.eoManagerName, { textDecorationLine: 'underline', color: C.accent }]}>
+    {name}
+  </Text>
+</TouchableOpacity>
+
                    ))
                  ) : (
                    <Text style={S.muted}>— none —</Text>
@@ -2119,6 +2236,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
           </View>
         ) : league ? (
           <FlatList
+          ref={listRef}
             data={dataSorted}
             keyExtractor={(x) => String(x.entry_id)}
             renderItem={renderRow}
@@ -2126,6 +2244,11 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
             stickyHeaderIndices={[0]}
             contentContainerStyle={{ paddingBottom: 200 }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={C.accent} />}
+            onScrollToIndexFailed={({ index }) => {
+      // estimate and try again if measurement not ready
+      listRef.current?.scrollToOffset({ offset: Math.max(0, index * 64 - 120), animated: true });
+      setTimeout(() => scrollToIndexSafe(index), 50);
+    }}
             windowSize={8}
             initialNumToRender={20}
             removeClippedSubviews
@@ -3121,6 +3244,40 @@ eoDetailCard: {
       marginBottom: 8,
       fontSize: 12,
     },
+   searchInputInline: {
+  height: 36,
+  paddingHorizontal: 12,
+  paddingVertical: 0,       // ensures even centering
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: C.border2,
+  backgroundColor: isDark ? '#0b1220' : '#ffffff',
+  color: C.ink,
+  fontSize: 14,
+  // 🚫 no lineHeight here
+},
+
+
+
+findBtn: {
+  height: 36,
+  paddingHorizontal: 12,
+  paddingVertical: 0, 
+  borderRadius: 10,
+  borderWidth: 1,
+  borderColor: C.border2,
+  backgroundColor: isDark ? '#0f172a' : '#f8fafc',
+  alignItems: 'center',
+  justifyContent: 'center',
+  marginLeft: 8,
+},
+
+findBtnText: {
+  color: C.ink,
+  fontWeight: '700',
+  fontSize: 14,
+},
+
 
     // Skeleton
     skel: { backgroundColor: isDark ? '#0f172a' : '#e5e7eb', borderRadius: 6 },
