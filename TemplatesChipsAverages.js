@@ -887,7 +887,7 @@ const myPlayState = useMemo(() => {
   function XiTile({ r }) {
     const crest = r.teamId ? { uri: clubCrestUri(r.teamId) } : null;
     const delta = (r.yourMul || 0) - r.eo; // positive = you own more
-    theDeltaStyle = delta >= 0 ? styles.xiDeltaPos : styles.xiDeltaNeg;
+     const theDeltaStyle = delta >= 0 ? styles.xiDeltaPos : styles.xiDeltaNeg;
     const owned = (r.yourMul || 0) > 0;
     return (
       <View style={[styles.xiTile, owned && styles.xiTileOwned]}>
@@ -1071,14 +1071,14 @@ const myPlayState = useMemo(() => {
           </TouchableOpacity>
         </View>
 
-        <SectionTitle icon="poker-chip" sub={`This GW · Sample: ${labelFrom(chipPickKey)}`}>This GW</SectionTitle>
+        <SectionTitle icon="poker-chip" sub={`This GW · Sample: ${chipPickLabel}`}>This GW</SectionTitle>
         {Object.keys(chipWeek).length
           ? Object.entries(chipWeek).map(([k, v]) => row(chipLabel(k), v, `wk-${k}`))
           : <Text style={styles.muted}>No data.</Text>}
 
         <View style={{ height: 10 }} />
 
-        <SectionTitle icon="poker-chip" sub={`Season to date · Sample: ${labelFrom(chipPickKey)}`}>Season</SectionTitle>
+       <SectionTitle icon="poker-chip" sub={`Season to date · Sample: ${chipPickLabel}`}>Season</SectionTitle>
         {Object.keys(chipOverall).length
           ? Object.entries(chipOverall).map(([k, v]) => row(chipLabel(k), v, `ov-${k}`))
           : <Text style={styles.muted}>No data.</Text>}
@@ -1180,18 +1180,18 @@ const myPlayState = useMemo(() => {
           <Text style={styles.avgTitle}>Captains</Text>
           <TouchableOpacity style={styles.changeBtn} onPress={() => setCapPickerOpen(true)} activeOpacity={0.8}>
             <MaterialCommunityIcons name="account-switch-outline" size={16} color={P.ink} />
-            <Text style={styles.changeBtnText}>{/* picker button label */ (capPickKey ? labelFrom(capPickKey) : labelFrom(sample))}</Text>
+            <Text style={styles.changeBtnText}>{capPickLabel}</Text>
           </TouchableOpacity>
         </View>
 
-        <SectionTitle icon="crown-outline" sub={`This GW · Sample: ${labelFrom(capPickKey || sample)}`}>Captain Choices</SectionTitle>
+        <SectionTitle icon="crown-outline" sub={`This GW · Sample: ${capPickLabel}`}>Captain Choices</SectionTitle>
         <ScrollView style={{ maxHeight: S(240) }}>
           {capRows.length ? capRows.map((r, i) => row(r, `cap-${r.id}-${i}`)) : <Text style={styles.muted}>No data.</Text>}
         </ScrollView>
 
         <View style={{ height: 10 }} />
 
-        <SectionTitle icon="alpha-t-box-outline" sub={`This GW · Sample: ${labelFrom(capPickKey || sample)}`}>Triple Captains</SectionTitle>
+        <SectionTitle icon="alpha-t-box-outline" sub={`This GW · Sample: ${capPickLabel}`}>Triple Captains</SectionTitle>
         <ScrollView style={{ maxHeight: S(200) }}>
           {tcRows.length ? tcRows.map((r, i) => row(r, `tc-${r.id}-${i}`)) : <Text style={styles.muted}>No data.</Text>}
         </ScrollView>
