@@ -273,6 +273,8 @@ function getEventCounts(pl) {
     red_cards: 0,
     clean_sheets: 0,
     saves: 0,
+    penalties_saved: 0,
+    penalties_missed: 0,
     bonus: 0,
     defensive_contribution: 0,
     minutes: 0,
@@ -924,6 +926,70 @@ eoLegendBlock: {
     [C,pitchHeight, rowHeight, ROW_GAP, vrem, rem]
   );
 
+  const SoccerWithCheck = ({ size = 12, color = 'darkblue', badgeColor = '#22c55e', ink = 'white' }) => (
+  <View style={{ width: size, height: size }}>
+    <MaterialCommunityIcons name="soccer" size={size} color={color} />
+    <View
+      style={{
+        position: 'absolute',
+        right: -size * 0.10,
+        top: -size * 0.10,
+        width: size * 0.55,
+        height: size * 0.55,
+        borderRadius: (size * 0.55) / 2,
+        backgroundColor: badgeColor, // green
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(0,0,0,0.25)',
+      }}
+    >
+      <MaterialCommunityIcons
+        name="check-bold"
+        size={size * 0.40}
+        color={ink}
+      />
+    </View>
+  </View>
+);
+
+
+  // Put this near EventIcon
+const SoccerWithX = ({ size = 16, color = 'darkblue', badgeColor = '#ef4444', ink = '#fff' }) => (
+  <View style={{ width: size, height: size }}>
+    <MaterialCommunityIcons name="soccer" size={size} color={color} />
+    <View
+      style={{
+        position: 'absolute',
+        right: -size * 0.10,
+        top: -size * 0.10,
+        width: size * 0.55,
+        height: size * 0.55,
+        borderRadius: (size * 0.55) / 2,
+        backgroundColor: badgeColor, // red
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(0,0,0,0.25)',
+      }}
+    >
+      <Text
+        style={{
+          color: ink,
+          fontSize: size * 0.45,
+          lineHeight: size * 0.55,
+          fontWeight: '900',
+          includeFontPadding: false,
+          textAlign: 'center',
+        }}
+      >
+        ×
+      </Text>
+    </View>
+  </View>
+);
+
+
   // replace EventIcon with this version (adds dark-mode color only when used in modal)
   const EventIcon = ({ type, count, size = 12, forModal = false }) => {
     if (!count) return null;
@@ -981,6 +1047,40 @@ eoLegendBlock: {
   );
 
 
+case 'penalties_saved':
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginHorizontal: 2 }}>
+      <SoccerWithCheck
+        size={size}
+        color={forModal ? iconColor : 'darkblue'}
+        badgeColor={C.good || '#22c55e'}
+        ink="white"
+      />
+      {count > 1 ? (
+        <Text style={{ fontSize: 10, marginLeft: 2, color: forModal ? C.ink : 'darkblue' }}>
+          {count}
+        </Text>
+      ) : null}
+    </View>
+  );
+
+
+  case 'penalties_missed':
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', marginHorizontal: 2 }}>
+      <SoccerWithX
+        size={size}
+        color={forModal ? iconColor : 'darkblue'}
+        badgeColor={C.bad || '#ef4444'}
+        ink="white"
+      />
+      {count > 1 ? (
+        <Text style={{ fontSize: 10, marginLeft: 2, color: forModal ? C.ink : 'darkblue' }}>
+          {count}
+        </Text>
+      ) : null}
+    </View>
+  );
 
 
 
@@ -1053,6 +1153,8 @@ eoLegendBlock: {
       counts.red_cards +
       counts.clean_sheets +
       counts.saves +
+      counts.penalties_saved +     // ← add this
+  counts.penalties_missed +  
       counts.bonus +
      counts.defensive_contribution +
     (isLive ? counts.minutes : 0);
@@ -1076,6 +1178,8 @@ eoLegendBlock: {
           <EventIcon type="yellow_cards" count={counts.yellow_cards} />
           <EventIcon type="red_cards" count={counts.red_cards} />
           <EventIcon type="clean_sheets" count={counts.clean_sheets} />
+          <EventIcon type="penalties_saved" count={counts.penalties_saved} />
+          <EventIcon type="penalties_missed" count={counts.penalties_missed} />
           <EventIcon type="saves" count={counts.saves} />
           <EventIcon type="bonus" count={counts.bonus} />
           <EventIcon type="defensive_contribution" count={counts.defensive_contribution} />

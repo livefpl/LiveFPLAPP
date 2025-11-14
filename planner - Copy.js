@@ -4476,69 +4476,6 @@ const SeasonStatsModal = () => {
 // ---------- Dynamic stat discovery (use extended_api) ----------
 // ---------- Dynamic stat discovery (use extended_api + Top Stats first) ----------
 
-// Ultra-short header labels for stats
-const SHORT_LABELS = {
-  total_points: 'Pts',
-  minutes: 'Min',
-  goals_scored: 'G',
-  assists: 'A',
-  clean_sheets: 'CS',
-  goals_conceded: 'GC',
-  saves: 'Sv',
-  bonus: 'Bon',
-  bps: 'BPS',
-  yellow_cards: 'YC',
-  red_cards: 'RC',
-  own_goals: 'OG',
-  penalties_saved: 'PS',
-  penalties_missed: 'PM',
-
-  // x-stats
-  expected_goals: 'xG',
-  expected_assists: 'xA',
-  expected_goal_involvements: 'xGI',
-  expected_goals_conceded: 'xGC',
-
-  // meta / value
-  points_per_game: 'PPG',
-  value_form: 'VF',
-  value_season: 'VS',
-  selected_by_percent: 'Sel%',
-  form: 'Form',
-  ict_index: 'ICT',
-
-  // prices & changes
-  now_cost: '£',
-  nowcost: '£',
-  cost_change_event: '£Δ',
-  cost_change_event_fall: '£∇',
-  cost_change_start: '£Δs',
-  cost_change_start_fall: '£∇s',
-};
-
-// fallback: make a tiny acronym if we don’t have a mapping
-const shortHeaderFor = (key) => {
-  if (!key) return '';
-  // normalize common variants
-  if (/^now_?cost$/i.test(key)) return '£';
-  const hit = SHORT_LABELS[key] || SHORT_LABELS[key.toLowerCase()];
-  if (hit) return hit;
-
-  // create a compact acronym: e.g., "threat_per_90" -> "TP9"
-  const words = String(key).replace(/_/g, ' ').split(' ').filter(Boolean);
-  if (words.length === 1) {
-    const w = words[0];
-    // keep capitals & digits, else first 3 letters
-    const caps = w.replace(/[a-z]/g, '');
-    if (caps.length >= 2) return caps.slice(0, 4);
-    const digits = w.replace(/\D/g, '');
-    if (digits) return (w[0] || '').toUpperCase() + digits.slice(0, 2);
-    return w.slice(0, 3).toUpperCase();
-  }
-  const acro = words.map(w => (w[0] || '').toUpperCase()).join('');
-  return acro.slice(0, 4);
-};
-
   const TOP_KEY_ALIASES = {
     'now cost': ['now_cost', 'cost', 'price'],
     'goals': ['goals_scored', 'goals'],
@@ -4654,13 +4591,8 @@ const AllPlayersStatsModal = React.memo(function AllPlayersStatsModal({
   if (!open) return null;
 
   const NAME_COL_W = 120;   // ↓ from 180 → shows more columns
-const COL_MIN_W  = 50;    // ↓ from 80  → denser columns
+const COL_MIN_W  = 64;    // ↓ from 80  → denser columns
 
-const colWidthFor = (k) => {
-  // give price a touch more room; tweak as you like
-  
-  return Math.max(COL_MIN_W, 50);
-};
 
   const POS_LABELS = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
   const COLS_KEY = 'planner_allstats_columns_v1';
@@ -4680,9 +4612,9 @@ const colWidthFor = (k) => {
   }, [extendedInfo]);
 
   const DEFAULT_COLS = [
-    'total_points',
     'now_cost',
-    'selected_by_percent',
+    'total_points',
+    'form',
     'goals_scored',
     'assists',
     'minutes',
@@ -4757,20 +4689,13 @@ const colWidthFor = (k) => {
     });
   }, [allRows, posFilter, q]);
 
- 
- const valueFor = React.useCallback((row, key) => {
-   let v = row.r?.[key];
-   if (v == null) {
-     // case-insensitive fallback (handles slight spelling/casing/alias drift)
-     const lower = String(key).toLowerCase();
-     const alt = Object.keys(row.r || {}).find(k => String(k).toLowerCase() === lower);
-     if (alt) v = row.r?.[alt];
-   }
-   if (/^now_?cost$/i.test(key)) return Number(v ?? 0); // keep numeric for sort
-   const n = Number(v);
-   return Number.isFinite(n) ? n : 0;
- }, []);
-
+  const valueFor = React.useCallback((row, key) => {
+    const v = row.r?.[key];
+    // special formatting for now_cost (show x.y) but keep numeric for sort
+    if (/^now_?cost$/i.test(key)) return Number(v ?? 0);
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }, []);
 
   const sorted = React.useMemo(() => {
     const arr = filtered.slice();
@@ -4796,11 +4721,11 @@ const HeaderCell = ({ k }) => {
   return (
     <TouchableOpacity
       onPress={() => setSort(k)}
-      style={{ paddingVertical: 6, paddingHorizontal: 6, borderRightWidth: 1, borderColor: C.border, minWidth: colWidthFor(k) }}
+      style={{ paddingVertical: 6, paddingHorizontal: 6, borderRightWidth: 1, borderColor: C.border, minWidth: COL_MIN_W }}
     >
-      <Text style={{ color: C.ink, fontWeight: active ? '800' : '700', fontSize: 12 }}>
-   {shortHeaderFor(k)}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
- </Text>
+      <Text style={{ color: C.ink, fontWeight: active ? '800' : '700', fontSize: 11 }}>
+        {pretty(k)}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+      </Text>
     </TouchableOpacity>
   );
 };
@@ -4809,7 +4734,7 @@ const HeaderCell = ({ k }) => {
   const RowCell = ({ k, row }) => {
   const v = valueFor(row, k);
   return (
-    <View style={{ paddingVertical: 6, paddingHorizontal: 6, borderRightWidth: 1, borderColor: C.border, minWidth: colWidthFor(k) }}>
+    <View style={{ paddingVertical: 6, paddingHorizontal: 6, borderRightWidth: 1, borderColor: C.border, minWidth: COL_MIN_W }}>
       <Text style={{ color: C.ink, fontSize: 11 }}>{fmtCell(k, v)}</Text>
     </View>
   );
@@ -4898,7 +4823,7 @@ const HeaderCell = ({ k }) => {
             {row.name}
           </Text>
           <Text style={{ color: C.muted, fontSize: 10 }}>
-            {POS_LABELS[row.type] || '?'} 
+            {POS_LABELS[row.type] || '?'} {row.shortTeam ? `• ${row.shortTeam}` : ''}
           </Text>
         </View>
       </View>

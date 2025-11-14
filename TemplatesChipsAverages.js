@@ -186,43 +186,79 @@ async function loadEOOverlay(sample) {
 
 /* ---------------------- Parsing helpers ---------------------- */
 function collectPlayersFromGames(json) {
-  // id -> { id, name, teamId, type, pts, seenLive, seenPlayed }
+  // Map pid -> { id, name, teamId, type, pts, seenLive, seenPlayed }
   const byId = new Map();
+
   (json || []).forEach((game) => {
-    const teamHId = Number(game?.[16] ?? 0);
-    const teamAId = Number(game?.[17] ?? 0);
+    // Indices in your payload:
+    // [0]=home name, [1]=away name, [2]=home score, [3]=away score
+    // [4]=status string "Live Game"/"Done", [5]=stage "Projected"/"Official"
+    // [12]=home table, [13]=away table, [16]=home team id, [17]=away team id
+    const statusStrAll = [
+      game?.[4],
+      game?.[5],
+      game?.status,
+      game?.stage,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toUpperCase();
 
-    // attempt live/finished flags
-    const live = Boolean(game?.inProgress ?? game?.is_live ?? game?.[7] ?? game?.[8] ?? false);
-    const finished = Boolean(game?.finished ?? game?.is_finished ?? game?.[9] ?? game?.[10] ?? false);
+    const finished =
+      game?.finished === true ||
+      game?.is_finished === true ||
+      /(DONE|OFFICIAL|FINISHED|FULL.?TIME|FT|FINAL|ENDED)/.test(statusStrAll);
 
-    const tableH = game?.[12] || [];
-    const tableA = game?.[13] || [];
+    const startedNotFinished =
+      (game?.inProgress === true ||
+        game?.is_live === true ||
+        /(LIVE|IN.?PROGRESS)/.test(statusStrAll)) && !finished;
+
+    const teamHId = Number(game?.[16] ?? game?.home_team_id ?? 0);
+    const teamAId = Number(game?.[17] ?? game?.away_team_id ?? 0);
+
+    const tableH = game?.[12] || game?.home_table || [];
+    const tableA = game?.[13] || game?.away_table || [];
+
+    const extractMinutes = (explained) => {
+      let mins = 0;
+      if (!Array.isArray(explained)) return 0;
+
+      for (const e of explained) {
+        // Array form: ['minutes', 90, 2] or ['Minutes played', 66, 2]
+        if (Array.isArray(e) && e.length >= 2) {
+          const tag = String(e[0] ?? '').toLowerCase();
+          if (tag.includes('min')) {
+            const v = Number(e[1]);
+            if (Number.isFinite(v)) { mins = v; break; }
+          }
+        }
+        // Object form, just in case
+        else if (e && typeof e === 'object') {
+          const k = String(e.stat ?? e.key ?? e.name ?? '').toLowerCase();
+          const v = Number(e.value ?? e.val ?? e.minutes ?? e.mins);
+          if (k.includes('min') && Number.isFinite(v)) { mins = v; break; }
+        }
+      }
+      return mins;
+    };
 
     const pushRows = (rows, teamId) => {
       (rows || []).forEach((row) => {
-        const [name, _eo, _o, _pts, explained, elementId, shortName, type] = row;
+        // Row shape: [name, _eo, _o, _pts, explained, elementId, shortName, type]
+        const [name, _eo, _o, _pts, explained, elementId, shortName, type] = row || [];
         const id = Number(elementId) || null;
         if (!id) return;
 
         const prev = byId.get(id) || {};
         const ptsNum = Number(_pts) || 0;
 
-        // minutes from explained
-        let mins = 0;
-        if (Array.isArray(explained)) {
-          for (const e of explained) {
-            if (!Array.isArray(e) || e.length < 2) continue;
-            const tag = String(e[0]).toLowerCase();
-            if (tag === 'mins' || tag === 'minutes') {
-              mins = Number(e[1]) || 0;
-              break;
-            }
-          }
-        }
+        // Consider a player as "appeared" only if minutes > 0
+        const mins = extractMinutes(explained);
+        const appeared = mins > 0;
 
-        const seenLive  = prev.seenLive  || (mins > 0 && live && !finished);
-        const seenPlayed= prev.seenPlayed|| (mins > 0 && (!live || finished));
+        const seenPlayed = prev.seenPlayed || (finished && appeared);
+        const seenLive   = prev.seenLive   || (startedNotFinished && appeared);
 
         byId.set(id, {
           id,
@@ -239,8 +275,11 @@ function collectPlayersFromGames(json) {
     pushRows(tableH, teamHId);
     pushRows(tableA, teamAId);
   });
+
   return byId;
 }
+
+
 function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
 
 /* ---------------------- Totals ---------------------- */
