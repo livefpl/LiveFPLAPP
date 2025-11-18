@@ -12,6 +12,8 @@ import { NavigationContainer, CommonActions, useNavigation } from '@react-naviga
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ProProvider } from './ProContext';
+import { useEffect } from 'react';
+import { initPlaywire } from './playwireInit';
 
 import { setTrigger, setConfig, bump } from './meter';
 import { showOnce } from './AdInterstitial';
@@ -267,6 +269,14 @@ function RootNavigation({ navRef, onReady, onStateChange, attStatus }) {
 
 /* ------------------------ App ------------------------ */
 export default function App() {
+useEffect(() => {
+    // Pull from app.json extra (or hardcode if you prefer)
+    const publisherId = process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID || require('./app.json').expo.extra.playwire.publisherId;
+    const iosAppId    = process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID     || require('./app.json').expo.extra.playwire.iosAppId;
+    const androidAppId= process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID  || require('./app.json').expo.extra.playwire.androidAppId;
+    initPlaywire({ publisherId, iosAppId, androidAppId });
+  }, []);
+
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
 

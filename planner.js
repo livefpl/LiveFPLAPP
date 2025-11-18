@@ -2594,6 +2594,13 @@ rItalicI: {
   color: C.ink,
 },
 
+rItalicI2: {
+  fontStyle: 'italic',
+  fontWeight: '700',
+  fontSize: 10,
+  color: C.ink,
+},
+
       sheetCard: {
   position: 'absolute',
   left: 0,
@@ -4575,59 +4582,74 @@ const shortHeaderFor = (key) => {
     'ict index',
     'clean sheet',
   ];
+// Friendly long label for a stat key (used in pickers & descriptions)
+const friendlyLabelForStat = (key) => {
+  if (!key) return '';
+  if (/^now_?cost$/i.test(key)) return 'Price';
+  if (String(key) === 'total_points') return 'Total points';
+  const s = String(key).replace(/_/g, ' ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+
 const statDefs = useMemo(() => {
   // Fallback: only show price if extended info isn’t ready yet
   if (!extendedInfo || !Array.isArray(extRanks?.keys) || !extRanks.keys.length) {
     return [
-      { key: 'now_cost', label: pretty('now_cost'),
-        format: v => (v == null || isNaN(v) ? v : +(v/10).toFixed(1)) }
+      {
+        key: 'now_cost',
+        label: friendlyLabelForStat('now_cost'),
+        format: (v) =>
+          v == null || isNaN(v) ? '—' : `£${(v / 10).toFixed(1)}`,
+      },
     ];
   }
 
-  // Helpers to map keys to your “Top Stats” canonical names
-  const ALIASES = TOP_KEY_ALIASES;      // from your file
-  const TOP     = TOP_ORDER;            // from your file
+  const ALIASES = TOP_KEY_ALIASES;
+  const TOP = TOP_ORDER;
 
   const aliasOf = (k) => {
     const lower = String(k || '').toLowerCase();
     for (const canon in ALIASES) {
       const arr = ALIASES[canon] || [];
-      if (arr.some(a => a.toLowerCase() === lower)) return canon; // e.g., "now cost"
+      if (arr.some((a) => a.toLowerCase() === lower)) return canon;
     }
     return null;
   };
 
-  // Split keys into (top-first) vs (rest)
-  const keys = Array.from(new Set(extRanks.keys)); // already numeric & rankable
+  const keys = Array.from(new Set(extRanks.keys)); // numeric & rankable
   const topKeys = [];
   const restKeys = [];
+
   for (const k of keys) {
     const canon = aliasOf(k);
     if (canon && TOP.includes(canon)) topKeys.push({ k, canon });
     else restKeys.push(k);
   }
 
-  // Order top keys by TOP_ORDER, then the rest (non-percent first, then percent-like)
-  const percentLike = (key='') => /\d/.test(key) || /ownership|tsb|pct|percent/i.test(key);
+  const percentLike = (key = '') =>
+    /\d/.test(key) || /ownership|tsb|pct|percent/i.test(key);
 
   topKeys.sort((a, b) => TOP.indexOf(a.canon) - TOP.indexOf(b.canon));
-  const restNonPct = restKeys.filter(k => !percentLike(k)).sort();
-  const restPct    = restKeys.filter(k =>  percentLike(k)).sort();
+  const restNonPct = restKeys.filter((k) => !percentLike(k)).sort();
+  const restPct = restKeys.filter((k) => percentLike(k)).sort();
 
-  const ordered = topKeys.map(t => t.k).concat(restNonPct, restPct);
+  const ordered = topKeys.map((t) => t.k).concat(restNonPct, restPct);
 
-  // Ensure price is present (prefer now_cost) and at the very front of the list
   if (!ordered.includes('now_cost')) ordered.unshift('now_cost');
 
-  // Build defs with nice labels; price shows x.y
-  return ordered.map(k => ({
+  return ordered.map((k) => ({
     key: k,
-    label: pretty(k),
-    format: (/^now_?cost$/i.test(k) || /price/i.test(k))
-      ? (v => (v == null || isNaN(v) ? v : +(v/10).toFixed(1)))
-      : undefined
+    label: friendlyLabelForStat(k),
+    format:
+      /^now_?cost$/i.test(k) || /price/i.test(k)
+        ? (v) =>
+            v == null || isNaN(v)
+              ? '—'
+              : `£${(Number(v) / 10).toFixed(1)}`
+        : undefined,
   }));
 }, [extendedInfo, extRanks]);
+
 
 
 
@@ -4647,25 +4669,67 @@ const statDefs = useMemo(() => {
  *  - Tap headers to sort; tap again to toggle asc/desc.
  *  - “Columns” button lets user add/remove columns (persisted).
  *  - Quick filters: Position (GK/DEF/MID/FWD) + search by name.
- */
-const AllPlayersStatsModal = React.memo(function AllPlayersStatsModal({
-  open, onClose, extendedInfo, playersInfo, extRanks, C,
+ *//** ------------------------------------------------------------------
+ *  AllPlayersStatsModal — ultra-fast, optimized version
+ *  - Very fast sorting + filtering (FlatList, memoized rows)
+ *  - Correct formatting: £ for prices, % for percent keys
+ *  - Search is single-line, doesn’t collapse modal when no results
+ * ------------------------------------------------------------------ */
+/**
+ * AllPlayersStatsModal — sortable table of all players with user-editable columns.
+ *  - Default columns: Price, Total Points, Form, Goals, Assists, Minutes, xG/90, DEFCON/90
+ *  - Tap headers to sort; tap again to toggle asc/desc.
+ *  - “Columns” button lets user add/remove columns (persisted).
+ *  - Quick filters: Position (GK/DEF/MID/FWD) + search by name.
+ *  - Performance trims to first 500 rows.
+ *//**
+ * AllPlayersStatsModal — sortable table of all players with user-editable columns.
+ *  - Default columns: Pts, Price, Form, Sel%, Goals, Assists, Minutes, xG/90, DEFCON/90
+ *  - Tap headers to sort; tap again to toggle asc/desc.
+ *  - Little "×" in each header to remove that column.
+ *  - “Columns” picker:
+ *      • Shows active columns (in current order) with Up/Down + Remove
+ *      • Shows available columns with "+" to add
+ *      • Order + selection persisted in AsyncStorage
+ *  - Quick filters: Position (GK/DEF/MID/FWD) + search by name.
+ *  - Italic “i” next to position opens stats modal via setStatsPid / setStatsOpen.
+ */const AllPlayersStatsModal = React.memo(function AllPlayersStatsModal({
+  open,
+  onClose,
+  extendedInfo,
+  playersInfo,
+  extRanks, // kept for possible future use
+  C,
 }) {
   if (!open) return null;
 
-  const NAME_COL_W = 120;   // ↓ from 180 → shows more columns
-const COL_MIN_W  = 50;    // ↓ from 80  → denser columns
+  const NAME_COL_W = 130;
+  const COL_MIN_W = 52;
+  const TABLE_MAX_H = Math.round(Dimensions.get('window').height * 0.6);
 
-const colWidthFor = (k) => {
-  // give price a touch more room; tweak as you like
-  
-  return Math.max(COL_MIN_W, 50);
-};
+  const colWidthFor = () => Math.max(COL_MIN_W, 52);
 
   const POS_LABELS = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
   const COLS_KEY = 'planner_allstats_columns_v1';
 
-  // Build a stable catalog of numeric/rankable stat keys (reuse your rule)
+  const isPercentish = (key = '') =>
+    key === 'selected_by_percent' ||
+    /ownership|tsb|percent|pct/i.test(key);
+
+  // Team maps
+  const teamShort = playersInfo?.teamShort || {};
+  const teamNames = playersInfo?.teamNames || playersInfo?.teamsById || {};
+
+  // Prefer full team name (Arsenal), then short (ARS), then fallback.
+  const teamLabelFor = React.useCallback(
+    (teamNum) => {
+      if (!teamNum) return '';
+      return teamNames?.[teamNum] || teamShort?.[teamNum] || `Team ${teamNum}`;
+    },
+    [teamNames, teamShort]
+  );
+
+  // Build catalog of numeric/rankable stat keys
   const catalog = React.useMemo(() => {
     const out = new Set();
     for (const [, row] of Object.entries(extendedInfo || {})) {
@@ -4674,7 +4738,6 @@ const colWidthFor = (k) => {
         if (isRankableExtKey(k, v)) out.add(k);
       }
     }
-    // ensure price key is present and spelled the way we display it
     if (!out.has('now_cost')) out.add('now_cost');
     return Array.from(out).sort();
   }, [extendedInfo]);
@@ -4682,95 +4745,167 @@ const colWidthFor = (k) => {
   const DEFAULT_COLS = [
     'total_points',
     'now_cost',
+    'form',
     'selected_by_percent',
     'goals_scored',
     'assists',
     'minutes',
-    'xg_per_90',
-    'defcon_per_90',
-  ].filter(k => catalog.includes(k)); // guard against missing keys
+    'xg_per90',
+    'defcon_per90',
+  ].filter((k) => catalog.includes(k));
 
   const [columns, setColumns] = React.useState(DEFAULT_COLS);
-  // Persist user’s columns
-  React.useEffect(() => { (async () => {
-    try {
-      const raw = await AsyncStorage.getItem(COLS_KEY);
-      if (raw) {
-        const wanted = JSON.parse(raw).filter(k => catalog.includes(k));
-        if (wanted.length) setColumns(wanted);
-      }
-    } catch {}
-  })(); }, [catalog]);
-  React.useEffect(() => { (async () => {
-    try { await AsyncStorage.setItem(COLS_KEY, JSON.stringify(columns)); } catch {}
-  })(); }, [columns]);
+
+  // Load saved columns
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem(COLS_KEY);
+        if (raw) {
+          const wanted = JSON.parse(raw).filter((k) => catalog.includes(k));
+          if (wanted.length) setColumns(wanted);
+        }
+      } catch {}
+    })();
+  }, [catalog]);
+
+  // Persist columns
+  React.useEffect(() => {
+    (async () => {
+      try {
+        await AsyncStorage.setItem(COLS_KEY, JSON.stringify(columns));
+      } catch {}
+    })();
+  }, [columns]);
 
   // Column picker modal
   const [pickerOpen, setPickerOpen] = React.useState(false);
+
   const toggleCol = (k) => {
-    setColumns(cols => (cols.includes(k) ? cols.filter(x => x !== k) : [...cols, k]));
+    setColumns((cols) =>
+      cols.includes(k) ? cols.filter((x) => x !== k) : [...cols, k],
+    );
   };
 
-  // Sort state
-  const [sortKey, setSortKey] = React.useState(columns[0] || 'now_cost');
-  const [sortDir, setSortDir] = React.useState('desc'); // 'asc' | 'desc'
+  // header “x” remove
+  const removeCol = (k) => {
+    setColumns((cols) => {
+      if (cols.length <= 1) return cols;
+      return cols.filter((x) => x !== k);
+    });
+  };
+
+  // Reorder helpers (Up/Down)
+  const moveCol = (k, dir) => {
+    setColumns((cols) => {
+      const idx = cols.indexOf(k);
+      if (idx < 0) return cols;
+      const target = idx + dir;
+      if (target < 0 || target >= cols.length) return cols;
+      const next = cols.slice();
+      const [item] = next.splice(idx, 1);
+      next.splice(target, 0, item);
+      return next;
+    });
+  };
+
+  // Sort state: default by total_points (Pts)
+  const [sortKey, setSortKey] = React.useState(
+    DEFAULT_COLS.includes('total_points')
+      ? 'total_points'
+      : (DEFAULT_COLS[0] || 'now_cost'),
+  );
+  const [sortDir, setSortDir] = React.useState('desc');
   const setSort = (k) => {
-    if (k === sortKey) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'));
-    else { setSortKey(k); setSortDir('desc'); }
+    if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(k);
+      setSortDir('desc');
+    }
   };
 
   // Filters
   const [posFilter, setPosFilter] = React.useState(null); // 1..4 or null
   const [q, setQ] = React.useState('');
+  const [teamFilter, setTeamFilter] = React.useState(null); // teamNum or null
+  const [teamPickerOpen, setTeamPickerOpen] = React.useState(false);
 
   // Helpers
   const namesById = playersInfo?.names || {};
   const types = playersInfo?.types || {};
-  const teams = playersInfo?.teams   || {}; // pid->team num (optional)
-  const teamShort = playersInfo?.teamShort || {}; // teamNum -> short (optional)
+  const teams = playersInfo?.teams || {};
 
+  // Build flat player list once
   const allRows = React.useMemo(() => {
-    // Build flat list: one row per player
     const rows = [];
     for (const [pidStr, row] of Object.entries(extendedInfo || {})) {
       const pid = Number(pidStr);
       if (!Number.isFinite(pid)) continue;
       const type = Number(types?.[pid]) || Number(row.element_type) || null;
       const name = namesById?.[pid] || row.web_name || String(pid);
-      const teamNum = Number(teams?.[pid]) || Number(row.team) || null;
-      const shortTeam = teamNum && teamShort?.[teamNum] ? teamShort[teamNum] : '';
+            const teamNum = Number(teams?.[pid]) || Number(row.team) || null;
+      const shortTeam =
+        (teams?.[pid]) || (row.team) || null;
+
+      const status = row.status || null; // FPL status
+
       rows.push({
-        pid, type, name, teamNum, shortTeam,
-        // expose raw row for fast column lookup
+        pid,
+        type,
+        name,
+        teamNum,
+        shortTeam,
+        status,
         r: row,
       });
     }
     return rows;
-  }, [extendedInfo, namesById, types, teams, teamShort]);
+  }, [extendedInfo, namesById, types, teams, teamShort, teamNames]);
 
+  // Build team options for dropdown (teamNum + label)
+  const teamOptions = React.useMemo(() => {
+    const map = new Map(); // teamNum -> label
+    for (const r of allRows) {
+      if (!r.teamNum) continue;
+      if (!map.has(r.teamNum)) {
+        map.set(r.teamNum, r.shortTeam);
+      }
+    }
+    return Array.from(map.entries()).sort((a, b) =>
+      String(a[1]).localeCompare(String(b[1])),
+    ); // [teamNum, label]
+  }, [allRows, teamLabelFor]);
+
+  // Apply filters (availability + position + team + name search)
   const filtered = React.useMemo(() => {
     const qn = q.trim().toLowerCase();
-    return allRows.filter(x => {
+    return allRows.filter((x) => {
+      // drop unavailable
+      if (x.status === 'u' || x.r?.status === 'u') return false;
+      // position filter
       if (posFilter && x.type !== posFilter) return false;
+      // team filter
+      if (teamFilter != null && x.teamNum !== teamFilter) return false;
+      // name search
       if (qn && !String(x.name).toLowerCase().includes(qn)) return false;
       return true;
     });
-  }, [allRows, posFilter, q]);
+  }, [allRows, posFilter, q, teamFilter]);
 
- 
- const valueFor = React.useCallback((row, key) => {
-   let v = row.r?.[key];
-   if (v == null) {
-     // case-insensitive fallback (handles slight spelling/casing/alias drift)
-     const lower = String(key).toLowerCase();
-     const alt = Object.keys(row.r || {}).find(k => String(k).toLowerCase() === lower);
-     if (alt) v = row.r?.[alt];
-   }
-   if (/^now_?cost$/i.test(key)) return Number(v ?? 0); // keep numeric for sort
-   const n = Number(v);
-   return Number.isFinite(n) ? n : 0;
- }, []);
-
+  // Value extractor used for sorting
+  const valueFor = React.useCallback((row, key) => {
+    let v = row.r?.[key];
+    if (v == null) {
+      const lower = String(key).toLowerCase();
+      const alt = Object.keys(row.r || {}).find(
+        (k) => String(k).toLowerCase() === lower,
+      );
+      if (alt) v = row.r?.[alt];
+    }
+    if (/^now_?cost$/i.test(key)) return Number(v ?? 0);
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }, []);
 
   const sorted = React.useMemo(() => {
     const arr = filtered.slice();
@@ -4779,54 +4914,158 @@ const colWidthFor = (k) => {
       const vb = valueFor(b, sortKey);
       return sortDir === 'asc' ? va - vb : vb - va;
     });
-    return arr;
+    return arr.slice(0, 500);
   }, [filtered, sortKey, sortDir, valueFor]);
 
-  const fmtCell = (k, v) => {
-    if (/^now_?cost$/i.test(k)) {
-      return (v == null || isNaN(v)) ? '—' : (v/10).toFixed(1);
+  // Cell formatter with £, % and compact decimals
+  const fmtCell = (k, rawV) => {
+    if (rawV == null || rawV === '') return '—';
+
+    if (/^now_?cost$/i.test(k) || /price/i.test(k)) {
+      const v = Number(rawV);
+      if (!Number.isFinite(v)) return '—';
+      const tenths = /^now_?cost$/i.test(k) ? v : v * 10;
+      return `£${(tenths / 10).toFixed(1)}`;
     }
+
+    if (isPercentish(k)) {
+      const v = Number(rawV);
+      if (!Number.isFinite(v)) return '—';
+      return `${v.toFixed(1)}%`;
+    }
+
+    const v = Number(rawV);
     if (Number.isInteger(v)) return String(v);
-    if (typeof v === 'number') return v.toFixed(2).replace(/\.00$/, '.0').replace(/\.0$/, '');
-    return String(v ?? '—');
+    if (typeof v === 'number' && !isNaN(v)) {
+      return v.toFixed(2).replace(/\.00$/, '.0').replace(/\.0$/, '');
+    }
+    return String(rawV ?? '—');
   };
 
-const HeaderCell = ({ k }) => {
-  const active = k === sortKey;
-  return (
-    <TouchableOpacity
-      onPress={() => setSort(k)}
-      style={{ paddingVertical: 6, paddingHorizontal: 6, borderRightWidth: 1, borderColor: C.border, minWidth: colWidthFor(k) }}
-    >
-      <Text style={{ color: C.ink, fontWeight: active ? '800' : '700', fontSize: 12 }}>
-   {shortHeaderFor(k)}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
- </Text>
-    </TouchableOpacity>
-  );
-};
+  const HeaderCell = ({ k }) => {
+    const active = k === sortKey;
+    return (
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          borderRightWidth: 1,
+          borderColor: C.border,
+          paddingVertical: 4,
+          paddingHorizontal: 4,
+          width: colWidthFor(k), // <-- fixed width for header
+        }}
+      >
+        <TouchableOpacity
+          onPress={() => setSort(k)}
+          style={{ flex: 1, paddingVertical: 2, paddingRight: 4 }}
+        >
+          <Text
+            style={{
+              color: C.ink,
+              fontWeight: active ? '800' : '700',
+              fontSize: 10,
+            }}
+            numberOfLines={1}
+          >
+            {shortHeaderFor(k)}
+            {active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+          </Text>
+        </TouchableOpacity>
 
+        {/* small "x" to remove column */}
+        <TouchableOpacity
+          onPress={() => removeCol(k)}
+          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          style={{ paddingHorizontal: 2, paddingVertical: 2 }}
+        >
+          <Text style={{ color: C.muted, fontSize: 10 }}>×</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   const RowCell = ({ k, row }) => {
-  const v = valueFor(row, k);
+    const v = valueFor(row, k);
+    return (
+      <View
+        style={{
+          paddingVertical: 6,
+          paddingHorizontal: 6,
+          borderRightWidth: 1,
+          borderColor: C.border,
+          width: colWidthFor(k), // <-- same fixed width for body cell
+        }}
+      >
+        <Text style={{ color: C.ink, fontSize: 11 }}>{fmtCell(k, v)}</Text>
+      </View>
+    );
+  };
+
+  // --- RENDER ---
+
   return (
-    <View style={{ paddingVertical: 6, paddingHorizontal: 6, borderRightWidth: 1, borderColor: C.border, minWidth: colWidthFor(k) }}>
-      <Text style={{ color: C.ink, fontSize: 11 }}>{fmtCell(k, v)}</Text>
-    </View>
-  );
-};
+    <View
+      pointerEvents={open ? 'auto' : 'none'}
+      style={[S.modalWrap, { display: open ? 'flex' : 'none' }]}
+    >
+      {/* backdrop */}
+      <TouchableOpacity
+        style={StyleSheet.absoluteFill}
+        activeOpacity={1}
+        onPress={onClose}
+      />
 
-
-  return (
-    <View pointerEvents={open ? 'auto' : 'none'} style={[S.modalWrap, { display: open ? 'flex' : 'none' }]}>
-      <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-
-      <View style={{ backgroundColor: C.card, borderRadius: 14, padding: 10, maxHeight: Math.round(Dimensions.get('window').height * 0.86) }}>
+      <View
+        style={{
+          backgroundColor: C.card,
+          borderRadius: 14,
+          padding: 10,
+          maxHeight: Math.round(Dimensions.get('window').height * 0.86),
+          alignSelf: 'stretch',
+          marginHorizontal: 12,
+        }}
+      >
         {/* Title + actions */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent:'space-between', marginBottom: 8 }}>
-          <Text style={{ color: C.ink, fontWeight: '800', fontSize: 16 }}>All Players — Stats</Text>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 8,
+          }}
+        >
+          <Text style={{ color: C.ink, fontWeight: '800', fontSize: 16 }}>
+            Stats
+          </Text>
           <View style={{ flexDirection: 'row', gap: 8 }}>
-            <TouchableOpacity onPress={() => setPickerOpen(true)} style={S.smallBtn}>
-              <MaterialCommunityIcons name="view-column" size={14} color={C.ink} />
+            {/* Team dropdown */}
+            <TouchableOpacity
+              onPress={() => setTeamPickerOpen(true)}
+              style={S.smallBtn}
+            >
+              <MaterialCommunityIcons
+                name="shield-outline"
+                size={14}
+                color={C.ink}
+              />
+              <Text style={S.smallBtnTxt}>
+                {teamFilter == null
+                  ? 'All teams'
+                  : (teamOptions.find(([num]) => num === teamFilter)?.[1] ||
+                     teamLabelFor(teamFilter))}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setPickerOpen(true)}
+              style={S.smallBtn}
+            >
+              <MaterialCommunityIcons
+                name="view-column"
+                size={14}
+                color={C.ink}
+              />
               <Text style={S.smallBtnTxt}>Columns</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={onClose} style={S.smallBtn}>
@@ -4837,8 +5076,15 @@ const HeaderCell = ({ k }) => {
         </View>
 
         {/* Filters row */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-          {([null,1,2,3,4]).map(p => {
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 8,
+          }}
+        >
+          {[null, 1, 2, 3, 4].map((p) => {
             const active = posFilter === p;
             const label = p == null ? 'All' : POS_LABELS[p];
             return (
@@ -4846,102 +5092,438 @@ const HeaderCell = ({ k }) => {
                 key={String(p)}
                 onPress={() => setPosFilter(p)}
                 style={{
-                  paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 999,
                   backgroundColor: active ? C.ink : 'transparent',
-                  borderWidth: active ? 0 : 1, borderColor: C.border
+                  borderWidth: active ? 0 : 1,
+                  borderColor: C.border,
                 }}
               >
-                <Text style={{ color: active ? C.card : C.ink, fontWeight: '700', fontSize: 12 }}>{label}</Text>
+                <Text
+                  style={{
+                    color: active ? C.card : C.ink,
+                    fontWeight: '700',
+                    fontSize: 12,
+                  }}
+                >
+                  {label}
+                </Text>
               </TouchableOpacity>
             );
           })}
           <View style={{ flex: 1 }} />
-          <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, borderWidth: 1, borderColor: C.border, minWidth: 160 }}>
-            <Text style={{ color: C.muted, fontSize: 11, marginBottom: 2 }}>Search</Text>
+          {/* Single-line search pill */}
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: C.border,
+              paddingHorizontal: 10,
+              height: 32,
+              minWidth: 120,
+            }}
+          >
+            <MaterialCommunityIcons
+              name="magnify"
+              size={14}
+              color={C.muted}
+              style={{ marginRight: 6 }}
+            />
             <ThemedTextInput
               value={q}
               onChangeText={setQ}
-              placeholder="Player name…"
+              placeholder="Search"
               placeholderTextColor={C.muted}
-              style={{ height: 28, color: C.ink, fontSize: 12, padding: 0 }}
+              style={{
+                flex: 1,
+                height: '100%',
+                paddingVertical: 0,
+                paddingHorizontal: 0,
+                color: C.ink,
+                fontSize: 10,
+                textAlignVertical: 'center',
+              }}
               returnKeyType="search"
             />
           </View>
         </View>
 
         {/* Table */}
-        <ScrollView horizontal bounces={false} style={{ borderWidth: 1, borderColor: C.border, borderRadius: 10 }}>
+        <ScrollView
+          horizontal
+          bounces={false}
+          style={{
+            borderWidth: 1,
+            borderColor: C.border,
+            borderRadius: 10,
+          }}
+        >
           <View>
             {/* Header */}
             <View style={{ flexDirection: 'row', backgroundColor: C.bg }}>
-              {/* frozen left identity block */}
-              <View style={{ width: NAME_COL_W, borderRightWidth: 1, borderColor: C.border, paddingVertical: 8, paddingHorizontal: 8 }}>
-                <Text style={{ color: C.muted, fontWeight: '700', fontSize: 12 }}>Player</Text>
+              <View
+                style={{
+                  width: NAME_COL_W,
+                  borderRightWidth: 1,
+                  borderColor: C.border,
+                  paddingVertical: 8,
+                  paddingHorizontal: 8,
+                }}
+              >
+                <Text
+                  style={{
+                    color: C.muted,
+                    fontWeight: '700',
+                    fontSize: 12,
+                  }}
+                >
+                  Player
+                </Text>
               </View>
-              {columns.map(k => <HeaderCell key={k} k={k} />)}
+              {columns.map((k) => (
+                <HeaderCell key={k} k={k} />
+              ))}
             </View>
 
-            {/* Body (virtualized by chunks to stay light) */}
-            <ScrollView style={{ maxHeight: Math.round(Dimensions.get('window').height * 0.6) }}>
-              {sorted.map(row => (
-  <View key={row.pid} style={{ flexDirection: 'row', borderTopWidth: 1, borderColor: C.border }}>
-    {/* frozen identity (REPLACED) */}
-    <View style={{ width: NAME_COL_W, borderRightWidth: 1, borderColor: C.border, paddingVertical: 6, paddingHorizontal: 6 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <Image
-          source={{ uri: clubCrestUri?.(row.teamNum) }}
-          style={{ width: 18, height: 18, marginRight: 6, borderRadius: 3 }}
-          resizeMode="contain"
-        />
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: C.ink, fontWeight: '700', fontSize: 11 }} numberOfLines={1}>
-            {row.name}
-          </Text>
-          <Text style={{ color: C.muted, fontSize: 10 }}>
-            {POS_LABELS[row.type] || '?'} 
-          </Text>
-        </View>
-      </View>
-    </View>
+            {/* Body with fixed min height (no collapsing when empty) */}
+            <View
+              style={{
+                maxHeight: TABLE_MAX_H,
+                minHeight: 140,
+              }}
+            >
+              {sorted.length === 0 ? (
+                <View
+                  style={{
+                    flex: 1,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 16,
+                  }}
+                >
+                  <Text style={{ color: C.muted, fontSize: 13 }}>
+                    No players match your filters.
+                  </Text>
+                </View>
+              ) : (
+                <ScrollView>
+                  {sorted.map((row) => (
+                    <View
+                      key={row.pid}
+                      style={{
+                        flexDirection: 'row',
+                        borderTopWidth: 1,
+                        borderColor: C.border,
+                      }}
+                    >
+                      {/* frozen identity */}
+                      <View
+                        style={{
+                          width: NAME_COL_W,
+                          borderRightWidth: 1,
+                          borderColor: C.border,
+                          paddingVertical: 6,
+                          paddingHorizontal: 6,
+                        }}
+                      >
+                        <View
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <Image
+                            source={{
+                              uri: clubCrestUri?.(row.teamNum),
+                            }}
+                            style={{
+                              width: 18,
+                              height: 18,
+                              marginRight: 6,
+                              borderRadius: 3,
+                            }}
+                            resizeMode="contain"
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text
+                              style={{
+                                color: C.ink,
+                                fontWeight: '700',
+                                fontSize: 11,
+                              }}
+                              numberOfLines={1}
+                            >
+                              {row.name}
+                            </Text>
 
-    {columns.map(k => <RowCell key={k} k={k} row={row} />)}
-  </View>
-))}
+                            {/* Position + team + italic stats "i" */}
+                            <View
+                              style={{
+                                flexDirection: 'row',
+                                alignItems: 'center',
+                              }}
+                            >
+                              <Text
+                                style={{ color: C.muted, fontSize: 10 }}
+                                numberOfLines={1}
+                              >
+                                {(POS_LABELS[row.type] || '?') +
+                                  ''}
+                              </Text>
+                              <TouchableOpacity
+                                onPress={() => {
+                                  setStatsPid(row.pid);
+                                  setStatsOpen(true);
+                                }}
+                                hitSlop={{
+                                  top: 6,
+                                  bottom: 6,
+                                  left: 6,
+                                  right: 6,
+                                }}
+                                style={{ marginLeft: 6 }}
+                              >
+                                <Text style={S.rItalicI2}>i</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+                        </View>
+                      </View>
 
-            </ScrollView>
+                      {columns.map((k) => (
+                        <RowCell key={k} k={k} row={row} />
+                      ))}
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
           </View>
         </ScrollView>
 
-        {/* Column picker */}
-        <Modal visible={pickerOpen} transparent animationType="fade" onRequestClose={() => setPickerOpen(false)}>
-          <View style={{ flex:1, backgroundColor:'rgba(0,0,0,0.35)', justifyContent:'center', padding:20 }}>
-            <View style={{ backgroundColor: C.card, borderRadius: 14, padding: 12, maxHeight: 420, width: '100%' }}>
-              <Text style={{ color: C.ink, fontWeight:'800', fontSize:14, marginBottom: 6 }}>Choose columns</Text>
-              <ScrollView style={{ maxHeight: 340 }}>
-                {catalog.map(k => {
-                  const active = columns.includes(k);
+        {/* Column picker with reorder (Up/Down) */}
+        <Modal
+          visible={pickerOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPickerOpen(false)}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: 'rgba(0,0,0,0.35)',
+              justifyContent: 'center',
+              padding: 20,
+            }}
+          >
+            <View
+              style={{
+                backgroundColor: C.card,
+                borderRadius: 14,
+                padding: 12,
+                maxHeight: 480,
+                width: '100%',
+              }}
+            >
+              {/* Active columns (reorder via Up/Down) */}
+              <Text
+                style={{
+                  color: C.ink,
+                  fontWeight: '800',
+                  fontSize: 14,
+                  marginBottom: 4,
+                }}
+              >
+                Active columns (order)
+              </Text>
+              <ScrollView style={{ maxHeight: 220 }}>
+                {columns.map((k, idx) => {
+                  const canMoveUp = idx > 0;
+                  const canMoveDown = idx < columns.length - 1;
+                  const canRemove = columns.length > 1;
                   return (
-                    <TouchableOpacity
-                      key={k}
-                      onPress={() => toggleCol(k)}
-                      style={{ paddingVertical: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+                    <View
+                      key={`active-${k}`}
+                      style={{
+                        paddingVertical: 6,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                      }}
                     >
-                      <Text style={{ color: active ? C.ink : C.ink, fontSize: 13 }}>{pretty(k)}</Text>
-                      <Text style={{ color: active ? C.accent : C.muted, fontWeight: '700' }}>{active ? '✓' : '+'}</Text>
-                    </TouchableOpacity>
+                      <Text
+                        style={{
+                          flex: 1,
+                          color: C.ink,
+                          fontSize: 13,
+                        }}
+                        numberOfLines={1}
+                      >
+                        {pretty(k)}
+                      </Text>
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 4,
+                        }}
+                      >
+                        {/* Up */}
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (canMoveUp) moveCol(k, -1);
+                          }}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          style={[
+                            S.smallBtn,
+                            {
+                              paddingHorizontal: 6,
+                              paddingVertical: 4,
+                              opacity: canMoveUp ? 1 : 0.35,
+                            },
+                          ]}
+                        >
+                          <MaterialCommunityIcons
+                            name="chevron-up"
+                            size={14}
+                            color={C.ink}
+                          />
+                        </TouchableOpacity>
+
+                        {/* Down */}
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (canMoveDown) moveCol(k, +1);
+                          }}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          style={[
+                            S.smallBtn,
+                            {
+                              paddingHorizontal: 6,
+                              paddingVertical: 4,
+                              opacity: canMoveDown ? 1 : 0.35,
+                            },
+                          ]}
+                        >
+                          <MaterialCommunityIcons
+                            name="chevron-down"
+                            size={14}
+                            color={C.ink}
+                          />
+                        </TouchableOpacity>
+
+                        {/* Remove */}
+                        <TouchableOpacity
+                          onPress={() => {
+                            if (canRemove) toggleCol(k);
+                          }}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                          style={[
+                            S.smallBtn,
+                            {
+                              paddingHorizontal: 6,
+                              paddingVertical: 4,
+                              borderColor: '#ef4444',
+                              opacity: canRemove ? 1 : 0.35,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={{
+                              color: '#ef4444',
+                              fontWeight: '700',
+                              fontSize: 11,
+                            }}
+                          >
+                            Remove
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
                   );
                 })}
               </ScrollView>
-              <TouchableOpacity onPress={() => setPickerOpen(false)} style={{ alignSelf:'flex-end', marginTop: 8 }}>
-                <Text style={{ color: C.accent, fontWeight: '700' }}>Done</Text>
+
+              {/* Available columns */}
+              <Text
+                style={{
+                  color: C.ink,
+                  fontWeight: '800',
+                  fontSize: 14,
+                  marginTop: 8,
+                  marginBottom: 4,
+                }}
+              >
+                Add more columns
+              </Text>
+              <ScrollView style={{ maxHeight: 160 }}>
+                {catalog
+                  .filter((k) => !columns.includes(k))
+                  .map((k) => (
+                    <TouchableOpacity
+                      key={`avail-${k}`}
+                      onPress={() => toggleCol(k)}
+                      style={{
+                        paddingVertical: 6,
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <Text
+                        style={{ color: C.ink, fontSize: 13 }}
+                        numberOfLines={1}
+                      >
+                        {pretty(k)}
+                      </Text>
+                      <Text
+                        style={{
+                          color: C.accent,
+                          fontWeight: '700',
+                        }}
+                      >
+                        +
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+              </ScrollView>
+
+              <TouchableOpacity
+                onPress={() => setPickerOpen(false)}
+                style={{ alignSelf: 'flex-end', marginTop: 8 }}
+              >
+                <Text style={{ color: C.accent, fontWeight: '700' }}>
+                  Done
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </Modal>
+
+        {/* Team picker dropdown (MiniSelectModal) */}
+        <MiniSelectModal
+          visible={teamPickerOpen}
+          title="Filter by team"
+          C={C}
+          options={[
+            { label: 'All teams', value: null },
+            ...teamOptions.map(([tn, label]) => ({
+              label,
+              value: tn,
+            })),
+          ]}
+          selected={teamFilter}
+          onSelect={(val) => setTeamFilter(val == null ? null : Number(val))}
+          onClose={() => setTeamPickerOpen(false)}
+        />
       </View>
     </View>
   );
 });
+
+
 
  // ---------- Transfer Market: true Modal + keyboard-safe UX ----------
 
