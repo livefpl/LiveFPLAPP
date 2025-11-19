@@ -8,8 +8,8 @@
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "1.1.4",
-"runtimeVersion": "1.1.4",
+    "version": "1.1.5",
+"runtimeVersion": "1.1.5",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {
@@ -30,6 +30,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.pocketgamerguides.livefpl",
       "infoPlist": {
+	"GADIsAdManagerApp": true,
         "ITSAppUsesNonExemptEncryption": false,
 	"GADApplicationIdentifier": "ca-app-pub-6531503260671471~4892993394",
         "NSUserTrackingUsageDescription": "This identifier is used to show you relevant, less intrusive ads and to measure ad performance."
@@ -47,6 +48,7 @@
       }
     },
     "plugins": [
+	"./plugins/withPrebidPodWorkaround",
       "expo-font",
       "expo-tracking-transparency",
       [
@@ -636,7 +638,7 @@
         }
       ],
       "expo-asset"
-    ],
+    ]
     
   }
 }

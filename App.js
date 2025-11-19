@@ -4,7 +4,6 @@ import {
   View,
   StyleSheet,
   StatusBar,
-  Platform,
   TouchableOpacity,
   Text as RNText,
 } from 'react-native';
@@ -19,7 +18,6 @@ import { setTrigger, setConfig, bump } from './meter';
 import { showOnce } from './AdInterstitial';
 import { ThemeProvider, useTheme, useColors } from './theme';
 import { Text, TextInput } from 'react-native';
-import { getTrackingPermissionsAsync, requestTrackingPermissionsAsync } from 'expo-tracking-transparency';
 
 Text.defaultProps = Text.defaultProps || {};
 Text.defaultProps.allowFontScaling = false;
@@ -241,26 +239,19 @@ function MyTabs() {
 }
 
 /* -------- Root navigation (needs theme) -------- */
-function RootNavigation({ navRef, onReady, onStateChange, attStatus }) {
+function RootNavigation({ navRef, onReady, onStateChange }) {
   const { navTheme } = useTheme();
-  const C = useColors();
   const isDark = navTheme?.dark;
 
   return (
     <>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-      {/* Tiny non-interactive ATT badge */}
-      <View
-        pointerEvents="none"
-        style={[
-          styles.attBadge,
-          { backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)', borderColor: C.border },
-        ]}
+      <NavigationContainer
+        ref={navRef}
+        onReady={onReady}
+        onStateChange={onStateChange}
+        theme={navTheme}
       >
-        <Text style={{ fontSize: 11, fontWeight: '800', color: C.ink }}>ATT: {attStatus}</Text>
-      </View>
-
-      <NavigationContainer ref={navRef} onReady={onReady} onStateChange={onStateChange} theme={navTheme}>
         <MyTabs />
       </NavigationContainer>
     </>
@@ -269,36 +260,16 @@ function RootNavigation({ navRef, onReady, onStateChange, attStatus }) {
 
 /* ------------------------ App ------------------------ */
 export default function App() {
-useEffect(() => {
+  useEffect(() => {
     // Pull from app.json extra (or hardcode if you prefer)
-    const publisherId = process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID || require('./app.json').expo.extra.playwire.publisherId;
-    const iosAppId    = process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID     || require('./app.json').expo.extra.playwire.iosAppId;
-    const androidAppId= process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID  || require('./app.json').expo.extra.playwire.androidAppId;
+    const publisherId  = process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID  || require('./app.json').expo.extra.playwire.publisherId;
+    const iosAppId     = process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID     || require('./app.json').expo.extra.playwire.iosAppId;
+    const androidAppId = process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID || require('./app.json').expo.extra.playwire.androidAppId;
     initPlaywire({ publisherId, iosAppId, androidAppId });
   }, []);
 
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
-
-  const [attStatus, setAttStatus] = React.useState(Platform.OS === 'ios' ? 'checking…' : 'N/A');
-
-  React.useEffect(() => {
-    (async () => {
-      try {
-        if (Platform.OS !== 'ios') return;
-        const first = await getTrackingPermissionsAsync();
-        setAttStatus(first?.status ?? 'unknown');
-
-        if (first?.status === 'undetermined' || (first?.status === 'denied' && first?.canAskAgain)) {
-          await new Promise(r => setTimeout(r, 400));
-          const after = await requestTrackingPermissionsAsync();
-          setAttStatus(after?.status ?? 'unknown');
-        }
-      } catch {
-        setAttStatus('unavailable');
-      }
-    })();
-  }, []);
 
   const onReady = () => {
     prevRouteNameRef.current = navRef.current?.getCurrentRoute?.()?.name ?? null;
@@ -314,7 +285,11 @@ useEffect(() => {
 
   return (
     <ThemeProvider>
-      <ForceUpdateGate localBuild={LOCAL_BUILD} configUrl={CONFIG_URL} defaultRemote={DEFAULT_REMOTE_VERSION}>
+      <ForceUpdateGate
+        localBuild={LOCAL_BUILD}
+        configUrl={CONFIG_URL}
+        defaultRemote={DEFAULT_REMOTE_VERSION}
+      >
         <FplIdProvider>
           <ThemeProvider>
             <ProProvider>
@@ -322,7 +297,6 @@ useEffect(() => {
                 navRef={navRef}
                 onReady={onReady}
                 onStateChange={onStateChange}
-                attStatus={attStatus}
               />
             </ProProvider>
           </ThemeProvider>
@@ -333,18 +307,6 @@ useEffect(() => {
 }
 
 const styles = StyleSheet.create({
-  attBadge: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    zIndex: 9999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: StyleSheet.hairlineWidth,
-    display: 'none',
-  },
-
   // Click-away layer above the card (keeps navbar fully touchable)
   clickAway: {
     position: 'absolute',
