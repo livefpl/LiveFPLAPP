@@ -51,7 +51,7 @@
     "plugins": [
 	"./plugins/withPrebidPodWorkaround",
       "expo-font",
-      "expo-vector-icons",
+      
       "expo-tracking-transparency",
       [
         "./plugins/with-playwire",
