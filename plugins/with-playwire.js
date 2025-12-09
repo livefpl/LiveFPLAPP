@@ -3,6 +3,8 @@ const {
   withInfoPlist,
   withAndroidManifest,
   withDangerousMod,
+  withProjectBuildGradle,
+  withAppBuildGradle,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
 const fs = require('fs');
@@ -16,7 +18,8 @@ const pkg = { name: 'with-playwire', version: '1.0.0' };
  *   gadApplicationId: "<iOS Google Ad Manager app id>",
  *   androidApplicationId: "<Android Google Ad Manager app id>",
  *   adManagerApp: true, // default true
- *   skadItems: [ { SKAdNetworkIdentifier: "xxxxxx.skadnetwork" }, ... ]
+ *   skadItems: [ { SKAdNetworkIdentifier: "xxxxxx.skadnetwork" }, ... ],
+ *   githubUser: "<your GitHub username for Playwire Maven>"
  * }
  */
 const withPlaywire = (config, options = {}) => {
@@ -27,7 +30,7 @@ const withPlaywire = (config, options = {}) => {
   config = withInfoPlist(config, (c) => {
     const info = c.modResults;
 
-    // GADApplicationIdentifier – required by Sherry
+    // GADApplicationIdentifier
     if (opts.gadApplicationId) {
       info.GADApplicationIdentifier = opts.gadApplicationId;
     }
@@ -99,8 +102,6 @@ const withPlaywire = (config, options = {}) => {
       let contents = await fs.promises.readFile(podfilePath, 'utf8');
 
       // 1) Ensure sources at the top:
-      //    source 'https://github.com/CocoaPods/Specs.git'
-      //    source 'https://github.com/intergi/playwire-ios-podspec'
       const cocoaSource =
         "source 'https://github.com/CocoaPods/Specs.git'";
       const playwireSource =
@@ -131,7 +132,6 @@ const withPlaywire = (config, options = {}) => {
       if (targetRegex.test(contents) && !hasAppLovinAdapter) {
         contents = contents.replace(targetRegex, (match) => {
           // Insert the mediation adapter right after the target line
-          // No explicit version so CocoaPods resolves the latest compatible.
           return `${match}\n  pod 'GoogleMobileAdsMediationAppLovin'`;
         });
       }
@@ -140,6 +140,86 @@ const withPlaywire = (config, options = {}) => {
       return c;
     },
   ]);
+
+  /* ---------- ANDROID: project-level Gradle (maven repos) ---------- */
+  config = withProjectBuildGradle(config, (c) => {
+    const mod = c.modResults;
+    if (mod.language !== 'groovy') return c;
+
+    let contents = mod.contents;
+
+    const marker = 'maven.pkg.github.com/intergi/playwire-android-binaries';
+    if (contents.includes(marker)) {
+      // Already injected
+      return c;
+    }
+
+    const githubUser = opts.githubUser || 'CHANGE_ME_GITHUB_USERNAME';
+
+    const repoBlock = `
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/intergi/playwire-android-binaries")
+            credentials {
+                username = "${githubUser}"
+                password = System.getenv("GITHUB_TOKEN") ?: ""
+            }
+        }
+
+        maven {
+            url 'https://android-sdk.is.com/'
+        }
+        maven {
+            url 'https://artifact.bytedance.com/repository/pangle/'
+        }
+        maven {
+            url 'https://cboost.jfrog.io/artifactory/chartboost-ads/'
+        }
+        maven {
+            url 'https://dl-maven-android.mintegral.com/repository/mbridge_android_sdk_oversea'
+        }
+        maven {
+            url 'https://repo.pubmatic.com/artifactory/public-repos/'
+        }
+        maven {
+            url 'https://maven.ogury.co'
+        }
+        maven {
+            url 'https://s3.amazonaws.com/smaato-sdk-releases/'
+        }
+        maven {
+            url 'https://verve.jfrog.io/artifactory/verve-gradle-release'
+        }
+`;
+
+    contents = contents.replace(
+      /allprojects\s*{\s*repositories\s*{/,
+      (match) => `${match}${repoBlock}`
+    );
+
+    mod.contents = contents;
+    return c;
+  });
+
+  /* ---------- ANDROID: app-level Gradle (Playwire dependency) ---------- */
+  config = withAppBuildGradle(config, (c) => {
+    const mod = c.modResults;
+    if (mod.language !== 'groovy') return c;
+
+    let contents = mod.contents;
+
+    if (!contents.includes('com.intergi.playwire:playwiresdk_total:11.6.0')) {
+      contents = contents.replace(
+        /dependencies\s*{/,
+        (match) =>
+          `${match}
+    implementation("com.intergi.playwire:playwiresdk_total:11.6.0")`
+      );
+    }
+
+    mod.contents = contents;
+    return c;
+  });
 
   return config;
 };

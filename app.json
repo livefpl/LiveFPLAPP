@@ -14,7 +14,7 @@
     "icon": "./icon.png",
     "android": {
       "package": "com.pocketgamerguides.livefpl",
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./adaptive-foreground-1024.png",
         "backgroundImage": "./adaptive-background-1024.png"
@@ -44,12 +44,14 @@
       "playwire": {
         "publisherId": "1025271",
         "iosAppId": "704",
-        "androidAppId": "726"
+        "androidAppId": "726",
+        "githubUser": "livefpl"
       }
     },
     "plugins": [
 	"./plugins/withPrebidPodWorkaround",
       "expo-font",
+      "expo-vector-icons",
       "expo-tracking-transparency",
       [
         "./plugins/with-playwire",
