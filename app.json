@@ -8,8 +8,8 @@
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "1.1.5",
-"runtimeVersion": "1.1.5",
+    "version": "1.2.0",
+"runtimeVersion": "1.2.0",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {
@@ -44,7 +44,7 @@
       "playwire": {
         "publisherId": "1025271",
         "iosAppId": "704",
-        "androidAppId": "704"
+        "androidAppId": "726"
       }
     },
     "plugins": [
@@ -55,7 +55,7 @@
         "./plugins/with-playwire",
         {
           "gadApplicationId": "ca-app-pub-6531503260671471~4892993394",
-          "androidApplicationId": "ca-app-pub-6531503260671471~4892993394",
+          "androidApplicationId": "ca-app-pub-6531503260671471~2921270248",
           "adManagerApp": true,
           "skadItems": [
             {

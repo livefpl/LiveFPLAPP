@@ -111,13 +111,17 @@ export default function PaywallScreen(props) {
     setTimeout(() => setCopied(false), 1200);
   };
 
-  const disabledReason = useMemo(() => {
-    if (isExpoGo) return 'Not available in Expo Go';
-    if (!isIOS) return 'Google Play billing not enabled yet.';
-    if (!isReady) return 'Loading products…';
-    if (!offerings?.current) return 'No current offering configured.';
-    return null;
-  }, [isExpoGo, isIOS, isReady, offerings]);
+ const disabledReason = useMemo(() => {
+  if (isExpoGo) return 'Not available in Expo Go';
+  if (!isReady) return 'Loading products…';
+  if (!offerings?.current) return 'No current offering configured.';
+
+  // If offerings are loaded but no products, show a generic message
+  if (!monthlyPkg && !annualPkg) return 'No subscription products available on this store.';
+
+  return null;
+}, [isExpoGo, isReady, offerings, monthlyPkg, annualPkg]);
+
 
   const buyMonthly = async () => {
     if (!monthlyPkg) return;
@@ -312,7 +316,7 @@ export default function PaywallScreen(props) {
 
 
           <Text style={[styles.disclaimer, { color: C.muted }]}>
-            Payments are processed by Apple. Subscriptions auto-renew; cancel any time in store.
+            Payments are processed by the store. Subscriptions auto-renew; cancel any time in store.
           </Text>
         </View>
       </ScrollView>

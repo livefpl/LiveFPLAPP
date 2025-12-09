@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 import { Playwire } from '@intergi/react-native-playwire-sdk';
 
 // TEMPORARY: always use Playwire test mode until real demand is live
-Playwire.setTest(true);
+//Playwire.setTest(true);
 Playwire.startConsoleLogger();
 
 export function initPlaywire({ publisherId, iosAppId, androidAppId }) {

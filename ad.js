@@ -12,7 +12,7 @@ const AD_ALIAS = 'banner-320x50';
 const TIMEOUT_MS = 18000;
 
 // Toggle this to false later when you're done debugging
-const DEBUG_AD = true;
+const DEBUG_AD = false;
 
 export default function AdFooter({ slot = 'Default' }) {
   const C = useColors();

@@ -3,8 +3,9 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import { Platform } from 'react-native';
 import Purchases from 'react-native-purchases';
 
-const RC_IOS_API_KEY = 'appl_zPaSWIBhQoVcwHkPKVkiQdHwpel'; // <-- paste from RevenueCat dashboard
-const ENTITLEMENT_ID = 'Premium';                          // <-- the entitlement you created
+const RC_IOS_API_KEY = 'appl_zPaSWIBhQoVcwHkPKVkiQdHwpel'; // from RevenueCat dashboard
+const RC_ANDROID_API_KEY = 'goog_rqtovVYQnMRFKqrGyvDijZortxM'; // <-- TODO: paste your Android key here
+const ENTITLEMENT_ID = 'Premium'; // the entitlement you created in RC
 
 const ProCtx = createContext({
   isReady: false,
@@ -25,39 +26,51 @@ export function ProProvider({ children }) {
 
     (async () => {
       try {
-        if (Platform.OS === 'ios') {
-          await Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
-          await Purchases.configure({ apiKey: RC_IOS_API_KEY });
+        await Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
 
-          // Initial read
-          const info = await Purchases.getCustomerInfo();
-          if (mounted) setIsPro(Boolean(info.entitlements.active[ENTITLEMENT_ID]));
+        const apiKey = Platform.select({
+          ios: RC_IOS_API_KEY,
+          android: RC_ANDROID_API_KEY,
+        });
 
-          // Offerings
-          const offs = await Purchases.getOfferings();
-          if (mounted) setOfferings(offs);
-        } else {
-          // Android not set up yet → always not pro
+        // If for some reason we don't have a key for this platform, just bail out gracefully
+        if (!apiKey) {
+          console.warn('No RevenueCat API key configured for this platform.');
           if (mounted) {
             setIsPro(false);
             setOfferings(null);
           }
+          return;
+        }
+
+        await Purchases.configure({ apiKey });
+
+        // Initial customer info
+        const info = await Purchases.getCustomerInfo();
+        if (mounted) {
+          setIsPro(Boolean(info.entitlements.active[ENTITLEMENT_ID]));
+        }
+
+        // Offerings
+        const offs = await Purchases.getOfferings();
+        if (mounted) {
+          setOfferings(offs);
         }
       } catch (e) {
-        // keep minimal: fail closed (non-pro) and continue
         console.warn('RevenueCat init error', e);
+        if (mounted) {
+          setIsPro(false);
+          setOfferings(null);
+        }
       } finally {
         if (mounted) setIsReady(true);
       }
     })();
 
-    // Listen for changes (receipt refresh / account changes)
-    const removeListener =
-      Platform.OS === 'ios'
-        ? Purchases.addCustomerInfoUpdateListener((info) => {
-            setIsPro(Boolean(info.entitlements.active[ENTITLEMENT_ID]));
-          })
-        : () => {};
+    // Listen for changes on *both* platforms now
+    const removeListener = Purchases.addCustomerInfoUpdateListener((info) => {
+      setIsPro(Boolean(info.entitlements.active[ENTITLEMENT_ID]));
+    });
 
     return () => {
       mounted = false;
@@ -66,15 +79,12 @@ export function ProProvider({ children }) {
   }, []);
 
   const getPkgById = (pkgIdGuess) => {
-    // Try to find monthly/annual from "current" offering if present.
-    // Fallbacks allow different offering identifiers.
     if (!offerings?.current) return null;
     const pkgs = offerings.current.availablePackages || [];
-    // Try RevenueCat canonical identifiers first
+
     const byIdentifier = pkgs.find((p) => p.identifier === pkgIdGuess);
     if (byIdentifier) return byIdentifier;
 
-    // Fallback: try by package type (MONTHLY/ANNUAL)
     if (pkgIdGuess === 'monthly') {
       return pkgs.find((p) => p.packageType === 'MONTHLY') || null;
     }
