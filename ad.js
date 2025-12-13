@@ -4,6 +4,7 @@ import { View, Text, StyleSheet } from 'react-native';
 import { useColors } from './theme';
 import { usePro } from './ProContext';
 import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
+import { subscribeInterstitialStatus, getInterstitialStatus } from './AdInterstitial';
 
 export const AD_FOOTER_HEIGHT = 50;
 
@@ -12,38 +13,29 @@ const AD_ALIAS = 'banner-320x50';
 const TIMEOUT_MS = 18000;
 
 // Toggle this to false later when you're done debugging
-const DEBUG_AD = false;
+const DEBUG_AD = true;
 
 export default function AdFooter({ slot = 'Default' }) {
   const C = useColors();
   const { isPro } = usePro();
 
-  // If Pro and not debugging, show "no ads" message and bail out early
+  // If Pro and not debugging, remove the footer entirely
   const skipAdForPro = isPro && !DEBUG_AD;
-
-  if (skipAdForPro) {
-    const styles = StyleSheet.create({
-      container: {
-        height: AD_FOOTER_HEIGHT,
-        backgroundColor: C.card,
-        borderTopWidth: 1,
-        borderTopColor: C.border,
-        alignItems: 'center',
-        justifyContent: 'center',
-      },
-      text: { fontSize: 12, color: C.muted },
-    });
-    return (
-      <View style={styles.container}>
-        <Text style={styles.text}>Ads disabled (Pro)</Text>
-      </View>
-    );
-  }
+  if (skipAdForPro) return null;
 
   /** ---------------- ADS MODE (Debuggable) ---------------- */
   const [phase, setPhase] = useState('loading'); // 'loading' | 'loaded' | 'failed'
   const [debugMessage, setDebugMessage] = useState('Banner created; waiting for callbacks…');
   const timeoutRef = useRef(null);
+
+  // Interstitial debug status (only updates when DEBUG_AD is true)
+  const [iStatus, setIStatus] = useState(() => getInterstitialStatus());
+
+  useEffect(() => {
+    if (!DEBUG_AD) return;
+    const unsub = subscribeInterstitialStatus(setIStatus);
+    return unsub;
+  }, []);
 
   const styles = useMemo(
     () =>
@@ -76,7 +68,6 @@ export default function AdFooter({ slot = 'Default' }) {
           textAlign: 'center',
           marginBottom: 2,
         },
-        // We’ll tweak the border color by phase below
         phaseBorder_loading: {
           borderWidth: 1,
           borderColor: '#8888',
@@ -99,7 +90,6 @@ export default function AdFooter({ slot = 'Default' }) {
     if (phase !== 'loading') return;
 
     timeoutRef.current = setTimeout(() => {
-      // Only flip to failed if we *still* haven't loaded
       setPhase((prev) => {
         if (prev === 'loading') {
           const msg = 'Timeout: no response from ad server.';
@@ -140,7 +130,6 @@ export default function AdFooter({ slot = 'Default' }) {
     console.log('[Playwire] Banner onAdFailedToLoad for adUnitId:', adUnitId);
   };
 
-  // Choose border style based on phase
   const borderStyle =
     phase === 'loaded'
       ? styles.phaseBorder_loaded
@@ -150,10 +139,17 @@ export default function AdFooter({ slot = 'Default' }) {
 
   return (
     <View style={[styles.container, borderStyle]}>
-      {/* Debug line always visible */}
+      {/* Banner debug line always visible */}
       <Text style={styles.debugText}>
         [Ad debug] phase={phase} | slot={slot} | alias={AD_ALIAS}
       </Text>
+
+      {/* Interstitial debug line (only when DEBUG_AD is true) */}
+      {DEBUG_AD ? (
+        <Text style={styles.debugText}>
+          [Int] {iStatus.phase} | ready={String(iStatus.ready)} | loading={String(iStatus.loading)} | err={iStatus.lastError || '-'}
+        </Text>
+      ) : null}
 
       {phase === 'failed' ? (
         <Text style={styles.text}>
