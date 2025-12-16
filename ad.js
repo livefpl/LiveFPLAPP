@@ -1,10 +1,16 @@
 // ad.js
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { useColors } from './theme';
 import { usePro } from './ProContext';
 import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
-import { subscribeInterstitialStatus, getInterstitialStatus } from './AdInterstitial';
+
+import {
+  subscribeInterstitialDebug,
+  getInterstitialDebugState,
+  preloadInterstitial,
+  showOnce as showInterstitialOnce,
+} from './AdInterstitial';
 
 export const AD_FOOTER_HEIGHT = 50;
 
@@ -23,19 +29,40 @@ export default function AdFooter({ slot = 'Default' }) {
   const skipAdForPro = isPro && !DEBUG_AD;
   if (skipAdForPro) return null;
 
-  /** ---------------- ADS MODE (Debuggable) ---------------- */
-  const [phase, setPhase] = useState('loading'); // 'loading' | 'loaded' | 'failed'
-  const [debugMessage, setDebugMessage] = useState('Banner created; waiting for callbacks…');
-  const timeoutRef = useRef(null);
-
-  // Interstitial debug status (only updates when DEBUG_AD is true)
-  const [iStatus, setIStatus] = useState(() => getInterstitialStatus());
-
+  /** ---------------- Interstitial HUD (also carries sdk init hint) ---------------- */
+  const [iState, setIState] = useState(() => getInterstitialDebugState());
   useEffect(() => {
-    if (!DEBUG_AD) return;
-    const unsub = subscribeInterstitialStatus(setIStatus);
+    const unsub = subscribeInterstitialDebug(setIState);
     return unsub;
   }, []);
+
+  // This is your “SDK ready” signal (set inside Playwire.initializeSDK callback)
+  const sdkReady = iState.initializedHint === 'yes';
+
+  /** ---------------- Banner ---------------- */
+  const [phase, setPhase] = useState('waiting_sdk'); // waiting_sdk | loading | loaded | failed
+  const [debugMessage, setDebugMessage] = useState(
+    'Waiting for Playwire SDK init callback…'
+  );
+  const timeoutRef = useRef(null);
+
+  // When SDK becomes ready, start loading banner
+  useEffect(() => {
+    if (!sdkReady) {
+      // If SDK is not ready, never mount banner (prevents Playwire rejection)
+      setPhase('waiting_sdk');
+      setDebugMessage('Waiting for Playwire SDK init callback…');
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      return;
+    }
+
+    // SDK ready -> move to loading (banner will mount)
+    setPhase((prev) => (prev === 'loaded' ? 'loaded' : 'loading'));
+    setDebugMessage('SDK ready ✅ Mounting banner and waiting for callbacks…');
+  }, [sdkReady]);
 
   const styles = useMemo(
     () =>
@@ -66,7 +93,18 @@ export default function AdFooter({ slot = 'Default' }) {
           fontSize: 10,
           color: C.muted,
           textAlign: 'center',
+          marginBottom: 1,
+        },
+        hudText: {
+          fontSize: 10,
+          color: C.muted,
+          textAlign: 'center',
           marginBottom: 2,
+        },
+        phaseBorder_waiting_sdk: {
+          borderWidth: 1,
+          borderColor: '#8888',
+          borderStyle: 'dashed',
         },
         phaseBorder_loading: {
           borderWidth: 1,
@@ -85,14 +123,14 @@ export default function AdFooter({ slot = 'Default' }) {
     [C]
   );
 
-  /** --- Timeout if no callback fired while loading --- */
+  /** --- Banner timeout if no callback fired while loading --- */
   useEffect(() => {
     if (phase !== 'loading') return;
 
     timeoutRef.current = setTimeout(() => {
       setPhase((prev) => {
         if (prev === 'loading') {
-          const msg = 'Timeout: no response from ad server.';
+          const msg = 'Timeout: no banner callbacks (no fill, blocked request, or SDK issue).';
           setDebugMessage(msg);
           return 'failed';
         }
@@ -114,20 +152,21 @@ export default function AdFooter({ slot = 'Default' }) {
       timeoutRef.current = null;
     }
     setPhase('loaded');
-    setDebugMessage('onAdLoaded fired (blue test banner should be visible if test mode is active).');
-    console.log('[Playwire] Banner onAdLoaded for adUnitId:', AD_ALIAS);
+    setDebugMessage(
+      'onAdLoaded ✅ (If test mode is on, you should see a test banner / fill response.)'
+    );
+    console.log('[Playwire] Banner onAdLoaded', { alias: AD_ALIAS, slot });
   };
 
-  // Per Playwire: this callback only receives the adUnitId string
   const onAdFailedToLoad = (adUnitId) => {
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     }
     setPhase('failed');
-    const msg = `onAdFailedToLoad fired (adUnitId="${adUnitId}")`;
+    const msg = `onAdFailedToLoad ❌ (adUnitId="${adUnitId}")`;
     setDebugMessage(msg);
-    console.log('[Playwire] Banner onAdFailedToLoad for adUnitId:', adUnitId);
+    console.log('[Playwire] Banner onAdFailedToLoad', { adUnitId, slot });
   };
 
   const borderStyle =
@@ -135,26 +174,49 @@ export default function AdFooter({ slot = 'Default' }) {
       ? styles.phaseBorder_loaded
       : phase === 'failed'
       ? styles.phaseBorder_failed
+      : phase === 'waiting_sdk'
+      ? styles.phaseBorder_waiting_sdk
       : styles.phaseBorder_loading;
+
+  // Tap HUD = preload interstitial
+  // Long press HUD = force show interstitial
+  const onPressHud = async () => {
+    try {
+      await preloadInterstitial();
+    } catch {}
+  };
+  const onLongPressHud = async () => {
+    try {
+      await showInterstitialOnce({ force: true, reason: 'manual_from_footer' });
+    } catch {}
+  };
+
+  const sdkLine = `sdk=${sdkReady ? 'READY' : 'WAIT'} initHint=${iState.initializedHint}`;
+  const bannerLine = `banner=${phase} alias=${AD_ALIAS} slot=${slot}`;
 
   return (
     <View style={[styles.container, borderStyle]}>
-      {/* Banner debug line always visible */}
       <Text style={styles.debugText}>
-        [Ad debug] phase={phase} | slot={slot} | alias={AD_ALIAS}
+        [{Platform.OS}] {sdkLine} | {bannerLine}
       </Text>
 
-      {/* Interstitial debug line (only when DEBUG_AD is true) */}
       {DEBUG_AD ? (
-        <Text style={styles.debugText}>
-          [Int] {iStatus.phase} | ready={String(iStatus.ready)} | loading={String(iStatus.loading)} | err={iStatus.lastError || '-'}
-        </Text>
+        <Pressable onPress={onPressHud} onLongPress={onLongPressHud}>
+          <Text style={styles.hudText}>
+            [Int] ready={String(iState.ready)} loading={String(iState.loading)} inflight={String(
+              iState.inflight
+            )} last={iState.lastEvent} err={iState.lastFailAlias || '-'}
+          </Text>
+        </Pressable>
       ) : null}
 
+      {/* Status / failure text */}
       {phase === 'failed' ? (
         <Text style={styles.text}>
           Ad unavailable{debugMessage ? ` — ${debugMessage}` : ''}
         </Text>
+      ) : !sdkReady ? (
+        <Text style={styles.text}>{debugMessage}</Text>
       ) : (
         <View style={styles.bannerFrame}>
           <PlaywireBannerView
