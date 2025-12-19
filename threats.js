@@ -20,7 +20,7 @@ import {
   TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { clubCrestUri } from './clubs';
 import { smartFetch } from './signedFetch';
@@ -44,6 +44,8 @@ const imgwidth = rem * 55;
 const SHIRT_ASPECT = 5.6 / 5;
 const PLAYER_IMAGE_WIDTH = imgwidth * 0.8;
 const PLAYER_IMAGE_HEIGHT = PLAYER_IMAGE_WIDTH / SHIRT_ASPECT;
+
+
 
 async function getGWFirstSeenTs() {
   try { return Number(await AsyncStorage.getItem('gw.current.t')) || 0; }
@@ -323,6 +325,8 @@ async function fetchLocalsForGW() {
 /* ---------------------- Main Screen ---------------------- */
 export default function Threats() {
   const C = useColors();
+  const navigation = useNavigation();
+
   const P = useMemo(
     () => ({
       bg: C.bg,
@@ -620,8 +624,10 @@ export default function Threats() {
   const {
     star, killer, flop, diffsSorted, threatsSorted, tableThreats, liveBattle, averages
   } = useMemo(() => {
-    const exposure = myExposure || {};
-    const overlay = eoMap instanceof Map ? eoMap : new Map();
+    const pickStatus = (x) => x.statusGuess || x.statusOwned || 'yet';
+
+const exposure = myExposure || {};
+const overlay = eoMap instanceof Map ? eoMap : new Map();
 
     // union of ids
     const idSet = new Set([
@@ -662,42 +668,49 @@ export default function Threats() {
       flopPick = flopsSorted.find((p) => !starPick || p.id !== starPick.id) || null;
     }
 
-    // lists
-    const diffs = enriched
-      .filter((x) => (x.mul - x.eoFrac) >= 0.75 )
-      .map((x) => ({ ...x, _label: TYPE_LABEL[x.type] || '', _pctDisplay: (x.mul - x.eoFrac) * 100, _kind: 'diff' }));
-    const threats = enriched
-      .filter((x) => (x.eoFrac - x.mul) >= 0.30 )
-      .map((x) => ({ ...x, _label: TYPE_LABEL[x.type] || '', _pctDisplay: -((x.eoFrac - x.mul) * 100), _kind: 'threat' }));
 
-    const diffsSorted = diffs.slice().sort((a, b) => (b._pctDisplay - a._pctDisplay));
-    const threatsSorted = threats.slice().sort((a, b) => (Math.abs(b._pctDisplay) - Math.abs(a._pctDisplay)));
+// lists (drop missed + drop nameless)
+const diffs = enriched
+  .filter((x) => pickStatus(x) !== 'missed')
+  .filter((x) => (x.mul - x.eoFrac) >= 0.75)
+  .filter((x) => String(x.name || '').trim().length > 0)
+  .map((x) => ({ ...x, _label: TYPE_LABEL[x.type] || '', _pctDisplay: (x.mul - x.eoFrac) * 100, _kind: 'diff' }));
 
-    const tableThreatsBase = enriched
-      .filter((x) => (x.eoFrac - x.mul) >= TABLE_THREAT_CUTOFF)
-      .map((x) => {
-        const eoVsYouPct = (x.eoFrac - x.mul) * 100;
-        const ptsVsYou   = (x.eoFrac - x.mul) * x.pts;
-        const status     = x.statusGuess || x.statusOwned || 'yet';
-        // Emoji rule mirrored across UI
-        let emoji = '';
-        if ((eoVsYouPct > 50 && status !== 'played') || ptsVsYou > 3) {
-          emoji = EMOJI.THREAT_SEVERE;
-        } else if ((eoVsYouPct > 30 && status !== 'played') || ptsVsYou > 2) {
-          emoji = EMOJI.THREAT_MEDIUM;
-        }
-        return {
-          id: x.id,
-          name: x.name,
-          teamId: x.teamId,
-          status,
-          eoVsYouPct,
-          pts: x.pts,
-          ptsVsYou,
-          emoji,
-        };
-      }).filter(r => String(r.name || '').trim().length > 0);
-    const tableThreats = tableThreatsBase.slice().sort((a, b) => {
+const threats = enriched
+  .filter((x) => pickStatus(x) !== 'missed')
+  .filter((x) => (x.eoFrac - x.mul) >= 0.30)
+  .filter((x) => String(x.name || '').trim().length > 0)
+  .map((x) => ({ ...x, _label: TYPE_LABEL[x.type] || '', _pctDisplay: -((x.eoFrac - x.mul) * 100), _kind: 'threat' }));
+
+const diffsSorted = diffs.slice().sort((a, b) => (b._pctDisplay - a._pctDisplay));
+const threatsSorted = threats.slice().sort((a, b) => (Math.abs(b._pctDisplay) - Math.abs(a._pctDisplay)));
+
+// Danger table base: don't drop by status (some feeds mark too aggressively);
+// we only drop nameless rows to avoid the blank-shirt/blank-name bug.
+const tableThreatsBase = enriched
+  .filter((x) => (x.eoFrac - x.mul) >= TABLE_THREAT_CUTOFF)
+  .map((x) => {
+    const eoVsYouPct = (x.eoFrac - x.mul) * 100;
+    const ptsVsYou   = (x.eoFrac - x.mul) * x.pts;
+    const status     = pickStatus(x);
+
+    let emoji = '';
+    if ((eoVsYouPct > 50 && status !== 'played') || ptsVsYou > 3) emoji = EMOJI.THREAT_SEVERE;
+    else if ((eoVsYouPct > 30 && status !== 'played') || ptsVsYou > 2) emoji = EMOJI.THREAT_MEDIUM;
+
+    return {
+      id: x.id,
+      name: x.name,
+      teamId: x.teamId,
+      status,
+      eoVsYouPct,
+      pts: x.pts,
+      ptsVsYou,
+      emoji,
+    };
+  })
+  .filter(r => String(r.name || '').trim().length > 0);
+  const tableThreats = tableThreatsBase.slice().sort((a, b) => {
       const dir = sortDir === 'asc' ? 1 : -1;
       if (sortKey === 'name') return dir * a.name.localeCompare(b.name);
       const av = Number(a[sortKey] ?? 0);
@@ -711,7 +724,6 @@ export default function Threats() {
     if (flopPick) flopPick._label = '😵 Flop';
 
     // Live battle
-    const pickStatus = (x) => x.statusGuess || x.statusOwned || 'yet';
     const liveOnly = enriched.filter((x) => pickStatus(x) === 'live');
     const gains = [], losses = [];
     for (const x of liveOnly) {
@@ -773,6 +785,24 @@ export default function Threats() {
     };
   }, [dataGames, eoMap, myExposure, ownedStatus, sortKey, sortDir, sampleHits, byId, myHit]);
 
+useEffect(() => {
+  if (!threatsSorted || !threatsSorted.length) return;
+
+  (async () => {
+    try {
+      const topThreats = threatsSorted
+        .slice(0, 5)
+        .map((p) => ({
+          id: Number(p.id),
+          pct: Number(p._pctDisplay || 0),
+        }));
+
+      await AsyncStorage.setItem('myThreats', JSON.stringify(topThreats));
+    } catch {}
+  })();
+}, [threatsSorted]);
+
+
   // After the useMemo that defines star, killer, flop, ...
   const trioData = useMemo(() => [star, killer, flop].filter(Boolean), [star, killer, flop]);
 
@@ -781,6 +811,12 @@ export default function Threats() {
     const hasLive = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
     if (!userTabRef.current) setActiveTab(hasLive ? 'live' : 'diffs');
   }, [liveBattle]);
+
+  useEffect(() => {
+  const hasLiveNow = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
+  if (!hasLiveNow && activeTab === 'live') setActiveTab('diffs');
+}, [liveBattle, activeTab]);
+
 
   /* ---------------------- Styles ---------------------- */
   const styles = useMemo(() => StyleSheet.create({
@@ -1230,12 +1266,17 @@ export default function Threats() {
   }
 
   // Tabs header
-  const tabs = [
-    { key: 'live',  label: 'Live Battle' },
-    { key: 'diffs', label: 'Your Differentials' },
-    { key: 'all',   label: 'Danger Table' },
-    //{ key: 'avgs',  label: 'Templates, Chips & Averages' },
-  ];
+const hasLive = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
+
+const tabs = [
+  ...(hasLive
+    ? [{ key: 'live', label: 'Live Battle' }]
+    : [{ key: 'templates', label: 'Templates' }]
+  ),
+  { key: 'diffs', label: 'Your Differentials' },
+  { key: 'all', label: 'Danger Table' },
+];
+
 
   /* ---------------------- Averages Picker + Tables ---------------------- */
 
@@ -1800,161 +1841,213 @@ export default function Threats() {
   }
 
   /* --------- Status Dot + Legend (Danger Table) --------- */
-  const statusColor = (status) => {
-    if (status === 'live')   return P.yellow;
+const statusColor = useCallback(
+  (status) => {
+    if (status === 'live') return P.yellow;
     if (status === 'played') return isDark ? '#d1d5db' : P.graySoft;
     if (status === 'missed') return P.red;
     return '#1e9770'; // yet
-  };
+  },
+  [P.yellow, P.graySoft, P.red, isDark]
+);
 
-  const StatusDot = memo(function StatusDot({ status }) {
-    return <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />;
-  });
+const renderStatusDot = useCallback(
+  (status) => <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />,
+  [styles.statusDot, statusColor]
+);
 
-  /* --------- Danger Table (fast-search, FlatList, deferred) --------- */
-  const DangerTableCard = memo(function DangerTableCardInner({ tableThreats, tableSearch, setTableSearch }) {
-    const deferredQ = useDeferredValue(tableSearch);
+/* --------- Danger Table (fast-search, FlatList, deferred) --------- */
+const DangerTableCard = useMemo(
+  () =>
+    memo(function DangerTableCardInner({
+      tableThreats = [],
+      tableSearch,
+      setTableSearch,
+    }) {
+      const deferredQ = useDeferredValue(tableSearch);
 
-    const filtered = useMemo(() => {
-      const q = String(deferredQ || '').trim().toLowerCase();
-      if (!q) return tableThreats;
-      return tableThreats.filter(t => String(t.name || '').toLowerCase().includes(q));
-    }, [tableThreats, deferredQ]);
+      // Column layout must match between header + rows
+      const COL = { player: 2.8, eo: 1.0, pts: 0.9, loss: 1.2 };
 
-    const renderHeader = () => (
-      <>
-        {/* Search */}
-        <View style={styles.searchRow}>
-          <TextInput
-            value={tableSearch}
-            onChangeText={setTableSearch}
-            placeholder="Search player…"
-            placeholderTextColor={isDark ? '#8a95a6' : '#9aa3af'}
-            style={styles.searchInput}
-            returnKeyType="search"
-            autoCapitalize="none"
-            autoCorrect={false}
-            blurOnSubmit={false}
-            keyboardAppearance={isDark ? 'dark' : 'light'}
-          />
-        </View>
+      const filtered = useMemo(() => {
+        const q = String(deferredQ || '').trim().toLowerCase();
+        if (!q) return tableThreats;
+        return tableThreats.filter((t) => String(t?.name || '').toLowerCase().includes(q));
+      }, [tableThreats, deferredQ]);
 
-        {/* Legend */}
-        <View style={styles.legendRow}>
-          <View style={styles.legendPill}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor('live') }]} />
-            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Live</Text>
-          </View>
-          <View style={styles.legendPill}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor('played') }]} />
-            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Played</Text>
-          </View>
-          <View style={styles.legendPill}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor('yet') }]} />
-            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Yet</Text>
-          </View>
-          <View style={styles.legendPill}>
-            <View style={[styles.statusDot, { backgroundColor: statusColor('missed') }]} />
-            <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Missed</Text>
-          </View>
-        </View>
-
-        {/* Header row */}
-        <View style={[styles.tableHeaderRow, styles.tableRow]}>
-          <TouchableOpacity
-            style={[styles.thCell, { flex: 2.8 }]}
-            onPress={() => handleSort('name')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.th]}>Player</Text>
-            {sortKey === 'name' && (
-              <MaterialCommunityIcons name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={16} color={P.ink} />
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.thCellRight, { flex: 1 }]}
-            onPress={() => handleSort('eoVsYouPct')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.th, styles.right]}>EO</Text>
-            {sortKey === 'eoVsYouPct' && (
-              <MaterialCommunityIcons name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={16} color={P.ink} />
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.thCellRight, { flex: 0.9 }]}
-            onPress={() => handleSort('pts')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.th, styles.right]}>Pts</Text>
-            {sortKey === 'pts' && (
-              <MaterialCommunityIcons name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={16} color={P.ink} />
-            )}
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.thCellRight, { flex: 1.2 }]}
-            onPress={() => handleSort('ptsVsYou')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.th, styles.right]}>Loss</Text>
-            {sortKey === 'ptsVsYou' && (
-              <MaterialCommunityIcons name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'} size={16} color={P.ink} />
-            )}
-          </TouchableOpacity>
-        </View>
-      </>
-    );
-
-    return (
-      <View style={styles.card}>
-        <SectionTitle icon="table" sub={labels.tableSub}>{labels.tableTitle}</SectionTitle>
-
-        <FlatList
-          data={filtered}
-          keyExtractor={(t, i) => `${t.id}:${i}`}
-          keyboardShouldPersistTaps="always"
-          keyboardDismissMode="none"
-          initialNumToRender={24}
-          windowSize={8}
-          removeClippedSubviews
-          ListHeaderComponent={renderHeader}
-          renderItem={({ item: t, index: i }) => (
-            <View
-              style={[
-                styles.tableRow,
-                i % 2 ? { backgroundColor: 'rgba(255,255,255,0.04)' } : null,
-                i === 0 && styles.tableRowRoundedTop,
-                i === filtered.length - 1 && styles.tableRowRoundedBot,
-              ]}
+      const HeaderRow = useMemo(() => {
+        return (
+          <View style={[styles.tableHeaderRow, styles.tableRow]}>
+            <TouchableOpacity
+              style={[styles.thCell, { flex: COL.player }]}
+              onPress={() => handleSort('name')}
+              activeOpacity={0.7}
             >
-              <View style={{ flex: 2.8, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                <StatusDot status={t.status} />
-                {!!t.teamId && <Image source={{ uri: clubCrestUri(t.teamId) }} style={styles.tableCrest} />}
-                <Text style={styles.tdName} numberOfLines={1}>
-                  {t.emoji ? `${t.emoji} ` : ''}{t.name}
-                </Text>
+              <Text style={styles.th}>Player</Text>
+              {sortKey === 'name' && (
+                <MaterialCommunityIcons
+                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={P.muted}
+                />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.thCell, { flex: COL.eo }]}
+              onPress={() => handleSort('eoVsYouPct')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.th}>EO%</Text>
+              {sortKey === 'eoVsYouPct' && (
+                <MaterialCommunityIcons
+                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={P.muted}
+                />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.thCell, { flex: COL.pts }]}
+              onPress={() => handleSort('pts')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.th}>Pts</Text>
+              {sortKey === 'pts' && (
+                <MaterialCommunityIcons
+                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={P.muted}
+                />
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.thCell, { flex: COL.loss }]}
+              onPress={() => handleSort('ptsVsYou')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.th}>Loss</Text>
+              {sortKey === 'ptsVsYou' && (
+                <MaterialCommunityIcons
+                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color={P.muted}
+                />
+              )}
+            </TouchableOpacity>
+          </View>
+        );
+      }, [styles, handleSort, sortKey, sortDir, P.muted]);
+
+      const renderRow = useCallback(
+        ({ item }) => {
+          if (!item) return null;
+
+          // Guard against the blank-name/blank-shirt bug (but don't over-filter)
+          const name = String(item.name || '').trim();
+          if (!name) return null;
+
+          const crest = item.teamId ? { uri: clubCrestUri(item.teamId) } : null;
+
+          const eo = Number(item.eoVsYouPct);
+          const pts = Number(item.pts);
+          const loss = Number(item.ptsVsYou);
+
+          return (
+            <View style={styles.tableRow}>
+              {/* Player */}
+              <View style={{ flex: COL.player, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                {renderStatusDot(item.status)}
+                {!!crest && <Image source={crest} style={styles.tableCrest} />}
+                {!!item.emoji && <Text>{item.emoji}</Text>}
+                <Text numberOfLines={1} style={styles.tdName}>{name}</Text>
               </View>
-              <Text style={[styles.td, styles.right, styles.tdMono, { flex: 1 }]}>{t.eoVsYouPct.toFixed(1)}%</Text>
-              <Text style={[styles.td, styles.right, styles.tdMono, { flex: 0.9 }]}>{Number(t.pts || 0)}</Text>
+
+              {/* EO% */}
+              <Text style={[styles.td, { flex: COL.eo }, NUM]}>
+                {Number.isFinite(eo) ? `${eo.toFixed(0)}%` : '—'}
+              </Text>
+
+              {/* Pts */}
+              <Text style={[styles.td, { flex: COL.pts }, NUM]}>
+                {Number.isFinite(pts) ? pts.toFixed(1) : '—'}
+              </Text>
+
+              {/* Loss (NO leading +) */}
               <Text
                 style={[
-                  styles.td, styles.right, styles.tdMono, { flex: 1.2 },
-                  t.ptsVsYou > 0 ? { color: P.red, fontWeight:'800' } : { color: P.ok, fontWeight:'800' }
+                  styles.td,
+                  { flex: COL.loss },
+                  NUM,
+                  Number.isFinite(loss) && loss > 0 ? styles.netHurt : styles.netGain,
                 ]}
               >
-                {t.ptsVsYou.toFixed(2)}
+                {Number.isFinite(loss) ? loss.toFixed(1) : '—'}
               </Text>
             </View>
-          )}
-        />
-      </View>
-    );
-  });
+          );
+        },
+        [styles, renderStatusDot]
+      );
 
-  /* ---------------------- Main Render ---------------------- */
+      return (
+        <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
+          {/* Search (outside FlatList) */}
+          <View style={styles.searchRow}>
+            <TextInput
+              value={tableSearch}
+              onChangeText={setTableSearch}
+              placeholder="Search player…"
+              placeholderTextColor={isDark ? '#8a95a6' : '#9aa3af'}
+              style={styles.searchInput}
+              returnKeyType="search"
+              autoCapitalize="none"
+              autoCorrect={false}
+              blurOnSubmit={false}
+              keyboardAppearance={isDark ? 'dark' : 'light'}
+            />
+          </View>
+
+          {/* Legend */}
+          <View style={styles.legendRow}>
+            <View style={styles.legendPill}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor('live') }]} />
+              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Live</Text>
+            </View>
+            <View style={styles.legendPill}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor('played') }]} />
+              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Played</Text>
+            </View>
+            <View style={styles.legendPill}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor('yet') }]} />
+              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Yet</Text>
+            </View>
+          </View>
+
+          <FlatList
+            data={filtered}
+            keyExtractor={(item, index) => String(item?.id ?? item?.element ?? `${item?.name ?? 'row'}-${index}`)}
+            ListHeaderComponent={HeaderRow}
+            stickyHeaderIndices={[0]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="none"
+            removeClippedSubviews={false}
+            initialNumToRender={18}
+            windowSize={8}
+            renderItem={renderRow}
+            contentContainerStyle={{ paddingBottom: 14 }}
+          />
+        </View>
+      );
+    }),
+  // IMPORTANT: keep component identity stable while typing in search
+  [styles, P.ink, P.muted, isDark, statusColor, renderStatusDot, handleSort, sortKey, sortDir]
+);
+
+
+/* ---------------------- Main Render ---------------------- */
   const inlineHint = useMemo(() => {
     const base = '';
     if (sample === 'local' && /^missing:local/.test(eoErr)) {
@@ -2029,7 +2122,7 @@ export default function Threats() {
 
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 24 }}
-        keyboardShouldPersistTaps="handled"
+        keyboardShouldPersistTaps="always"
         keyboardDismissMode="none"
         removeClippedSubviews={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={P.accent} />}
@@ -2054,7 +2147,15 @@ export default function Threats() {
             return (
               <TouchableOpacity
                 key={t.key}
-                onPress={() => { userTabRef.current = true; setActiveTab(t.key); }}
+                onPress={() => {
+  if (t.key === 'templates') {
+    navigation.navigate('Templates'); // must match your App.js route name
+    return;
+  }
+  userTabRef.current = true;
+  setActiveTab(t.key);
+}}
+
                 style={[styles.tabBtn, active && styles.tabBtnActive]}
                 activeOpacity={0.8}
               >

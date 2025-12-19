@@ -3,11 +3,12 @@ import { Platform } from 'react-native';
 import { Playwire } from '@intergi/react-native-playwire-sdk';
 import { markPlaywireInitialized, preloadInterstitial } from './AdInterstitial';
 
-// TEMPORARY: always use Playwire test mode until real demand is live
-Playwire.setTest(true);
-Playwire.startConsoleLogger();
+// Production defaults:
+// - no console logger
+// - no noisy logs
+// - no test mode
+const PLAYWIRE_TEST_MODE = false;
 
-/** ---- SDK Ready gate ---- */
 let _initStarted = false;
 let _sdkReady = false;
 let _waiters = [];
@@ -17,6 +18,7 @@ export function isPlaywireReady() {
 }
 
 export function onPlaywireReady(cb) {
+  if (typeof cb !== 'function') return;
   if (_sdkReady) cb();
   else _waiters.push(cb);
 }
@@ -27,58 +29,43 @@ function _setReady() {
   const ws = _waiters;
   _waiters = [];
   ws.forEach((fn) => {
-    try { fn(); } catch {}
+    try {
+      fn();
+    } catch {}
   });
 }
 
 export function initPlaywire({ publisherId, iosAppId, androidAppId }) {
-  if (_initStarted) return; // <-- important: avoid double init
+  if (_initStarted) return;
   _initStarted = true;
-
-  console.log('[Playwire] initPlaywire inputs', {
-    platform: Platform.OS,
-    publisherId: publisherId ? 'present' : 'missing',
-    iosAppId: iosAppId ? 'present' : 'missing',
-    androidAppId: androidAppId ? 'present' : 'missing',
-  });
 
   const appId = Platform.select({
     ios: iosAppId,
     android: androidAppId,
   });
 
-  if (!publisherId || !appId) {
-    console.warn('Playwire init skipped: missing publisherId or platform appId', {
-      platform: Platform.OS,
-      publisherId,
-      appId,
-    });
-    return;
-  }
+  // If config missing, fail silently in production.
+  if (!publisherId || !appId) return;
 
   try {
-    console.log('[Playwire] calling initializeSDK', { platform: Platform.OS, publisherId, appId });
+    // Keep this *before* initializeSDK.
+    Playwire.setTest(!!PLAYWIRE_TEST_MODE);
 
     Playwire.initializeSDK(publisherId, appId, async () => {
-      console.log('[Playwire] initializeSDK callback fired ✅');
-
-      // Mark ready FIRST (unblocks banner mounting)
+      // SDK finished init callback
       _setReady();
 
-      // Your existing debug/HUD init state
-      try { markPlaywireInitialized(); } catch (e) {
-        console.log('[Playwire] markPlaywireInitialized failed:', e);
-      }
-
-      // Preload an interstitial ASAP after init
+      // Let interstitial module know SDK is ready
       try {
-        const ok = await preloadInterstitial();
-        console.log('[Playwire] preloadInterstitial result:', ok);
-      } catch (e) {
-        console.log('[Playwire] preloadInterstitial threw:', e);
-      }
+        markPlaywireInitialized();
+      } catch {}
+
+      // Preload an interstitial (silent)
+      try {
+        await preloadInterstitial();
+      } catch {}
     });
-  } catch (e) {
-    console.warn('Playwire.initializeSDK threw an error:', e);
+  } catch {
+    // Silent in production
   }
 }

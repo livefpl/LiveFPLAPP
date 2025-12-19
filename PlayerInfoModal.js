@@ -335,55 +335,78 @@ export default function PlayerInfoModal({
     });
   }, []);
 
-  function TabBar() {
+   function TabBar() {
     const onSel = (t) => {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setActiveTab(t);
+
+      // Optional: if leaving Results tab, hide xG so it doesn't stay "on" invisibly
+      if (t !== 'results') setShowXG(false);
     };
+
+    const showXgToggle = activeTab === 'results' && expanded.size > 0;
+
     return (
       <View style={[styles.tabsWrap, { backgroundColor: C.card2, borderColor: C.border }]}>
         <TouchableOpacity
-          onPress={()=>onSel('results')}
+          onPress={() => onSel('results')}
           style={[
             styles.tabBtn,
-            activeTab==='results' && { backgroundColor: C.card, borderColor: C.primary, borderWidth: 1 }
+            activeTab === 'results' && { backgroundColor: C.card, borderColor: C.primary, borderWidth: 1 },
           ]}
           accessibilityRole="button"
         >
-          <Text style={[
-            styles.tabText,
-            { color: activeTab==='results' ? C.text : C.ink, fontWeight: activeTab==='results' ? '800' : '700' }
-          ]}>Results</Text>
-          {activeTab==='results' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
+          <Text
+            style={[
+              styles.tabText,
+              { color: activeTab === 'results' ? C.text : C.ink, fontWeight: activeTab === 'results' ? '800' : '700' },
+            ]}
+          >
+            Results
+          </Text>
+          {activeTab === 'results' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={()=>onSel('fixtures')}
+          onPress={() => onSel('fixtures')}
           style={[
             styles.tabBtn,
-            activeTab==='fixtures' && { backgroundColor: C.card, borderColor: C.primary, borderWidth: 1 }
+            activeTab === 'fixtures' && { backgroundColor: C.card, borderColor: C.primary, borderWidth: 1 },
           ]}
           accessibilityRole="button"
         >
-          <Text style={[
-            styles.tabText,
-            { color: activeTab==='fixtures' ? C.text : C.ink, fontWeight: activeTab==='fixtures' ? '800' : '700' }
-          ]}>Fixtures</Text>
-          {activeTab==='fixtures' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
+          <Text
+            style={[
+              styles.tabText,
+              { color: activeTab === 'fixtures' ? C.text : C.ink, fontWeight: activeTab === 'fixtures' ? '800' : '700' },
+            ]}
+          >
+            Fixtures
+          </Text>
+          {activeTab === 'fixtures' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
         </TouchableOpacity>
 
-        <View style={{ flex:1 }} />
-        <TouchableOpacity
-          onPress={()=>setShowXG(v=>!v)}
-          style={[styles.xgToggle, { borderColor: C.border, backgroundColor: showXG ? C.card2 : 'transparent' }]}
-          accessibilityRole="button"
-        >
-          <MaterialCommunityIcons name="chart-line" size={S(14)} color={showXG ? C.text : C.ink} />
-          <Text style={{ marginLeft:S(6), color: showXG ? C.text : C.ink, fontWeight:'700', fontSize:S(12) }}>{showXG ? 'xG on' : 'xG off'}</Text>
-        </TouchableOpacity>
+        <View style={{ flex: 1 }} />
+
+        {showXgToggle ? (
+          <TouchableOpacity
+            onPress={() => setShowXG((v) => !v)}
+            style={[
+              styles.xgToggle,
+              { borderColor: C.border, backgroundColor: showXG ? C.card2 : 'transparent' },
+            ]}
+            accessibilityRole="button"
+          >
+            <MaterialCommunityIcons name="chart-line" size={S(14)} color={showXG ? C.text : C.ink} />
+            <Text style={{ marginLeft: S(6), color: showXG ? C.text : C.ink, fontWeight: '700', fontSize: S(12) }}>
+              {showXG ? 'xG on' : 'xG off'}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
     );
   }
+
 
   // list max height to keep modal tidy; still shows ALL items via scrolling
   const listMaxH = Math.min(ROW_H * 9 + V_GAP * 8, S(520));

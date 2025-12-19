@@ -833,15 +833,7 @@ const trendIsUp = perHr >= 0;
               
             </View>
 
-            <View style={chipStyle(isDark ? '#0b1224' : '#ffffff', br)}>
-              <Text style={[sheetS.chipTxt, { color: muted }]}>Now</Text>
-              <Text style={[sheetS.chipTxt, { color: progNow >= 0 ? valueNowCol : valueNowCol }]}>{pct(progNow)}</Text>
-            </View>
-
-            <View style={chipStyle(isDark ? '#0b1224' : '#ffffff', br)}>
-              <Text style={[sheetS.chipTxt, { color: muted }]}>at 01:30 UTC</Text>
-              <Text style={[sheetS.chipTxt, { color: progTonight >= 0 ? valueTonightCol : valueTonightCol }]}>{pct(progTonight)}</Text>
-            </View>
+            
           </View>
 
           {/* Now bar */}

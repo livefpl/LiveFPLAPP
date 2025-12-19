@@ -1,36 +1,31 @@
 // App.js
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   StyleSheet,
   StatusBar,
   TouchableOpacity,
   Text as RNText,
+  Text,
+  TextInput,
 } from 'react-native';
+
 import { NavigationContainer, CommonActions, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ProProvider } from './ProContext';
-import { useEffect } from 'react';
-import { initPlaywire } from './playwireInit';
-import { setTrigger, setConfig, bump } from './meter';
-import { showOnce } from './AdInterstitial';
+
 import { ThemeProvider, useTheme, useColors } from './theme';
-import { Text, TextInput } from 'react-native';
+import { ProProvider, usePro } from './ProContext';
+import { FplIdProvider } from './FplIdContext';
 
-Text.defaultProps = Text.defaultProps || {};
-Text.defaultProps.allowFontScaling = false;
-TextInput.defaultProps = TextInput.defaultProps || {};
-TextInput.defaultProps.allowFontScaling = false;
-
-const LOCAL_BUILD = 1;
-const CONFIG_URL = 'https://livefpl.us/version.json';
-const DEFAULT_REMOTE_VERSION = 1;
 import ForceUpdateGate from './checkversion';
+import { initPlaywire } from './playwireInit';
+
+import { setTrigger, setConfig, bump } from './meter';
+import { showOnce, setAdGuard } from './AdInterstitial';
 
 import Rank from './Rank.js';
 import PricesPage from './Prices.js';
-import { FplIdProvider } from './FplIdContext';
 import Leagues from './league';
 import Threats from './threats';
 import PlannerScreen from './planner';
@@ -40,14 +35,38 @@ import AdFooter from './ad';
 import ChangeID from './ChangeID';
 import Achievements from './achievements';
 import TemplatesChipsAverages from './TemplatesChipsAverages';
-import Paywallscreen from './Paywallscreen'; // ← route screen now
+import Paywallscreen from './Paywallscreen';
+
+Text.defaultProps = Text.defaultProps || {};
+Text.defaultProps.allowFontScaling = false;
+TextInput.defaultProps = TextInput.defaultProps || {};
+TextInput.defaultProps.allowFontScaling = false;
+
+const LOCAL_BUILD = 1;
+const CONFIG_URL = 'https://livefpl.us/version.json';
+const DEFAULT_REMOTE_VERSION = 1;
 
 // Configure ads meter once
 setConfig({ N: 1000, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
 setTrigger((ctx) => showOnce({ reason: `meter:${ctx.source}:${ctx.count}` }));
 
 const Tab = createBottomTabNavigator();
-function Empty() { return null; }
+function Empty() {
+  return null;
+}
+
+// This ensures interstitials are blocked until Pro state is known,
+// and then blocked for Pro users.
+function AdsProGate() {
+  const { isReady, isPro } = usePro();
+
+  useEffect(() => {
+    setAdGuard(() => !isReady || !!isPro);
+  }, [isReady, isPro]);
+
+  return null;
+}
+
 
 /* ------------------------ Tabs ------------------------ */
 function MyTabs() {
@@ -59,7 +78,12 @@ function MyTabs() {
   const [moreOpen, setMoreOpen] = React.useState(false);
 
   const PopItem = ({ icon, label, target, onPress }) => {
-    const handle = onPress ?? (() => { setMoreOpen(false); navigation.navigate(target); });
+    const handle =
+      onPress ??
+      (() => {
+        setMoreOpen(false);
+        navigation.navigate(target);
+      });
     return (
       <TouchableOpacity
         onPress={handle}
@@ -85,6 +109,7 @@ function MyTabs() {
           onPress={() => setMoreOpen(false)}
           style={[styles.clickAway, { bottom: chromeH }]}
         />
+
         {/* Card anchored just above the chrome */}
         <View
           style={[
@@ -103,8 +128,8 @@ function MyTabs() {
             </TouchableOpacity>
           </View>
 
+          {/* Keep only non-tab destinations here */}
           <PopItem icon="poker-chip" label="Templates, Chips & Averages" target="Templates" />
-          <PopItem icon="lightbulb-on-outline" label="What If (Create Scenarios!)" target="What If" />
           <PopItem icon="medal" label="Gameweek Trophies" target="Trophies" />
           <PopItem icon="account-edit" label="Change FPL ID" target="ID" />
           <PopItem icon="crown" label="Premium/Remove Ads" target="Premium" />
@@ -121,23 +146,50 @@ function MyTabs() {
           tabBarIcon: ({ color }) => {
             let iconName;
             switch (route.name) {
-              case 'Battle': iconName = 'sword-cross'; break;
-              case 'Prices': iconName = 'finance'; break;
-              case 'Leagues': iconName = 'trophy'; break;
-              case 'Rank': iconName = 'chart-line'; break;
-              case 'ID': iconName = 'account-edit'; break;
-              case 'Games': iconName = 'soccer'; break;
-              case 'More': iconName = 'dots-horizontal'; break;
-              case 'Trophies': iconName = 'medal'; break;
-              case 'Planner': iconName = 'calendar-edit'; break;
-              case 'What If': iconName = 'lightbulb-on-outline'; break;
-              case 'Templates': iconName = 'poker-chip'; break;
-              case 'Premium': iconName = 'crown'; break;
-              default: iconName = 'account'; break;
+              case 'Battle':
+                iconName = 'sword-cross';
+                break;
+              case 'Prices':
+                iconName = 'finance';
+                break;
+              case 'Leagues':
+                iconName = 'trophy';
+                break;
+              case 'Rank':
+                iconName = 'chart-line';
+                break;
+              case 'Games':
+                iconName = 'soccer';
+                break;
+              case 'Planner':
+                iconName = 'calendar-edit';
+                break;
+              case 'What If':
+                iconName = 'lightbulb-on-outline';
+                break;
+              case 'More':
+                iconName = 'dots-horizontal';
+                break;
+
+              // Hidden routes (no tab button)
+              case 'Templates':
+                iconName = 'poker-chip';
+                break;
+              case 'Trophies':
+                iconName = 'medal';
+                break;
+              case 'ID':
+                iconName = 'account-edit';
+                break;
+              case 'Premium':
+                iconName = 'crown';
+                break;
+              default:
+                iconName = 'account';
+                break;
             }
             return <MaterialCommunityIcons name={iconName} size={19} color={color} />;
           },
-
           headerShown: false,
           tabBarActiveTintColor: C.accent,
           tabBarInactiveTintColor: C.muted,
@@ -158,16 +210,13 @@ function MyTabs() {
 
           return (
             <View onLayout={(e) => setChromeH(e.nativeEvent.layout.height || 60)}>
-              {/* Popover floats above chrome and never covers the navbar */}
               <MorePopover />
-
-              {/* Bottom chrome: Ad + TabBar */}
-              <AdFooter key={`ad-${activeRoute}`} slot={activeRoute} />
+              <AdFooter />
               <BottomTabBar
                 {...props}
                 onTabPress={(e) => {
                   const { name } = e.target
-                    ? props.state.routes.find(r => r.key === e.target) || {}
+                    ? props.state.routes.find((r) => r.key === e.target) || {}
                     : {};
                   if (name && name !== 'More') setMoreOpen(false);
                   props.onTabPress?.(e);
@@ -177,14 +226,14 @@ function MyTabs() {
           );
         }}
       >
+        {/* ✅ Desired order:
+            rank battle leagues prices games planner what if more */}
         <Tab.Screen
           name="Rank"
           component={Rank}
           listeners={({ navigation }) => ({
             tabPress: () => {
-              navigation.dispatch(
-                CommonActions.navigate({ name: 'Rank', params: {}, merge: false })
-              );
+              navigation.dispatch(CommonActions.navigate({ name: 'Rank', params: {}, merge: false }));
             },
           })}
         />
@@ -193,6 +242,7 @@ function MyTabs() {
         <Tab.Screen name="Prices" component={PricesPage} />
         <Tab.Screen name="Games" component={Games} />
         <Tab.Screen name="Planner" component={PlannerScreen} />
+        <Tab.Screen name="What If" component={WhatIf} />
 
         {/* Toggle-only tab for popover */}
         <Tab.Screen
@@ -210,11 +260,6 @@ function MyTabs() {
         <Tab.Screen
           name="Templates"
           component={TemplatesChipsAverages}
-          options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
-        />
-        <Tab.Screen
-          name="What If"
-          component={WhatIf}
           options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
         />
         <Tab.Screen
@@ -236,6 +281,7 @@ function MyTabs() {
     </>
   );
 }
+
 
 /* -------- Root navigation (needs theme) -------- */
 function RootNavigation({ navRef, onReady, onStateChange }) {
@@ -260,13 +306,18 @@ function RootNavigation({ navRef, onReady, onStateChange }) {
 /* ------------------------ App ------------------------ */
 export default function App() {
   useEffect(() => {
-    // Pull from app.json extra (or hardcode if you prefer)
-    const publisherId  = process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID  || require('./app.json').expo.extra.playwire.publisherId;
-    const iosAppId     = process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID     || require('./app.json').expo.extra.playwire.iosAppId;
-    const androidAppId = process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID || require('./app.json').expo.extra.playwire.androidAppId;
+    const publisherId =
+      process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
+      require('./app.json').expo.extra.playwire.publisherId;
+    const iosAppId =
+      process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID ||
+      require('./app.json').expo.extra.playwire.iosAppId;
+    const androidAppId =
+      process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
+      require('./app.json').expo.extra.playwire.androidAppId;
+
     initPlaywire({ publisherId, iosAppId, androidAppId });
   }, []);
-  
 
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
@@ -293,11 +344,8 @@ export default function App() {
         <FplIdProvider>
           <ThemeProvider>
             <ProProvider>
-              <RootNavigation
-                navRef={navRef}
-                onReady={onReady}
-                onStateChange={onStateChange}
-              />
+              <AdsProGate />
+              <RootNavigation navRef={navRef} onReady={onReady} onStateChange={onStateChange} />
             </ProProvider>
           </ThemeProvider>
         </FplIdProvider>
@@ -307,15 +355,12 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  // Click-away layer above the card (keeps navbar fully touchable)
   clickAway: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
   },
-
-  // Popover card anchored above combined chrome (Ad + TabBar)
   moreCard: {
     position: 'absolute',
     left: 10,
@@ -348,7 +393,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   closeText: { fontSize: 12, fontWeight: '800' },
-
   moreRow: {
     paddingHorizontal: 12,
     paddingVertical: 14,

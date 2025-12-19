@@ -1,44 +1,44 @@
 // AdInterstitial.js
-// Playwire interstitial implementation (single-flight + Pro guard + cooldown)
-// + visible debug state via subscribeInterstitialDebug().
-// Tap/long-press HUD in ad.js can call preload/show to debug easily.
+// Production-safe Playwire interstitial controller:
+// - single-flight showOnce()
+// - cooldown
+// - SDK-init gate (markPlaywireInitialized must be called from Playwire.initializeSDK callback)
+// - NO user-visible debug UI, NO console logs
+//
+// Pro/ads gating:
+//   Use setAdGuard(() => isPro) from your ProContext (source of truth).
+//   If the guard returns true, interstitials will never show.
 
-import { Platform } from 'react-native';
-import Purchases from 'react-native-purchases';
 import { Playwire } from '@intergi/react-native-playwire-sdk';
 
-const INTERSTITIAL_ALIAS = 'interstitial'; // confirm exact alias with Playwire
+const INTERSTITIAL_ALIAS = 'interstitial'; // must match your Playwire alias exactly
 
+// -------- state --------
 let inflight = null;
 
 // Cooldown
 let _minIntervalMs = 90_000;
 let _lastShownAt = 0;
 
-// Optional external guard
+// Optional external guard (e.g. Pro status)
 let _adGuard = null;
-
-// RevenueCat (iOS only)
-const ENTITLEMENT_ID = 'Premium';
-let _cachedIsPro = false;
-let _lastProCheckAt = 0;
-const _proTtlMs = 5 * 60_000;
 
 // Interstitial local state
 let _ready = false;
 let _loading = false;
-let _loadWaiters = []; // [{resolve,timeoutId}]
+let _loadWaiters = []; // [{ resolve, timeoutId }]
 let _listenersInstalled = false;
 
-// ---------- Debug state ----------
+// -------- debug state (internal; you can subscribe if you want) --------
+// Note: this is NOT shown to users unless you build UI for it.
 const _dbg = {
   alias: INTERSTITIAL_ALIAS,
-  initializedHint: 'unknown', // set to 'yes' by markPlaywireInitialized()
+  initializedHint: 'unknown', // 'yes' after markPlaywireInitialized()
   ready: false,
   loading: false,
   inflight: false,
   minIntervalMs: _minIntervalMs,
-  lastEvent: 'none',          // loaded | failed_to_load | opened | closed | failed_to_open | load_called | show_called | load_timeout | sdk_not_ready | ...
+  lastEvent: 'none', // loaded | failed_to_load | opened | closed | failed_to_open | load_called | show_called | load_timeout | sdk_not_ready | ...
   lastEventAt: 0,
   lastReadyCheck: null,
   lastReadyCheckAt: 0,
@@ -67,7 +67,9 @@ function _snapshot() {
 function _emit() {
   const s = _snapshot();
   for (const fn of _dbgSubs) {
-    try { fn(s); } catch {}
+    try {
+      fn(s);
+    } catch {}
   }
 }
 
@@ -85,36 +87,19 @@ export function getInterstitialDebugState() {
 export function subscribeInterstitialDebug(fn) {
   if (typeof fn !== 'function') return () => {};
   _dbgSubs.add(fn);
-  try { fn(_snapshot()); } catch {}
+  try {
+    fn(_snapshot());
+  } catch {}
   return () => _dbgSubs.delete(fn);
 }
 
-// Call this from Playwire.initializeSDK callback
+// Call this from Playwire.initializeSDK callback (your playwireInit.js already does this).
 export function markPlaywireInitialized() {
   _dbg.initializedHint = 'yes';
   _mark('sdk_initialized');
 }
 
-// ---------------- RevenueCat ----------------
-async function isProViaRevenueCat() {
-  if (Platform.OS !== 'ios') return false;
-  const now = Date.now();
-  if (now - _lastProCheckAt < _proTtlMs) return _cachedIsPro;
-
-  try {
-    const info = await Purchases.getCustomerInfo();
-    const active = !!info?.entitlements?.active?.[ENTITLEMENT_ID];
-    _cachedIsPro = active;
-    _lastProCheckAt = now;
-    return active;
-  } catch {
-    _cachedIsPro = false;
-    _lastProCheckAt = now;
-    return false;
-  }
-}
-
-// ---------------- Playwire helpers ----------------
+// -------- Playwire helpers --------
 function _wrapGetReady(adUnitId) {
   return new Promise((resolve) => {
     try {
@@ -144,48 +129,50 @@ function _installListenersOnce() {
   if (_listenersInstalled) return;
   _listenersInstalled = true;
 
-  Playwire.addInterstitialLoadedEventListener((adUnitId) => {
-    if (adUnitId !== INTERSTITIAL_ALIAS) return;
-    _ready = true;
-    _loading = false;
-    _mark('loaded');
+  try {
+    Playwire.addInterstitialLoadedEventListener((adUnitId) => {
+      if (adUnitId !== INTERSTITIAL_ALIAS) return;
+      _ready = true;
+      _loading = false;
+      _mark('loaded');
 
-    const waiters = _loadWaiters;
-    _loadWaiters = [];
-    _resolveAll(waiters, true);
-  });
+      const waiters = _loadWaiters;
+      _loadWaiters = [];
+      _resolveAll(waiters, true);
+    });
 
-  Playwire.addInterstitialFailedToLoadEventListener((adUnitId) => {
-    if (adUnitId !== INTERSTITIAL_ALIAS) return;
-    _ready = false;
-    _loading = false;
-    _mark('failed_to_load', { lastFailAlias: adUnitId });
+    Playwire.addInterstitialFailedToLoadEventListener((adUnitId) => {
+      if (adUnitId !== INTERSTITIAL_ALIAS) return;
+      _ready = false;
+      _loading = false;
+      _mark('failed_to_load', { lastFailAlias: adUnitId });
 
-    const waiters = _loadWaiters;
-    _loadWaiters = [];
-    _resolveAll(waiters, false);
-  });
+      const waiters = _loadWaiters;
+      _loadWaiters = [];
+      _resolveAll(waiters, false);
+    });
 
-  Playwire.addInterstitialOpenedEventListener((adUnitId) => {
-    if (adUnitId !== INTERSTITIAL_ALIAS) return;
-    _mark('opened');
-    console.log('[Playwire] Interstitial opened:', adUnitId);
-  });
+    Playwire.addInterstitialOpenedEventListener((adUnitId) => {
+      if (adUnitId !== INTERSTITIAL_ALIAS) return;
+      _mark('opened');
+    });
 
-  Playwire.addInterstitialClosedEventListener((adUnitId) => {
-    if (adUnitId !== INTERSTITIAL_ALIAS) return;
-    _mark('closed');
-    console.log('[Playwire] Interstitial closed:', adUnitId);
-    _ready = false; // consumed
-    _emit();
-  });
+    Playwire.addInterstitialClosedEventListener((adUnitId) => {
+      if (adUnitId !== INTERSTITIAL_ALIAS) return;
+      _mark('closed');
+      _ready = false; // consumed
+      _emit();
+    });
 
-  Playwire.addInterstitialFailedToOpenEventListener((adUnitId) => {
-    if (adUnitId !== INTERSTITIAL_ALIAS) return;
-    _ready = false;
-    _mark('failed_to_open');
-    console.log('[Playwire] Interstitial failed to open:', adUnitId);
-  });
+    Playwire.addInterstitialFailedToOpenEventListener((adUnitId) => {
+      if (adUnitId !== INTERSTITIAL_ALIAS) return;
+      _ready = false;
+      _mark('failed_to_open');
+      _emit();
+    });
+  } catch {
+    // If listener wiring throws, we silently continue (production-safe).
+  }
 }
 
 async function _ensureLoaded({ timeoutMs = 12_000 } = {}) {
@@ -199,6 +186,7 @@ async function _ensureLoaded({ timeoutMs = 12_000 } = {}) {
 
   if (_ready) return true;
 
+  // If SDK says ready, accept it.
   const sdkReady = await _wrapGetReady(INTERSTITIAL_ALIAS);
   if (sdkReady) {
     _ready = true;
@@ -206,6 +194,7 @@ async function _ensureLoaded({ timeoutMs = 12_000 } = {}) {
     return true;
   }
 
+  // If already loading, wait.
   if (_loading) {
     return new Promise((resolve) => {
       const timeoutId = setTimeout(() => resolve(false), timeoutMs);
@@ -239,9 +228,11 @@ async function _ensureLoaded({ timeoutMs = 12_000 } = {}) {
 // -------- Public API --------
 export function configureAds({ minIntervalMs } = {}) {
   if (typeof minIntervalMs === 'number') _minIntervalMs = Math.max(0, minIntervalMs);
+  _dbg.minIntervalMs = _minIntervalMs;
   _emit();
 }
 
+// If fn() returns true => block ads (e.g. user is Pro)
 export function setAdGuard(fn) {
   _adGuard = typeof fn === 'function' ? fn : null;
 }
@@ -258,7 +249,7 @@ export async function preloadInterstitial() {
 }
 
 export async function showOnce({ reason, force } = {}) {
-  // Optional guard
+  // External guard (Pro, etc.)
   try {
     if (_adGuard && _adGuard()) {
       _dbg.lastResult = { shown: false, provider: 'guard' };
@@ -267,14 +258,6 @@ export async function showOnce({ reason, force } = {}) {
       return _dbg.lastResult;
     }
   } catch {}
-
-  // Pro check
-  if (await isProViaRevenueCat()) {
-    _dbg.lastResult = { shown: false, provider: 'pro' };
-    _dbg.lastReason = reason || '';
-    _emit();
-    return _dbg.lastResult;
-  }
 
   // Cooldown
   if (!force) {
@@ -294,7 +277,7 @@ export async function showOnce({ reason, force } = {}) {
       _dbg.lastReason = reason || '';
       _emit();
 
-      // Hard gate again for show path
+      // SDK init gate
       if (_dbg.initializedHint !== 'yes') {
         _dbg.lastResult = { shown: false, provider: 'sdk', reason: 'sdk_not_ready' };
         _mark('sdk_not_ready');
@@ -313,30 +296,29 @@ export async function showOnce({ reason, force } = {}) {
       _dbg.lastShowCallAt = Date.now();
       _mark('show_called');
 
-      Playwire.showInterstitial(INTERSTITIAL_ALIAS);
+      try {
+        Playwire.showInterstitial(INTERSTITIAL_ALIAS);
+      } catch {
+        _ready = false;
+        _dbg.lastResult = { shown: false, provider: 'playwire', reason: 'show_throw' };
+        _mark('failed_to_open');
+        return _dbg.lastResult;
+      }
 
       _lastShownAt = Date.now();
       _dbg.lastShownAt = _lastShownAt;
 
-      // One-time-use: request next
+      // One-time-use: request next (silent best-effort)
       _ready = false;
-      _loading = true;
-      _dbg.lastLoadCallAt = Date.now();
-      _mark('reload_after_show');
-
-      try {
-        Playwire.loadInterstitial(INTERSTITIAL_ALIAS);
-      } catch {
-        _loading = false;
-        _emit();
-      }
+      _emit();
+      setTimeout(() => {
+        try {
+          preloadInterstitial();
+        } catch {}
+      }, 400);
 
       _dbg.lastResult = { shown: true, provider: 'playwire' };
       _emit();
-      return _dbg.lastResult;
-    } catch {
-      _dbg.lastResult = { shown: false, provider: 'playwire', reason: 'error' };
-      _mark('error');
       return _dbg.lastResult;
     } finally {
       inflight = null;

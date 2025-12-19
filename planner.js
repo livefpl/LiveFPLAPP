@@ -1489,10 +1489,17 @@ const finalPicks = (Array.isArray(prevUserWeek.picks) && prevUserWeek.picks.leng
   : seqPicks.slice();
 
 
-      const { used, ins, bankAfter, boughtNext, sellOverridesNext } = netImpact(base, finalPicks, costsMap);
-      const hasOv = Object.prototype.hasOwnProperty.call(ov || {}, g);
-     const ovVal = hasOv ? Number(ov[g]) : NaN;
-      const bankFinal = (hasOv && Number.isFinite(ovVal)) ? ovVal : bankAfter;
+      // Apply bank override as the GW *starting* bank (so transfers still move it)
+const hasOv = Object.prototype.hasOwnProperty.call(ov || {}, g);
+const ovVal = hasOv ? Number(ov[g]) : NaN;
+if (hasOv && Number.isFinite(ovVal)) {
+  base = { ...base, bank: ovVal };
+}
+
+const { used, ins, bankAfter, boughtNext, sellOverridesNext } = netImpact(base, finalPicks, costsMap);
+
+// Final bank should always reflect transfers
+const bankFinal = bankAfter;
 
       const hits = (chip === 'freehit' || chip === 'wildcard') ? 0 : Math.max(0, used - base.ft) * HIT_COST;
 
