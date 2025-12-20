@@ -21,6 +21,13 @@ export default function AdFooter() {
 
   // We reuse the existing “SDK initialized hint” (set by markPlaywireInitialized())
   const [sdkReady, setSdkReady] = useState(() => getInterstitialDebugState().initializedHint === 'yes');
+  // Delay mounting the native banner view a bit to avoid cold-start native crashes
+  const [canMountBanner, setCanMountBanner] = useState(false);
+
+  useEffect(() => {
+    const t = setTimeout(() => setCanMountBanner(true), 1500);
+    return () => clearTimeout(t);
+  }, []);
 
   // Poll lightly until sdk is ready (no UI, no logs). This avoids mounting banner too early.
   useEffect(() => {
@@ -70,10 +77,10 @@ export default function AdFooter() {
     [C]
   );
 
-  // If SDK isn't ready yet, keep the reserved space but render nothing (no user-facing text).
-  if (!sdkReady) {
+    if (!sdkReady || !canMountBanner) {
     return <View style={styles.container} />;
   }
+
 
   return (
     <View style={styles.container}>

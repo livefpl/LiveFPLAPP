@@ -319,6 +319,16 @@ export default function App() {
     initPlaywire({ publisherId, iosAppId, androidAppId });
   }, []);
 
+
+  const bootGraceRef = React.useRef(true);
+
+useEffect(() => {
+  const t = setTimeout(() => {
+    bootGraceRef.current = false;
+  }, 4500); // 2.5s grace period after app mount
+  return () => clearTimeout(t);
+}, []);
+
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
 
@@ -327,12 +337,18 @@ export default function App() {
   };
 
   const onStateChange = () => {
-    const name = navRef.current?.getCurrentRoute?.()?.name;
-    if (name && name !== prevRouteNameRef.current) {
-      prevRouteNameRef.current = name;
-      setTimeout(() => bump({ source: 'nav', force: true }), 0);
-    }
-  };
+  const name = navRef.current?.getCurrentRoute?.()?.name;
+  if (name && name !== prevRouteNameRef.current) {
+    prevRouteNameRef.current = name;
+
+    // ✅ Never try to show interstitials during the boot window
+    if (bootGraceRef.current) return;
+
+    // ✅ Don’t force interstitials; let cooldown / readiness handle it
+    setTimeout(() => bump({ source: 'nav' }), 250);
+  }
+};
+
 
   return (
     <ThemeProvider>

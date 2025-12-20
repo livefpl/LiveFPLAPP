@@ -99,24 +99,39 @@ export function markPlaywireInitialized() {
   _mark('sdk_initialized');
 }
 
-// -------- Playwire helpers --------
-function _wrapGetReady(adUnitId) {
+function _wrapGetReady(adUnitId, timeoutMs = 900) {
   return new Promise((resolve) => {
+    let done = false;
+    const finish = (val) => {
+      if (done) return;
+      done = true;
+      clearTimeout(tid);
+      resolve(!!val);
+    };
+
+    const tid = setTimeout(() => {
+      _dbg.lastReadyCheck = false;
+      _dbg.lastReadyCheckAt = Date.now();
+      _mark('ready_check_timeout');
+      finish(false);
+    }, timeoutMs);
+
     try {
       Playwire.getInterstitialReady(adUnitId, (isReady) => {
         _dbg.lastReadyCheck = !!isReady;
         _dbg.lastReadyCheckAt = Date.now();
         _emit();
-        resolve(!!isReady);
+        finish(!!isReady);
       });
     } catch {
       _dbg.lastReadyCheck = false;
       _dbg.lastReadyCheckAt = Date.now();
       _emit();
-      resolve(false);
+      finish(false);
     }
   });
 }
+
 
 function _resolveAll(waiters, val) {
   waiters.forEach((w) => {
