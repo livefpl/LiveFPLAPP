@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   Text as RNText,
   Text,
-  Alert,
   TextInput,
 } from 'react-native';
 
@@ -47,36 +46,9 @@ const LOCAL_BUILD = 1;
 const CONFIG_URL = 'https://livefpl.us/version.json';
 const DEFAULT_REMOTE_VERSION = 1;
 
+// Configure ads meter once
 setConfig({ N: 1000, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
-
-// Debug-only: if meter hits N but interstitial doesn't show, alert why.
-const AD_DEBUG_MISSES = 0;
-let _lastMissAlertAt = 0;
-
-setTrigger(async (ctx) => {
-  const res = await showOnce({ reason: `meter:${ctx.source}:${ctx.count}` });
-
-  if (AD_DEBUG_MISSES && (!res || res.shown !== true)) {
-    const now = Date.now();
-
-    // Throttle so N=3 doesn't spam you if SDK isn't ready / no fill.
-    if (now - _lastMissAlertAt > 1000) {
-      _lastMissAlertAt = now;
-
-      Alert.alert(
-        'Interstitial missed',
-        [
-          `count=${ctx.count}`,
-          `source=${ctx.source}`,
-          `provider=${res?.provider || 'unknown'}`,
-          `reason=${res?.reason || ''}`,
-        ].join('\n')
-      );
-    }
-  }
-
-  return res;
-});
+setTrigger((ctx) => showOnce({ reason: `meter:${ctx.source}:${ctx.count}` }));
 
 const Tab = createBottomTabNavigator();
 function Empty() {
@@ -347,25 +319,6 @@ export default function App() {
     initPlaywire({ publisherId, iosAppId, androidAppId });
   }, []);
 
-
-  const bootGraceRef = React.useRef(true);
-
-useEffect(() => {
-  const t = setTimeout(() => {
-    bootGraceRef.current = false;
-  }, 4500); // 2.5s grace period after app mount
-  return () => clearTimeout(t);
-}, []);
-
-useEffect(() => {
-  const id = setInterval(() => {
-    bump({ source: 'timer' });
-  }, 30_000);
-
-  return () => clearInterval(id);
-}, []);
-
-
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
 
@@ -374,18 +327,12 @@ useEffect(() => {
   };
 
   const onStateChange = () => {
-  const name = navRef.current?.getCurrentRoute?.()?.name;
-  if (name && name !== prevRouteNameRef.current) {
-    prevRouteNameRef.current = name;
-
-    // ✅ Never try to show interstitials during the boot window
-    if (bootGraceRef.current) return;
-
-    // ✅ Don’t force interstitials; let cooldown / readiness handle it
-    setTimeout(() => bump({ source: 'nav' }), 250);
-  }
-};
-
+    const name = navRef.current?.getCurrentRoute?.()?.name;
+    if (name && name !== prevRouteNameRef.current) {
+      prevRouteNameRef.current = name;
+      setTimeout(() => bump({ source: 'nav', force: true }), 0);
+    }
+  };
 
   return (
     <ThemeProvider>

@@ -861,6 +861,12 @@ useEffect(() => {
       padding: 8,
       marginTop: 8,
     },
+        legendPillActive: {
+      borderWidth: 1,
+      borderColor: P.accent,
+      backgroundColor: isDark ? 'rgba(96,165,250,0.10)' : 'rgba(96,165,250,0.10)',
+    },
+
     groupRows: { gap: 6 },
     gridRow: {
       flexDirection: 'row',
@@ -929,6 +935,8 @@ useEffect(() => {
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: P.border2,
     },
+        tableShirt: { width: 18, height: 18, resizeMode: 'contain' },
+
     lbNameCell: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, flex:1 },
     lbName: { color: P.ink, fontSize: 13, flexShrink: 1 },
     lbPts: { color: P.ink, fontSize: 13, ...NUM },
@@ -1841,213 +1849,213 @@ const tabs = [
   }
 
   /* --------- Status Dot + Legend (Danger Table) --------- */
-const statusColor = useCallback(
-  (status) => {
-    if (status === 'live') return P.yellow;
+  const statusColor = (status) => {
+    if (status === 'live')   return P.yellow;
     if (status === 'played') return isDark ? '#d1d5db' : P.graySoft;
     if (status === 'missed') return P.red;
     return '#1e9770'; // yet
-  },
-  [P.yellow, P.graySoft, P.red, isDark]
-);
+  };
 
-const renderStatusDot = useCallback(
-  (status) => <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />,
-  [styles.statusDot, statusColor]
-);
+  const StatusDot = memo(function StatusDot({ status }) {
+    return <View style={[styles.statusDot, { backgroundColor: statusColor(status) }]} />;
+  });
 
 /* --------- Danger Table (fast-search, FlatList, deferred) --------- */
-const DangerTableCard = useMemo(
-  () =>
-    memo(function DangerTableCardInner({
-      tableThreats = [],
-      tableSearch,
-      setTableSearch,
-    }) {
-      const deferredQ = useDeferredValue(tableSearch);
+const DangerTableCard = memo(function DangerTableCardInner({
+  tableThreats = [],
+  tableSearch,
+  setTableSearch,
+}) {
+  const deferredQ = useDeferredValue(tableSearch);
+    const [statusFilter, setStatusFilter] = useState('all'); // all | live | played | yet
 
-      // Column layout must match between header + rows
-      const COL = { player: 2.8, eo: 1.0, pts: 0.9, loss: 1.2 };
 
-      const filtered = useMemo(() => {
-        const q = String(deferredQ || '').trim().toLowerCase();
-        if (!q) return tableThreats;
-        return tableThreats.filter((t) => String(t?.name || '').toLowerCase().includes(q));
-      }, [tableThreats, deferredQ]);
+  // Column layout must match between header + rows
+  const COL = useMemo(() => ({ player: 2.8, eo: 1.0, pts: 0.9, loss: 1.2 }), []);
 
-      const HeaderRow = useMemo(() => {
-        return (
-          <View style={[styles.tableHeaderRow, styles.tableRow]}>
-            <TouchableOpacity
-              style={[styles.thCell, { flex: COL.player }]}
-              onPress={() => handleSort('name')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.th}>Player</Text>
-              {sortKey === 'name' && (
-                <MaterialCommunityIcons
-                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={P.muted}
-                />
-              )}
-            </TouchableOpacity>
+    const filtered = useMemo(() => {
+    const q = String(deferredQ || '').trim().toLowerCase();
 
-            <TouchableOpacity
-              style={[styles.thCell, { flex: COL.eo }]}
-              onPress={() => handleSort('eoVsYouPct')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.th}>EO%</Text>
-              {sortKey === 'eoVsYouPct' && (
-                <MaterialCommunityIcons
-                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={P.muted}
-                />
-              )}
-            </TouchableOpacity>
+    let arr = Array.isArray(tableThreats) ? tableThreats : [];
 
-            <TouchableOpacity
-              style={[styles.thCell, { flex: COL.pts }]}
-              onPress={() => handleSort('pts')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.th}>Pts</Text>
-              {sortKey === 'pts' && (
-                <MaterialCommunityIcons
-                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={P.muted}
-                />
-              )}
-            </TouchableOpacity>
+    // status filter
+    if (statusFilter !== 'all') {
+      arr = arr.filter((t) => (t?.status || '') === statusFilter);
+    }
 
-            <TouchableOpacity
-              style={[styles.thCell, { flex: COL.loss }]}
-              onPress={() => handleSort('ptsVsYou')}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.th}>Loss</Text>
-              {sortKey === 'ptsVsYou' && (
-                <MaterialCommunityIcons
-                  name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={P.muted}
-                />
-              )}
-            </TouchableOpacity>
-          </View>
-        );
-      }, [styles, handleSort, sortKey, sortDir, P.muted]);
+    // text filter
+    if (q) {
+      arr = arr.filter((t) => String(t?.name || '').toLowerCase().includes(q));
+    }
 
-      const renderRow = useCallback(
-        ({ item }) => {
-          if (!item) return null;
+    return arr;
+  }, [tableThreats, deferredQ, statusFilter]);
 
-          // Guard against the blank-name/blank-shirt bug (but don't over-filter)
-          const name = String(item.name || '').trim();
-          if (!name) return null;
 
-          const crest = item.teamId ? { uri: clubCrestUri(item.teamId) } : null;
-
-          const eo = Number(item.eoVsYouPct);
-          const pts = Number(item.pts);
-          const loss = Number(item.ptsVsYou);
-
-          return (
-            <View style={styles.tableRow}>
-              {/* Player */}
-              <View style={{ flex: COL.player, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                {renderStatusDot(item.status)}
-                {!!crest && <Image source={crest} style={styles.tableCrest} />}
-                {!!item.emoji && <Text>{item.emoji}</Text>}
-                <Text numberOfLines={1} style={styles.tdName}>{name}</Text>
-              </View>
-
-              {/* EO% */}
-              <Text style={[styles.td, { flex: COL.eo }, NUM]}>
-                {Number.isFinite(eo) ? `${eo.toFixed(0)}%` : '—'}
-              </Text>
-
-              {/* Pts */}
-              <Text style={[styles.td, { flex: COL.pts }, NUM]}>
-                {Number.isFinite(pts) ? pts.toFixed(1) : '—'}
-              </Text>
-
-              {/* Loss (NO leading +) */}
-              <Text
-                style={[
-                  styles.td,
-                  { flex: COL.loss },
-                  NUM,
-                  Number.isFinite(loss) && loss > 0 ? styles.netHurt : styles.netGain,
-                ]}
-              >
-                {Number.isFinite(loss) ? loss.toFixed(1) : '—'}
-              </Text>
-            </View>
-          );
-        },
-        [styles, renderStatusDot]
-      );
-
-      return (
-        <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
-          {/* Search (outside FlatList) */}
-          <View style={styles.searchRow}>
-            <TextInput
-              value={tableSearch}
-              onChangeText={setTableSearch}
-              placeholder="Search player…"
-              placeholderTextColor={isDark ? '#8a95a6' : '#9aa3af'}
-              style={styles.searchInput}
-              returnKeyType="search"
-              autoCapitalize="none"
-              autoCorrect={false}
-              blurOnSubmit={false}
-              keyboardAppearance={isDark ? 'dark' : 'light'}
+  const HeaderRow = useMemo(() => {
+    return (
+      <View style={[styles.tableHeaderRow, styles.tableRow]}>
+        <TouchableOpacity
+          style={[styles.thCell, { flex: COL.player }]}
+          onPress={() => handleSort('name')}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.th}>Player</Text>
+          {sortKey === 'name' && (
+            <MaterialCommunityIcons
+              name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={P.muted}
             />
-          </View>
+          )}
+        </TouchableOpacity>
 
-          {/* Legend */}
-          <View style={styles.legendRow}>
-            <View style={styles.legendPill}>
-              <View style={[styles.statusDot, { backgroundColor: statusColor('live') }]} />
-              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Live</Text>
-            </View>
-            <View style={styles.legendPill}>
-              <View style={[styles.statusDot, { backgroundColor: statusColor('played') }]} />
-              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Played</Text>
-            </View>
-            <View style={styles.legendPill}>
-              <View style={[styles.statusDot, { backgroundColor: statusColor('yet') }]} />
-              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>Yet</Text>
-            </View>
-          </View>
+        <TouchableOpacity style={[styles.thCell, { flex: COL.eo }]} onPress={() => handleSort('eoVsYouPct')} activeOpacity={0.7}>
+          <Text style={styles.th}>EO%</Text>
+          {sortKey === 'eoVsYouPct' && (
+            <MaterialCommunityIcons
+              name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={P.muted}
+            />
+          )}
+        </TouchableOpacity>
 
-          <FlatList
-            data={filtered}
-            keyExtractor={(item, index) => String(item?.id ?? item?.element ?? `${item?.name ?? 'row'}-${index}`)}
-            ListHeaderComponent={HeaderRow}
-            stickyHeaderIndices={[0]}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="none"
-            removeClippedSubviews={false}
-            initialNumToRender={18}
-            windowSize={8}
-            renderItem={renderRow}
-            contentContainerStyle={{ paddingBottom: 14 }}
-          />
+        <TouchableOpacity style={[styles.thCell, { flex: COL.pts }]} onPress={() => handleSort('pts')} activeOpacity={0.7}>
+          <Text style={styles.th}>Pts</Text>
+          {sortKey === 'pts' && (
+            <MaterialCommunityIcons
+              name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={P.muted}
+            />
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity style={[styles.thCell, { flex: COL.loss }]} onPress={() => handleSort('ptsVsYou')} activeOpacity={0.7}>
+          <Text style={styles.th}>Loss</Text>
+          {sortKey === 'ptsVsYou' && (
+            <MaterialCommunityIcons
+              name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
+              size={14}
+              color={P.muted}
+            />
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  }, [sortKey, sortDir, P.muted, handleSort, COL]);
+
+  const renderRow = useCallback(({ item }) => {
+    if (!item || !String(item.name || '').trim()) return null;
+
+    const eo = Number(item.eoVsYouPct) || 0;
+    const pts = Number(item.pts) || 0;
+    const loss = Number(item.ptsVsYou) || 0;
+const lossTxt = `${loss.toFixed(1)}`;
+
+    return (
+      <View style={styles.tableRow}>
+                <View style={{ flex: COL.player, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <StatusDot status={item.status} />
+
+          {/* Shirt (fallback to crest if needed) */}
+          {(() => {
+            const tid = item?.teamId ?? item?.team ?? item?.team_id;
+            if (!tid) return null;
+
+            const shirtSrc =
+              (typeof assetImages !== 'undefined' && assetImages?.shirts?.[tid])
+                ? assetImages.shirts[tid]
+                : { uri: clubCrestUri(tid) };
+
+            return <Image source={shirtSrc} style={styles.tableShirt} />;
+          })()}
+
+          {!!item.emoji && <Text>{item.emoji}</Text>}
+          <Text numberOfLines={1} style={styles.tdName}>{item.name}</Text>
         </View>
-      );
-    }),
-  // IMPORTANT: keep component identity stable while typing in search
-  [styles, P.ink, P.muted, isDark, statusColor, renderStatusDot, handleSort, sortKey, sortDir]
-);
 
 
-/* ---------------------- Main Render ---------------------- */
+        {/* EO% */}
+        <Text style={[styles.td, { flex: COL.eo }, NUM]}>{eo.toFixed(0)}%</Text>
+
+        {/* Pts */}
+        <Text style={[styles.td, { flex: COL.pts }, NUM]}>{pts}</Text>
+
+        {/* Loss */}
+        <Text style={[styles.td, { flex: COL.loss }, NUM, loss > 0 ? styles.netHurt : styles.netGain]}>{lossTxt}</Text>
+      </View>
+    );
+  }, [COL, StatusDot]);
+
+  return (
+    <View style={{ paddingHorizontal: 12, paddingTop: 10 }}>
+      {/* Search (OUTSIDE FlatList so keyboard never drops) */}
+      <View style={styles.searchRow}>
+        <TextInput
+          value={tableSearch}
+          onChangeText={setTableSearch}
+          placeholder="Search player…"
+          placeholderTextColor={isDark ? '#8a95a6' : '#9aa3af'}
+          style={styles.searchInput}
+          returnKeyType="search"
+          autoCapitalize="none"
+          autoCorrect={false}
+          blurOnSubmit={false}
+          keyboardAppearance={isDark ? 'dark' : 'light'}
+        />
+      </View>
+
+            {/* Status filter */}
+      <View style={styles.legendRow}>
+        {[
+          { key: 'all', label: 'All', dot: null },
+          { key: 'live', label: 'Live', dot: 'live' },
+          { key: 'played', label: 'Played', dot: 'played' },
+          { key: 'yet', label: 'Yet', dot: 'yet' },
+        ].map((it) => {
+          const active = statusFilter === it.key;
+          return (
+            <TouchableOpacity
+              key={it.key}
+              onPress={() => setStatusFilter(it.key)}
+              activeOpacity={0.75}
+              style={[styles.legendPill, active && styles.legendPillActive]}
+            >
+              {it.dot ? (
+                <View style={[styles.statusDot, { backgroundColor: statusColor(it.dot) }]} />
+              ) : (
+                <View style={[styles.statusDot, { backgroundColor: isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.35)' }]} />
+              )}
+              <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>{it.label}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+
+      <FlatList
+        data={filtered}
+        keyExtractor={(item, index) => String(item?.id ?? item?.element ?? `${item?.name ?? 'row'}-${index}`)}
+        ListHeaderComponent={HeaderRow}
+        stickyHeaderIndices={[0]}
+        keyboardShouldPersistTaps="always"
+        keyboardDismissMode="none"
+        removeClippedSubviews={false}
+        initialNumToRender={18}
+        windowSize={8}
+        renderItem={renderRow}
+        contentContainerStyle={{ paddingBottom: 14 }}
+      />
+    </View>
+  );
+});
+
+
+
+
+  /* ---------------------- Main Render ---------------------- */
   const inlineHint = useMemo(() => {
     const base = '';
     if (sample === 'local' && /^missing:local/.test(eoErr)) {

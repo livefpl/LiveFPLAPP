@@ -2847,13 +2847,12 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
             <Text style={S.cardTitle}>Bank</Text>
             <TouchableOpacity
   onPress={() => {
-    // seed the draft right before opening
-    const seeded = Object.prototype.hasOwnProperty.call(bankOverrides || {}, gw)
-      ? Number(bankOverrides[gw] || 0)
-      : Number(weeks?.[gw]?.bank || 0);
-    setBankDraftTenths(seeded);
-    setBankEditOpen(true);
-  }}
+  // seed from CURRENT (final) bank shown on screen
+  const seeded = Number(weeks?.[gw]?.bank ?? 0);
+  setBankDraftTenths(seeded);
+  setBankEditOpen(true);
+}}
+
 >
   <MaterialCommunityIcons name="pencil" size={14} color={C.muted} />
 </TouchableOpacity>
@@ -6526,7 +6525,8 @@ const cycleSort = useCallback(() => {
           const id = fplId || (await AsyncStorage.getItem('fplId'));
           const snap = await loadSnapshot(id);
           setSnapshot(snap);
-          setWeeks((prev) => recomputeAll(prev, snap, playersInfo));
+          setWeeks((prev) => recomputeAll(prev, snap, playersInfo, bankOverrides));
+
         } catch (e) {
           setError(String(e?.message || e));
         } finally {
@@ -6547,29 +6547,52 @@ const cycleSort = useCallback(() => {
 
   
 
+
   const displayMoney = (tenths) => `£${(Number(tenths || 0) / 10).toFixed(1)}m`;
 
   const step = (deltaTenths) => {
     setBankDraftTenths((v) => {
-      const next = Math.max(0, Math.min(9999, v + deltaTenths)); // clamp 0.0..999.9m
+      const next = Math.max(-9999, Math.min(9999, v + deltaTenths)); // allow -999.9m .. 999.9m
+
       return next;
     });
   };
 
   const saveDraft = () => {
-    const nextOverrides = { ...(bankOverrides || {}), [gw]: bankDraftTenths };
-    setBankOverrides(nextOverrides);
-    setWeeks((prev) => recomputeAll(prev, snapshot, playersInfo, nextOverrides));
-    close();
-  };
+  setBankOverrides((prevOv) => {
+    const desiredFinal = Number(bankDraftTenths || 0);
+    const curFinal = Number(weeks?.[gw]?.bank ?? 0);
 
-  const clearOverride = () => {
-    const nextOverrides = { ...(bankOverrides || {}) };
-    delete nextOverrides[gw];
-    setBankOverrides(nextOverrides);
-    setWeeks((prev) => recomputeAll(prev, snapshot, playersInfo, nextOverrides));
-    close();
-  };
+    // What is the "start of GW" bank that the engine currently uses?
+    // - If an override already exists, that's the start bank.
+    // - Else use the captured GW-start snapshot (__gwStart__.bank) if present.
+    // - Else fall back to current final (safe fallback).
+    const startEffective =
+      (prevOv && Object.prototype.hasOwnProperty.call(prevOv, gw))
+        ? Number(prevOv[gw])
+        : Number(weeks?.[gw]?.__gwStart__?.bank ?? curFinal);
+
+    // Keep transfer delta the same, just shift start bank so final becomes what user typed.
+    const newStartOverride = startEffective + (desiredFinal - curFinal);
+
+    const nextOv = { ...(prevOv || {}), [gw]: newStartOverride };
+    setWeeks((prevWeeks) => recomputeAll(prevWeeks, snapshot, playersInfo, nextOv));
+    return nextOv;
+  });
+  close();
+};
+
+
+const clearOverride = () => {
+  setBankOverrides((prevOv) => {
+    const nextOv = { ...(prevOv || {}) };
+    delete nextOv[gw];
+    setWeeks((prevWeeks) => recomputeAll(prevWeeks, snapshot, playersInfo, nextOv));
+    return nextOv;
+  });
+  close();
+};
+
 
 
       

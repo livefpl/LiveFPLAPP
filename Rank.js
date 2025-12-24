@@ -5,6 +5,7 @@ import { useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import PlayerInfoModal from './PlayerInfoModal';
+import EventFeed from './EventFeed';
 
 import { TouchableWithoutFeedback } from 'react-native';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
@@ -305,9 +306,11 @@ const FootballLineupWithImages = () => {
   const [adHeight, setAdHeight] = useState(0); // 0 when no ad/failed/hidden
 // help modal for "Points" tile
 const [helpVisible, setHelpVisible] = useState(false);
+const [onePt, setOnePt] = useState(null);
 
  // near other refs
 const hydratedRef = useRef(false); // becomes true once we've loaded from AsyncStorage (or decided there's nothing to load)
+const [rankTab, setRankTab] = useState('pitch'); // 'pitch' | 'feed'
 
 const [pitchScale, setPitchScale] = useState(1);
 const scaleRef = useRef(1);
@@ -482,6 +485,69 @@ const openPlayerInfo = (pOrId) => {
     </View>
   );
 };
+
+const PitchFeedToggle = ({ value, onChange }) => {
+  const isPitch = value === 'pitch';
+
+  return (
+    <View
+      style={{
+        flexDirection: 'row',
+        borderRadius: 10,
+        overflow: 'hidden',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: C.border,
+        backgroundColor: C.card,
+      }}
+    >
+      <TouchableOpacity
+        onPress={() => onChange('pitch')}
+        style={{
+          paddingHorizontal: 6,   // 👈 controls width
+          height: 20,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: isPitch ? C.accent : 'transparent',
+        }}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+      >
+        <Text numberOfLines={1} ellipsizeMode="clip"
+          style={{
+            fontSize: 9,
+            fontWeight: '700',
+            color: isPitch ? 'white' : C.muted,
+          }}
+        >
+          Pitch
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        onPress={() => onChange('feed')}
+        style={{
+          paddingHorizontal: 6,   // 👈 same padding = symmetry
+          height: 20,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: !isPitch ? C.accent : 'transparent',
+        }}
+        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+      >
+        <Text numberOfLines={1} ellipsizeMode="clip"
+          style={{
+            fontSize: 9,
+            fontWeight: '700',
+            color: !isPitch ? 'white' : C.muted,
+          }}
+        >
+          Feed
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+
 
   // Hidden capture target (off-screen clone)
   const shareTargetRef = useRef(null);
@@ -1540,7 +1606,7 @@ const renderStatsListCompact = (stats = [], C) => {
      try {
        await persistExposureForPayload(payload, effectiveId);
      } catch {}
-
+     
      // ✅ Keep WhatIf’s legacy reader fresh when we’re viewing *my* team,
      // even if Rank used the cached payload (WhatIf reads 'fplData')
      try {
@@ -1561,6 +1627,7 @@ const renderStatsListCompact = (stats = [], C) => {
       try {
        await persistExposureForPayload(payload, effectiveId);
      } catch {}
+setOnePt(payload?.one_pt ?? payload?.onePt ?? payload?.one_pt_est ?? null);
 
       // ---- downstream: unchanged UI mapping ----
       const live = Number(payload?.live_points ?? 0);
@@ -2247,11 +2314,11 @@ const handleShare = useCallback(async () => {
             { info.manager ? (
               <View style={{ width: '100%', paddingHorizontal: 12, marginBottom: 2 }}>
                 <View style={styles.managerRow}>
+                  <PitchFeedToggle value={rankTab} onChange={setRankTab} />
                   
                   {displaySettings.showManagerName && (
   <>
-  <MaterialCommunityIcons name="account-circle-outline" size={18} color={C.muted} />
-    <Text style={styles.managerLabel}>Manager</Text>
+  
     <View style={{ maxWidth: '30%' /* or 160 */, minWidth: 0,flexShrink: 1, }}>
   <Text
     style={styles.managerNameStrong}
@@ -2313,6 +2380,17 @@ const handleShare = useCallback(async () => {
                 </View>
               </View>
             ) : null}
+{rankTab === 'feed' ? (
+  <View style={{ height: pitchHeight, width: '100%' }}>
+    <EventFeed
+      gw={Number(info?.gw ?? 0)}
+      effectiveId={viewFplId ?? fplId}
+      onePt={onePt}
+      height={pitchHeight}
+      impactThreshold={0.01}
+    />
+  </View>
+) : (
 
             <ImageBackground
               source={assetImages.pitch}
@@ -2337,6 +2415,8 @@ const handleShare = useCallback(async () => {
       {achCounts ? `${achCounts.earned}/${achCounts.total}` : 'Trophies'}
     </Text>
   </TouchableOpacity>
+
+
 
   {displaySettings.showEOs && (
     <View style={styles.eoLegendBlock}>
@@ -2467,6 +2547,7 @@ const handleShare = useCallback(async () => {
               })}
               </View>
             </ImageBackground>
+            )}
 
             {/* --------- HIDDEN OFF-SCREEN CLONE (for capture) ---------- */}
             <View ref={shareTargetRef} style={styles.hiddenClone} collapsable={false} pointerEvents="none">

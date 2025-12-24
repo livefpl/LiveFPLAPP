@@ -357,15 +357,6 @@ useEffect(() => {
   return () => clearTimeout(t);
 }, []);
 
-useEffect(() => {
-  const id = setInterval(() => {
-    bump({ source: 'timer' });
-  }, 30_000);
-
-  return () => clearInterval(id);
-}, []);
-
-
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);
 

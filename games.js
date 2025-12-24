@@ -1,5 +1,6 @@
 // Games.js (theme-integrated)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import EventFeed from './EventFeed';
 
 import AppHeader from './AppHeader';
 import {
@@ -1210,6 +1211,7 @@ const bonusAwayDerived = useMemo(() => {
   // Collapsibles (hidden by default)
   const [bpsOpen, setBpsOpen] = useState(false);
   const [defOpen, setDefOpen] = useState(false);
+  
 
   // Threats/opportunities collapsibles (hidden by default as requested)
   const [rankMoversOpen, setRankMoversOpen] = useState(false);
@@ -1820,7 +1822,36 @@ function Games() {
   
   const [gwTitle, setGwTitle] = useState(null);
 const [sortBy, setSortBy] = useState('chrono'); // default: chronological
+const [viewTab, setViewTab] = useState('summary'); // 'summary' | 'feed'
+const [onePt, setOnePt] = useState(null);
 
+useEffect(() => {
+  (async () => {
+    try {
+      // Rank stores the last payload in AsyncStorage under 'fplData' (legacy) and/or fplData:<id>.
+      // Start with the simplest: legacy 'fplData'.
+      const raw = await AsyncStorage.getItem('fplData');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const payload = parsed?.data ?? parsed; // depending on your wrapper shape
+        const v = payload?.one_pt ?? payload?.onePt ?? payload?.one_pt_est ?? null;
+        if (v != null) { setOnePt(Number(v)); return; }
+      }
+
+      // Fallback: if you prefer per-id caches, you can also try:
+      // const myId = await AsyncStorage.getItem('fplId');
+      // if (myId) {
+      //   const scoped = await AsyncStorage.getItem(`fplData:${myId}`);
+      //   if (scoped) {
+      //     const p2 = JSON.parse(scoped);
+      //     const payload2 = p2?.data ?? p2;
+      //     const v2 = payload2?.one_pt ?? payload2?.onePt ?? payload2?.one_pt_est ?? null;
+      //     if (v2 != null) { setOnePt(Number(v2)); return; }
+      //   }
+      // }
+    } catch {}
+  })();
+}, []);
 
 // Load saved sort choice on first mount
 useEffect(() => {
@@ -2077,125 +2108,181 @@ const chronoSections = useMemo(() => {
   return (
     <SafeAreaView style={styles.safe}  edges={['left', 'right']}>
       <AppHeader />
+      {/* Full-width selector: Games Summary / Live Feed */}
+<View style={styles.viewToggleWrap}>
+  <TouchableOpacity
+    activeOpacity={0.9}
+    onPress={() => setViewTab('summary')}
+    style={[
+      styles.viewToggleBtn,
+      viewTab === 'summary' && styles.viewToggleBtnActive,
+    ]}
+  >
+    <Text
+      style={[
+        styles.viewToggleText,
+        viewTab === 'summary' && styles.viewToggleTextActive,
+      ]}
+    >
+      Games Info
+    </Text>
+  </TouchableOpacity>
+
+  <TouchableOpacity
+    activeOpacity={0.9}
+    onPress={() => setViewTab('feed')}
+    style={[
+      styles.viewToggleBtn,
+      viewTab === 'feed' && styles.viewToggleBtnActive,
+    ]}
+  >
+    <Text
+      style={[
+        styles.viewToggleText,
+        viewTab === 'feed' && styles.viewToggleTextActive,
+      ]}
+    >
+      Live Feed
+    </Text>
+  </TouchableOpacity>
+</View>
+
       {err ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 8 }]}>{err}</Text> : null}
       {eoErr ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 4 }]}>EO overlay: {eoErr}</Text> : null}
 
-      {/* EO Sample Selector with Help */}
-      <View style={styles.toolbar}>
-        <View style={[styles.segmentRow, { alignItems: 'center', flexWrap: 'wrap' }]}>
-          <Text style={styles.toolbarLabel}>Gain/Loss vs:</Text>
-          {SAMPLE_OPTIONS.map((opt) => {
-            const active = sample === opt.value;
-            return (
-              <TouchableOpacity
-                key={opt.value}
-                onPress={() => setSample(opt.value)}
-                activeOpacity={0.8}
-                style={[styles.segment, active && styles.segmentActive]}
-              >
-                <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
-                  {opt.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-          <TouchableOpacity style={styles.helpBtn} onPress={() => setShowSampleHelp(true)} activeOpacity={0.8}>
-            <MaterialCommunityIcons name="help-circle-outline" size={14} color={colors.accent} />
-            <Text style={styles.helpBtnText}>What’s this?</Text>
-          </TouchableOpacity>
-        </View>
+    
+
+{viewTab === 'summary' ? (
+  <>
+    {/* EO Sample Selector with Help (ONLY on summary tab) */}
+    <View style={styles.toolbar}>
+      <View style={[styles.segmentRow, { alignItems: 'center', flexWrap: 'wrap' }]}>
+        <Text style={styles.toolbarLabel}>Gain/Loss vs:</Text>
+        {SAMPLE_OPTIONS.map((opt) => {
+          const active = sample === opt.value;
+          return (
+            <TouchableOpacity
+              key={opt.value}
+              onPress={() => setSample(opt.value)}
+              activeOpacity={0.8}
+              style={[styles.segment, active && styles.segmentActive]}
+            >
+              <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                {opt.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+        <TouchableOpacity style={styles.helpBtn} onPress={() => setShowSampleHelp(true)} activeOpacity={0.8}>
+          <MaterialCommunityIcons name="help-circle-outline" size={14} color={colors.accent} />
+          <Text style={styles.helpBtnText}>What’s this?</Text>
+        </TouchableOpacity>
       </View>
+    </View>
 
-{/* GW header + sort dropdown */}
-<View style={styles.gwHeaderRow}>
-  <Text style={styles.gwHeaderText}>
-    {gwTitle ? `Gameweek ${gwTitle}` : 'Gameweek'}
-  </Text>
+    {/* GW header + sort dropdown */}
+    <View style={styles.gwHeaderRow}>
+      <Text style={styles.gwHeaderText}>
+        {gwTitle ? `Gameweek ${gwTitle}` : 'Gameweek'}
+      </Text>
 
-  <SortDropdown
-    value={sortBy}
-    onChange={setSort}
-    options={SORT_OPTIONS}
-    styles={styles}
-    colors={colors}
-  />
-</View>
+      <SortDropdown
+        value={sortBy}
+        onChange={setSort}
+        options={SORT_OPTIONS}
+        styles={styles}
+        colors={colors}
+      />
+    </View>
 
+    {/* Existing lists */}
+    {sortBy === 'chrono' ? (
+      <SectionList
+        sections={chronoSections}
+        keyExtractor={(_, i) => String(i)}
+        extraData={openIndex}
+        stickySectionHeadersEnabled={false}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
+        ListHeaderComponent={<View style={{ height: 10 }} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
+        }
+        renderSectionHeader={({ section }) => (
+          <View style={styles.dayHeader}>
+            <Text style={styles.dayHeaderText}>{section.title}</Text>
+          </View>
+        )}
+        renderItem={({ item }) => {
+          const index = sortedData.indexOf(item);
+          return openIndex === index ? (
+            <GameCard
+              game={item}
+              eoMap={eoMap}
+              myExposure={myExposure}
+              styles={styles}
+              colors={colors}
+              onCollapse={() => toggleAt(index)}
+            />
+          ) : (
+            <CompactGameRow
+              game={item}
+              eoMap={eoMap}
+              myExposure={myExposure}
+              styles={styles}
+              colors={colors}
+              onPress={() => toggleAt(index)}
+            />
+          );
+        }}
+        SectionSeparatorComponent={() => <View style={{ height: 8 }} />}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+      />
+    ) : (
+      <FlatList
+        data={sortedData}
+        keyExtractor={(_, i) => String(i)}
+        extraData={openIndex}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
+        ListHeaderComponent={<View style={{ height: 10 }} />}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
+        }
+        renderItem={({ item, index }) =>
+          openIndex === index ? (
+            <GameCard
+              game={item}
+              eoMap={eoMap}
+              myExposure={myExposure}
+              styles={styles}
+              colors={colors}
+              onCollapse={() => toggleAt(index)}
+            />
+          ) : (
+            <CompactGameRow
+              game={item}
+              eoMap={eoMap}
+              myExposure={myExposure}
+              styles={styles}
+              colors={colors}
+              onPress={() => toggleAt(index)}
+            />
+          )
+        }
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+      />
+    )}
+  </>
+) : (
+  // ✅ Live Feed tab (ALWAYS near-you, not affected by sample selector)
+  <View style={{ paddingHorizontal: 12, paddingTop: 6 }}>
+    <EventFeed
+      gw={gwTitle}
+      height={Math.max(520, SCREEN_H - 220)}
+      onePt={onePt}
+    />
+  </View>
+)}
 
-
-     {sortBy === 'chrono' ? (
-        <SectionList
-          sections={chronoSections}
-          keyExtractor={(_, i) => String(i)}
-          extraData={openIndex}
-          stickySectionHeadersEnabled={false}
-          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
-          ListHeaderComponent={<View style={{ height: 10 }} />}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
-          }
-          renderSectionHeader={({ section }) => (
-            <View style={styles.dayHeader}>
-              <Text style={styles.dayHeaderText}>{section.title}</Text>
-            </View>
-          )}
-          renderItem={({ item }) => {
-            const index = sortedData.indexOf(item); // stable index for expand/collapse
-            return openIndex === index ? (
-              <GameCard
-                game={item}
-                eoMap={eoMap}
-                myExposure={myExposure}
-                styles={styles}
-                colors={colors}
-                onCollapse={() => toggleAt(index)}
-              />
-            ) : (
-              <CompactGameRow
-                game={item}
-                eoMap={eoMap}
-                myExposure={myExposure}
-                styles={styles}
-                colors={colors}
-                onPress={() => toggleAt(index)}
-              />
-            );
-          }}
-          SectionSeparatorComponent={() => <View style={{ height: 8 }} />}
-          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        />
-      ) : (
-        <FlatList
-          data={sortedData}
-          keyExtractor={(_, i) => String(i)}
-          extraData={openIndex}
-          contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 16 }}
-          ListHeaderComponent={<View style={{ height: 10 }} />}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />}
-          renderItem={({ item, index }) =>
-            openIndex === index ? (
-              <GameCard
-                game={item}
-                eoMap={eoMap}
-                myExposure={myExposure}
-                styles={styles}
-                colors={colors}
-                onCollapse={() => toggleAt(index)}
-              />
-            ) : (
-              <CompactGameRow
-                game={item}
-                eoMap={eoMap}
-                myExposure={myExposure}
-                styles={styles}
-                colors={colors}
-                onPress={() => toggleAt(index)}
-              />
-            )
-          }
-          ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-        />
-      )}
 
 
 
@@ -2834,6 +2921,35 @@ sortPicker: {
       borderColor: colors.border2,
       marginLeft: 6,
     },
+    viewToggleWrap: {
+  flexDirection: 'row',
+  marginHorizontal: 12,
+  marginTop: 10,
+  marginBottom: 10,
+  borderRadius: 14,
+  borderWidth: 1,
+  borderColor: colors.border,
+  backgroundColor: colors.card2,
+  overflow: 'hidden',
+},
+viewToggleBtn: {
+  flex: 1,
+  paddingVertical: 10,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+viewToggleBtnActive: {
+  backgroundColor: colors.accent,
+},
+viewToggleText: {
+  color: colors.muted,
+  fontWeight: '900',
+  fontSize: 12,
+},
+viewToggleTextActive: {
+  color: 'white',
+},
+
     helpBtnText: { color: colors.accent, fontWeight: '800', fontSize: 12 },
 
     /* Help modal */

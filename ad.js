@@ -2,9 +2,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
-import { useColors } from './theme';
 import { usePro } from './ProContext';
 import { getInterstitialDebugState } from './AdInterstitial';
+import { ThemeProvider, useTheme, useColors } from './theme';
 
 export const AD_FOOTER_HEIGHT = 50;
 
@@ -15,6 +15,8 @@ const TIMEOUT_MS = 18000;
 export default function AdFooter() {
   const C = useColors();
   const { isPro } = usePro();
+const { navTheme } = useTheme();
+const isDark = navTheme?.dark;
 
   // Hard gate: Pro users see absolutely nothing ad-related.
   if (isPro) return null;
@@ -57,14 +59,16 @@ export default function AdFooter() {
     () =>
       StyleSheet.create({
         container: {
-          height: AD_FOOTER_HEIGHT,
-          backgroundColor: C.bg,
-          borderTopWidth: 1,
-          borderTopColor: C.border,
-          alignItems: 'center',
-          justifyContent: 'center',
-          paddingHorizontal: 8,
-        },
+  height: AD_FOOTER_HEIGHT,
+  backgroundColor: isDark ? '#ced4da' : '#ffffff',
+       // <- force light background so ad text stays visible
+  borderTopWidth: 1,
+  borderTopColor: 'rgba(0,0,0,0.12)', // <- neutral border (don’t use C.border)
+  alignItems: 'center',
+  justifyContent: 'center',
+  paddingHorizontal: 8,
+},
+
         bannerFrame: {
           width: BANNER_SIZE.width,
           height: BANNER_SIZE.height,

@@ -17,7 +17,7 @@ const INTERSTITIAL_ALIAS = 'interstitial'; // must match your Playwire alias exa
 let inflight = null;
 
 // Cooldown
-let _minIntervalMs = 90_000;
+let _minIntervalMs = 5_000;
 let _lastShownAt = 0;
 
 // Optional external guard (e.g. Pro status)
