@@ -14,6 +14,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from './theme';
+import { assetImages } from './clubs';
 
 /**
  * Reusable distilled events feed.
@@ -37,6 +38,8 @@ export default function EventFeed({
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
   const [impactOnly, setImpactOnly] = useState(true);
+// expand state for whole group (key = groupKey)
+const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
   const [groups, setGroups] = useState([]); // rendered groups
   const [lastUpdated, setLastUpdated] = useState(0);
@@ -57,6 +60,14 @@ export default function EventFeed({
     if (!r.ok) throw new Error(`HTTP ${r.status} loading ${url}`);
     return await r.json();
   }, []);
+const toggleGroupExpanded = useCallback((key) => {
+  setExpandedGroups(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+}, []);
 
   const readExposure = useCallback(async () => {
     const k1 = effectiveId != null ? `myExposure:${String(effectiveId)}` : null;
@@ -389,6 +400,7 @@ export default function EventFeed({
     const metaLine = buildMetaLine(item);
 
     const groupKey = `${Number(item?.ts || 0)}:${Number(item?.gen || 0)}:${index}`;
+const groupOpen = expandedGroups.has(groupKey);
 
     const isBonusGroup =
       String(item?.kind || item?.title || '')
@@ -397,70 +409,90 @@ export default function EventFeed({
 
     return (
       <View style={[styles.card, { borderColor: C.border, backgroundColor: C.card }]}>
-        <View style={styles.cardTop}>
-          <View style={{ width: 22, alignItems: 'center', paddingTop: 1 }}>
-            {renderGroupIcon(item, C)}
+        <TouchableOpacity
+  activeOpacity={0.9}
+  onPress={() => toggleGroupExpanded(groupKey)}
+  style={styles.cardTop}
+>
+  {/* Row 1: icon + title/meta (full width) */}
+  <View style={styles.cardTopMain}>
+    <View style={{ width: 22, alignItems: 'center', paddingTop: 1 }}>
+      {renderGroupIcon(item, C)}
+    </View>
 
-          </View>
+    <View style={{ flex: 1, minWidth: 0 }}>
+      <Text style={[styles.cardTitle, { color: C.ink }]} numberOfLines={3}>
+        {title}
+      </Text>
 
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.cardTitle, { color: C.ink }]} numberOfLines={3}>
-              {title}
-            </Text>
+      {!!metaLine && (
+        <Text style={{ color: C.muted, fontSize: 11, marginTop: 2 }} numberOfLines={2}>
+          {metaLine}
+        </Text>
+      )}
+    </View>
 
-            {!!metaLine && (
-              <Text style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>
-                {metaLine}
-              </Text>
-            )}
-          </View>
+    <MaterialCommunityIcons
+      name={groupOpen ? 'chevron-up' : 'chevron-down'}
+      size={18}
+      color={C.muted}
+    />
+  </View>
 
-          <View style={styles.rightCols}>
-            <View style={styles.rightColWide}>
-              <View style={styles.impactRow}>
-                {posPts ? <MaterialCommunityIcons name="arrow-up" size={14} color={C.good || '#10b981'} /> : null}
-                {negPts ? <MaterialCommunityIcons name="arrow-down" size={14} color={C.bad || '#ef4444'} /> : null}
-                <Text
-                  style={[
-                    styles.impactTxt,
-                    { color: posPts ? (C.good || '#10b981') : negPts ? (C.bad || '#ef4444') : C.muted },
-                  ]}
-                >
-                  {fmtSigned(net, 2)}
-                </Text>
-              </View>
-            </View>
+  {/* Row 2: stats */}
+  <View style={styles.cardBottomStats}>
+    <View style={styles.statBlock}>
+      <View style={styles.impactRow}>
+        {posPts ? (
+          <Image source={assetImages.up} style={{ width: 12, height: 12, marginTop: 1, marginRight: 2 }} />
+        ) : null}
+        {negPts ? (
+          <Image source={assetImages.down} style={{ width: 12, height: 12, marginTop: 1, marginRight: 2 }} />
+        ) : null}
+        <Text
+          style={[
+            styles.impactTxt,
+            { color: posPts ? (C.good || '#10b981') : negPts ? (C.bad || '#ef4444') : C.muted },
+          ]}
+        >
+          {fmtSigned(net, 2)}
+        </Text>
+      </View>
+    </View>
 
-            <View style={styles.rightColWide}>
-              <View style={styles.impactRow}>
-                {onePt && improves ? (
-                  <MaterialCommunityIcons name="arrow-up" size={14} color={C.good || '#10b981'} />
-                ) : null}
-                {onePt && worsens ? (
-                  <MaterialCommunityIcons name="arrow-down" size={14} color={C.bad || '#ef4444'} />
-                ) : null}
-                <Text
-                  style={[
-                    styles.rankTxt,
-                    {
-                      color: !onePt
-                        ? C.muted
-                        : improves
-                          ? (C.good || '#10b981')
-                          : worsens
-                            ? (C.bad || '#ef4444')
-                            : C.muted,
-                    },
-                  ]}
-                >
-                  {onePt ? fmtRankAbs(rankDelta) : '—'}
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
+    <View style={styles.statBlock}>
+      <View style={styles.impactRow}>
+        {onePt && improves ? (
+          <Image source={assetImages.up} style={{ width: 12, height: 12, marginTop: 1, marginRight: 2 }} />
+        ) : null}
+        {onePt && worsens ? (
+          <Image source={assetImages.down} style={{ width: 12, height: 12, marginTop: 1, marginRight: 2 }} />
+        ) : null}
+        <Text
+          style={[
+            styles.rankTxt,
+            {
+              color: !onePt
+                ? C.muted
+                : improves
+                  ? (C.good || '#10b981')
+                  : worsens
+                    ? (C.bad || '#ef4444')
+                    : C.muted,
+            },
+          ]}
+        >
+          {onePt ? fmtRankAbs(rankDelta) : '—'}
+        </Text>
+      </View>
+    </View>
+  </View>
+</TouchableOpacity>
+
+
 
         {/* players */}
+        {groupOpen ? (
         <View style={{ marginTop: 10 }}>
           {(item.playersRendered || []).slice(0, 18).map((p) => {
             const isYou = Number(p.you || 0) > 0;
@@ -599,9 +631,10 @@ export default function EventFeed({
             </Text>
           )}
         </View>
+        ) : null}
       </View>
     );
-  }, [C, onePt, expanded, toggleExpanded, pidToTeam]);
+  }, [C, onePt, expanded, toggleExpanded, expandedGroups, toggleGroupExpanded, pidToTeam]);
 
   return (
     <View style={{ height }}>
@@ -686,6 +719,16 @@ function renderGroupIcon(g, C, size = 18) {
     .toLowerCase();
 
   const text = `${raw} ${playersText}`;
+  
+  if (text.includes('defcon') || text.includes('defensive')) {
+    return (
+      <MaterialCommunityIcons
+        name="wall"
+        size={size}
+        color={C.muted}
+      />
+    );
+  }
 
   // Yellow / Red cards (Rank-page style)
   if (text.includes('yellow')) return <View style={styles.cardYellow} />;
@@ -778,49 +821,162 @@ function formatTsCompact(tsMaybe, tsStrFallback) {
 
 function prettyGroupTitle(g) {
   const base = String(g?.title || g?.kind || 'Update');
-
-  // If backend already gives a good title, keep it.
   const baseLower = base.toLowerCase();
 
-  // We only rewrite when it looks generic
+  const players = Array.isArray(g?.playersRendered)
+    ? g.playersRendered
+    : Array.isArray(g?.players)
+    ? g.players
+    : [];
+
+  const namesAll = players
+    .map(p => String(p?.name || '').trim())
+    .filter(Boolean);
+
+  const uniq = (arr) => {
+    const s = new Set();
+    const out = [];
+    for (const x of arr) if (!s.has(x)) { s.add(x); out.push(x); }
+    return out;
+  };
+
+  const list = (arr, max = 4) => {
+    if (!arr.length) return '';
+    if (arr.length <= max) return arr.join(', ');
+    return `${arr.slice(0, max).join(', ')} +${arr.length - max} more`;
+  };
+
+  // --- classify by per-player text ---
+  const defconAdd = [];
+  const defconRemove = [];
+  const yellow = [];
+  const assists = [];
+  const saves = [];
+  const subsOn = [];
+
+  let hasGoal = false;
+  let goalScorers = []; // may contain multiple in weird cases
+  let goalAssisters = [];
+
+  for (const p of players) {
+    const name = String(p?.name || '').trim();
+    if (!name) continue;
+
+    const txt = [
+      p?.label,
+      p?.stat,
+      ...(p?.reasons || []).map(r => r?.label || r?.stat)
+    ].join(' ').toLowerCase();
+
+    const dpts = Number(p?.delta_pts || 0);
+
+    // Goal detection (priority)
+    if (txt.includes('goal') || txt.includes('scored')) {
+      // guard: “goals conceded” shouldn’t mark as a scorer
+      if (!txt.includes('conced')) {
+        hasGoal = true;
+        goalScorers.push(name);
+      }
+    }
+
+    // Assists
+    if (txt.includes('assist')) {
+      assists.push(name);
+      // if we’re in a goal group, treat assists as goal-assisters for title
+      goalAssisters.push(name);
+    }
+
+    // DEFCON
+    if (txt.includes('defcon') || txt.includes('defensive')) {
+      (dpts >= 0 ? defconAdd : defconRemove).push(name);
+    }
+
+    // Yellow cards
+    if (txt.includes('yellow')) yellow.push(name);
+
+    // Saves
+    if (txt.includes('save')) saves.push(name);
+
+    // Sub / appearance (ONLY who came on)
+    if (txt.includes('sub') || txt.includes('appearance')) subsOn.push(name);
+  }
+
+  // dedupe
+  const defAddU = uniq(defconAdd);
+  const defRemU = uniq(defconRemove);
+  const yellowU = uniq(yellow);
+  const assistsU = uniq(assists);
+  const savesU = uniq(saves);
+  let subsU = uniq(subsOn);
+  const namesU = uniq(namesAll);
+
+  const isLate =
+    baseLower.includes('late recalculation') ||
+    baseLower.includes('late calculation') ||
+    baseLower.includes('late');
+
+  // ✅ If your data doesn’t label sub in per-player text, fall back to base title
+  if (!subsU.length && (baseLower.includes('sub') || baseLower.includes('appearance'))) {
+    subsU = namesU;
+  }
+
+  // ---- Titles in priority order ----
+
+  // 0) GOALS FIRST (so assists don’t steal these)
+  if (hasGoal) {
+    const scorer = uniq(goalScorers)[0] || namesU[0];
+    const assister = uniq(goalAssisters).filter(n => n !== scorer)[0];
+    return assister ? `Goal: ${scorer} (assist ${assister})` : `Goal: ${scorer}`;
+  }
+
+  // 1) Substitutions / appearances (ONLY "on")
+  if (subsU.length) {
+    return subsU.length === 1
+      ? `Subbed on: ${subsU[0]}`
+      : `Subbed on: ${list(subsU)}`;
+  }
+
+  // 2) DEFCON (multi-player supported)
+  if (defAddU.length || defRemU.length) {
+    if (defAddU.length && !defRemU.length) return `DEFCON added: ${list(defAddU)}`;
+    if (defRemU.length && !defAddU.length) return `DEFCON removed: ${list(defRemU)}`;
+    return `DEFCON updates: ${list(uniq([...defAddU, ...defRemU]))}`;
+  }
+
+  // 3) Yellow cards
+  if (yellowU.length) return `Yellow cards: ${list(yellowU)}`;
+
+  // 4) PURE ASSISTS ONLY (no goal in group)
+  if (assistsU.length) {
+    return assistsU.length === 1
+      ? `${assistsU[0]} Assist`
+      : `Assists: ${list(assistsU)}`;
+  }
+
+  // 5) Saves
+  if (savesU.length) {
+    return savesU.length === 1
+      ? `${savesU[0]} Saves`
+      : `Saves: ${list(savesU)}`;
+  }
+
+  // Late calculations fallback
+  if (isLate && namesU.length) {
+    return `Late updates: ${list(namesU)}`;
+  }
+
+  // Keep non-generic backend titles
   const looksGeneric =
+    baseLower.includes('other') ||
     baseLower === 'cards' ||
-    baseLower === 'card' ||
-    baseLower === 'defcon' ||
-    baseLower === 'defensive contribution' ||
-    baseLower === 'defensive contributions' ||
-    baseLower === 'defensive' ||
-    baseLower === 'cards/defcon';
+    baseLower === 'defcon';
 
   if (!looksGeneric) return base;
 
-  const top = (g?.playersRendered || [])[0];
-  if (!top) return base;
-
-  const name = top.name || `#${top.pid}`;
-
-  // Look for DEFCON / cards in BOTH labels and reasons
-  const labelsText = String(top.labels || '').toLowerCase();
-  const reasonsText = Array.isArray(top.reasons)
-    ? top.reasons.map(r => String(r?.label || r?.stat || '')).join(' ').toLowerCase()
-    : '';
-
-  const text = `${labelsText} ${reasonsText}`.trim();
-
-  // Cards
-  if (text.includes('yellow')) return `${name} Yellow Card`;
-  if (text.includes('red')) return `${name} Red Card`;
-
-  // DEFCON (defensive contribution)
-  if (text.includes('defcon') || text.includes('defensive contribution') || text.includes('defensive')) {
-    // Added/Removed: use the player's total delta pts sign
-    const dpts = Number(top.delta_pts || 0);
-    const verb = dpts >= 0 ? 'Added' : 'Removed';
-    return `${name} DEFCON ${verb}`;
-  }
-
-  return `${name} ${base}`;
+  return namesU.length ? `${namesU[0]} update` : base;
 }
+
+
 
 /* ---------------- Core logic ported from your website feed ---------------- */
 
@@ -1095,7 +1251,7 @@ function parseEOJson(json) {
 function normalizePercent(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
-  return (n >= 0 && n <= 1) ? (n * 100) : n;
+  return (n >= 0 && n <= 3) ? (n * 100) : n;
 }
 
 /* ---------------- Styles ---------------- */
@@ -1282,6 +1438,26 @@ cardRed: {
     borderRadius: 14,
     padding: 12,
   },
+  cardTop: {
+  flexDirection: 'column',
+  gap: 8,
+},
+
+cardTopMain: {
+  flexDirection: 'row',
+  gap: 10,
+},
+
+cardBottomStats: {
+  flexDirection: 'row',
+  justifyContent: 'flex-end',
+  gap: 12,
+},
+statBlock: {
+  minWidth: 110,
+  alignItems: 'flex-end',
+},
+
   modalRow: {
     paddingVertical: 10,
     paddingHorizontal: 10,

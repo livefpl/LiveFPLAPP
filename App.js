@@ -357,14 +357,48 @@ useEffect(() => {
   return () => clearTimeout(t);
 }, []);
 
-useEffect(() => {
+
+
+
+  // Interstitial timer interval (ms) — default 30s, can be overridden by version.json "timer"
+  const [adTimerMs, setAdTimerMs] = React.useState(30_000);
+
+  useEffect(() => {
+    let alive = true;
+
+    async function loadTimer() {
+      try {
+        const r = await fetch(CONFIG_URL, { cache: 'no-store' });
+        const j = await r.json();
+
+        // Accept either seconds (e.g. 30) or ms (e.g. 30000)
+        const tSec = Number(j?.meter?.timer); // timer is in SECONDS
+        
+
+        if (Number.isFinite(tSec) && tSec > 0) {
+          const ms = Math.max(10_000, Math.min(600_000, tSec * 1000));
+          
+
+          if (alive) setAdTimerMs(ms);
+        }
+      } catch {
+        // ignore; keep default
+      }
+    }
+
+    loadTimer();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
   const id = setInterval(() => {
     bump({ source: 'timer' });
-  }, 30_000);
+  }, adTimerMs);
 
   return () => clearInterval(id);
-}, []);
-
+}, [adTimerMs]);
 
   const navRef = React.useRef(null);
   const prevRouteNameRef = React.useRef(null);

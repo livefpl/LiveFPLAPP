@@ -1805,7 +1805,7 @@ setExposureMap(exposureFromPlayers);
  
   useFocusEffect(
     useCallback(() => {
-
+      setRankTab('pitch');
       // kick off fetch
       fetchData();
 

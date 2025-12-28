@@ -2027,7 +2027,12 @@ useFocusEffect(
     return () => { mounted = false; };
   }, [fetchGames, sample])
 );
-
+useFocusEffect(
+  useCallback(() => {
+    setViewTab('summary');   // or whatever your default is called
+    return undefined;
+  }, [])
+);
 
 const sortedData = useMemo(() => {
   const copy = (data || []).slice();
