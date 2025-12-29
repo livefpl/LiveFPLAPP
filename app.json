@@ -22,7 +22,7 @@
       }
     },
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
@@ -51,6 +51,9 @@
       }
     },
     "plugins": [
+      "@react-native-firebase/app",
+  "@react-native-firebase/messaging",
+
 	"./plugins/withPrebidPodWorkaround",
       "expo-font",
       
