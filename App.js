@@ -18,6 +18,9 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ThemeProvider, useTheme, useColors } from './theme';
 import { ProProvider, usePro } from './ProContext';
 import { FplIdProvider } from './FplIdContext';
+import '@react-native-firebase/app';
+
+import messaging from '@react-native-firebase/messaging';
 
 import ForceUpdateGate from './checkversion';
 import { initPlaywire } from './playwireInit';
@@ -357,6 +360,34 @@ useEffect(() => {
   return () => clearTimeout(t);
 }, []);
 
+
+useEffect(() => {
+  const initFCM = async () => {
+    try {
+      // iOS: ensure device is registered for remote messages
+      await messaging().registerDeviceForRemoteMessages();
+
+      const authStatus = await messaging().requestPermission();
+      console.log('[FCM] authStatus:', authStatus);
+
+      const enabled =
+        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+
+      console.log('[FCM] permission enabled:', enabled);
+
+      const apns = await messaging().getAPNSToken();
+      console.log('[FCM] apns token:', apns);
+
+      const fcm = await messaging().getToken();
+      console.log('[FCM] fcm token:', fcm);
+    } catch (e) {
+      console.error('[FCM] init error', e);
+    }
+  };
+
+  initFCM();
+}, []);
 
 
 
