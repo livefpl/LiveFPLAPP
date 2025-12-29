@@ -53,6 +53,7 @@
     "plugins": [
       "@react-native-firebase/app",
   "@react-native-firebase/messaging",
+"./plugins/withFirebaseConfigure",
 
 	"./plugins/withPrebidPodWorkaround",
       "expo-font",
