@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "271221398050",
+    "project_id": "livefpl-9774d",
+    "storage_bucket": "livefpl-9774d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:271221398050:android:23826a993f3b930464487b",
+        "android_client_info": {
+          "package_name": "com.pocketgamerguides.livefpl"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAm1wtl7FtCutKAP9vnwcmQSh1rWu0_dOI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

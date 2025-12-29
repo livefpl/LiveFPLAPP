@@ -719,7 +719,7 @@ function renderGroupIcon(g, C, size = 18) {
     .toLowerCase();
 
   const text = `${raw} ${playersText}`;
-  
+
   if (text.includes('defcon') || text.includes('defensive')) {
     return (
       <MaterialCommunityIcons
@@ -926,7 +926,7 @@ function prettyGroupTitle(g) {
   if (hasGoal) {
     const scorer = uniq(goalScorers)[0] || namesU[0];
     const assister = uniq(goalAssisters).filter(n => n !== scorer)[0];
-    return assister ? `Goal: ${scorer} (assist ${assister})` : `Goal: ${scorer}`;
+    return assister ? `Goal: ${scorer} (Assist ${assister})` : `Goal: ${scorer}`;
   }
 
   // 1) Substitutions / appearances (ONLY "on")
