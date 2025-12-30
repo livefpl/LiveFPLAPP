@@ -2054,19 +2054,42 @@ closeMarket();
     return sellPrice(now, bv);
   }, [current?.sellOverrides, current?.bought, costs]);
 
-  // ---------- FDR helpers (with overrides) ----------
+  // Build a rating->rgb map from FPL base so overrides reuse the official shades
+const ratingRgbFromBase = useMemo(() => {
+  const out = {}; // { 1:[r,g,b], 2:[r,g,b], ... }
+  const base = fdrRatingsBase || {};
+  for (const k of Object.keys(base)) {
+    const v = base[k];
+    if (!Array.isArray(v)) continue;
+    const d = Number(v[0]);
+    const rgb = v[1];
+    if (d >= 1 && d <= 5 && Array.isArray(rgb) && rgb.length === 3) {
+      if (!out[d]) out[d] = rgb;
+    }
+  }
+  return out;
+}, [fdrRatingsBase]);
+
   const colorForRating = useCallback((d) => {
-    // 1 best (green) -> 5 worst (red)
-    const palette = {
-      1: [26, 171, 79],   // green
-      2: [104, 197, 119], // light green
-      3: [196, 196, 196], // gray
-      4: [247, 180, 83],  // orange
-      5: [220, 60, 60],   // red
-    };
-    const [r,g,b] = palette[d] || [196,196,196];
+  // Prefer the official RGBs if available (so overrides match fixtures colors)
+  const fromBase = ratingRgbFromBase?.[d];
+  if (Array.isArray(fromBase) && fromBase.length === 3) {
+    const [r, g, b] = fromBase;
     return { bg: `rgb(${r},${g},${b})`, fg: textColorForRgb(r,g,b), rgb:[r,g,b] };
-  }, []);
+  }
+
+  // Fallback palette (only used if base doesn't supply RGBs)
+  const palette = {
+    1: [26, 171, 79],
+    2: [104, 197, 119],
+    3: [196, 196, 196],
+    4: [247, 180, 83],
+    5: [220, 60, 60],
+  };
+  const [r,g,b] = palette[d] || [196,196,196];
+  return { bg: `rgb(${r},${g},${b})`, fg: textColorForRgb(r,g,b), rgb:[r,g,b] };
+}, [ratingRgbFromBase]);
+
 
   const getRatingAndColor = useCallback((label) => {
     if (!label) return { d: 3, color: 'rgb(196,196,196)', text: '#000', rgb:[196,196,196] };

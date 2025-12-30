@@ -31,6 +31,38 @@ const isDark = navTheme?.dark;
     return () => clearTimeout(t);
   }, []);
 
+    // If banners stay blank, force a remount occasionally to trigger a fresh request.
+  const [bannerKey, setBannerKey] = useState(0);
+
+ useEffect(() => {
+  if ( !canMountBanner) return;
+
+  let tries = 0;
+  let stopped = false;
+  let intervalId = null;
+
+  const startTimer = setTimeout(() => {
+    if (stopped) return;
+
+    intervalId = setInterval(() => {
+      tries += 1;
+      setBannerKey((k) => k + 1);
+
+      if (tries >= 6) {
+        clearInterval(intervalId);
+        intervalId = null;
+        stopped = true;
+      }
+    }, 20_000);
+  }, 12_000);
+
+  return () => {
+    stopped = true;
+    clearTimeout(startTimer);
+    if (intervalId) clearInterval(intervalId);
+  };
+}, [sdkReady, canMountBanner]);
+
   // Poll lightly until sdk is ready (no UI, no logs). This avoids mounting banner too early.
   useEffect(() => {
     if (sdkReady) return;
@@ -78,10 +110,10 @@ const isDark = navTheme?.dark;
           backgroundColor: 'transparent',
         },
       }),
-    [C]
+    [C,isDark]
   );
 
-    if (!sdkReady || !canMountBanner) {
+    if ( !canMountBanner) {
     return <View style={styles.container} />;
   }
 
@@ -90,6 +122,7 @@ const isDark = navTheme?.dark;
     <View style={styles.container}>
       <View style={styles.bannerFrame}>
         <PlaywireBannerView
+        key={`pw_banner_${bannerKey}`}
           adUnitId={AD_ALIAS}
           size={BANNER_SIZE}
           style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}

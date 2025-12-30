@@ -10,6 +10,19 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+ import { InteractionManager } from 'react-native';
+
+
+import * as Notifications from 'expo-notifications';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,     // <-- this makes it show while app is open
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 
 import { NavigationContainer, CommonActions, useNavigation } from '@react-navigation/native';
 import { createBottomTabNavigator, BottomTabBar } from '@react-navigation/bottom-tabs';
@@ -336,19 +349,38 @@ function RootNavigation({ navRef, onReady, onStateChange }) {
 
 /* ------------------------ App ------------------------ */
 export default function App() {
-  useEffect(() => {
-    const publisherId =
-      process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
-      require('./app.json').expo.extra.playwire.publisherId;
-    const iosAppId =
-      process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID ||
-      require('./app.json').expo.extra.playwire.iosAppId;
-    const androidAppId =
-      process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
-      require('./app.json').expo.extra.playwire.androidAppId;
 
-    initPlaywire({ publisherId, iosAppId, androidAppId });
-  }, []);
+
+useEffect(() => {
+  let cancelled = false;
+
+  const publisherId =
+    process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
+    require('./app.json').expo.extra.playwire.publisherId;
+  const iosAppId =
+    process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID ||
+    require('./app.json').expo.extra.playwire.iosAppId;
+  const androidAppId =
+    process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
+    require('./app.json').expo.extra.playwire.androidAppId;
+
+  // ✅ Defer Playwire until the app is idle + first UI interactions have finished.
+  const task = InteractionManager.runAfterInteractions(() => {
+    // Extra tiny delay to get past the “first keyboard focus” window on iOS
+    const t = setTimeout(() => {
+      if (cancelled) return;
+      initPlaywire({ publisherId, iosAppId, androidAppId });
+    }, 1200);
+
+    return () => clearTimeout(t);
+  });
+
+  return () => {
+    cancelled = true;
+    try { task?.cancel?.(); } catch {}
+  };
+}, []);
+
 
 
   const bootGraceRef = React.useRef(true);
