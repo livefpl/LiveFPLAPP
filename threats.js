@@ -2301,6 +2301,35 @@ const lossTxt = `${loss.toFixed(1)}`;
             );
           })}
         </ScrollView>
+        {hasLive && (
+  <View style={{ paddingHorizontal: 12, paddingBottom: 6 }}>
+    <TouchableOpacity
+      onPress={() => navigation.navigate('Templates')}
+      activeOpacity={0.85}
+      style={{
+        paddingVertical: 8,
+        borderRadius: 10,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: P.border,
+        backgroundColor: isDark
+          ? 'rgba(255,255,255,0.05)'
+          : 'rgba(0,0,0,0.04)',
+        alignItems: 'center',
+      }}
+    >
+      <Text
+        style={{
+          fontWeight: '800',
+          fontSize: 12,
+          color: P.ink,
+        }}
+      >
+        Templates / Averages / Chips
+      </Text>
+    </TouchableOpacity>
+  </View>
+)}
+
 
         {/* Live */}
         {activeTab === 'live' && <LiveBattleCard />}

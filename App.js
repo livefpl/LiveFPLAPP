@@ -173,7 +173,6 @@ function MyTabs() {
           </View>
 
           {/* Keep only non-tab destinations here */}
-          <PopItem icon="poker-chip" label="Templates, Chips & Averages" target="Templates" />
           <PopItem icon="medal" label="Gameweek Trophies" target="Trophies" />
           <PopItem icon="account-edit" label="Change FPL ID" target="ID" />
           <PopItem icon="crown" label="Premium/Remove Ads" target="Premium" />
@@ -250,7 +249,11 @@ function MyTabs() {
         })}
         tabBar={(props) => {
           const i = props.state.index;
-          const activeRoute = props.state.routeNames[i];
+          let activeRoute = props.state.routeNames[i];
+          // 🔧 FORCE bottom tab to stay on Battle when viewing Templates
+if (activeRoute === 'Templates') {
+  activeRoute = 'Battle';
+}
 
           return (
             <View onLayout={(e) => setChromeH(e.nativeEvent.layout.height || 60)}>
@@ -258,6 +261,10 @@ function MyTabs() {
               <AdFooter />
               <BottomTabBar
                 {...props}
+                state={{
+    ...props.state,
+    index: props.state.routeNames.indexOf(activeRoute),
+  }}
                 onTabPress={(e) => {
                   const { name } = e.target
                     ? props.state.routes.find((r) => r.key === e.target) || {}
@@ -353,6 +360,7 @@ export default function App() {
 
 useEffect(() => {
   let cancelled = false;
+  let t = null;
 
   const publisherId =
     process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
@@ -364,22 +372,21 @@ useEffect(() => {
     process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
     require('./app.json').expo.extra.playwire.androidAppId;
 
-  // ✅ Defer Playwire until the app is idle + first UI interactions have finished.
   const task = InteractionManager.runAfterInteractions(() => {
     // Extra tiny delay to get past the “first keyboard focus” window on iOS
-    const t = setTimeout(() => {
+    t = setTimeout(() => {
       if (cancelled) return;
       initPlaywire({ publisherId, iosAppId, androidAppId });
     }, 1200);
-
-    return () => clearTimeout(t);
   });
 
   return () => {
     cancelled = true;
+    if (t) clearTimeout(t);
     try { task?.cancel?.(); } catch {}
   };
 }, []);
+
 
 
 

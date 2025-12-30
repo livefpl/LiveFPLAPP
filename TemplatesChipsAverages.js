@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import {  useNavigation } from '@react-navigation/native';
 
 import AppHeader from './AppHeader';
 import { useColors } from './theme';
@@ -318,6 +319,8 @@ function chipLabel(k) {
 /* ---------------------- Main Screen ---------------------- */
 export default function TemplatesChipsAverages() {
   const C = useColors();
+    const navigation = useNavigation();
+  
   const P = useMemo(
     () => ({
       bg: C.bg,
@@ -693,6 +696,7 @@ const myPlayState = useMemo(() => {
     },
     tabsRow: {
       flexDirection: 'row',
+      justifyContent: 'center',  
       gap: 8,
       alignItems: 'center',
       paddingHorizontal: 12,
@@ -852,6 +856,19 @@ const myPlayState = useMemo(() => {
             );
           })}
         </View>
+        <View style={styles.tabsRow}>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Battle')}
+              activeOpacity={0.85}
+              style={[styles.tabPill]}
+            >
+              <Text
+                style={[styles.tabText]}
+              >
+                Differentials/Threats/Live Battle
+              </Text>
+            </TouchableOpacity>
+          </View>
       </View>
     );
   }

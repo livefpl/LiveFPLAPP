@@ -491,7 +491,9 @@ const [chipsOverallSortDir, setChipsOverallSortDir] = useState('desc');
  const [compareOpen, setCompareOpen] = useState(false);
  const [compareA, setCompareA] = useState(null); // entry_id
  const [compareB, setCompareB] = useState(null); // entry_id
- 
+ const [compareTeamSort, setCompareTeamSort] = useState('rank'); 
+// 'rank' | 'alpha'
+
  const [comparePicking, setComparePicking] = useState('A'); // which slot is being set
 // below: const [comparePicking, setComparePicking] = useState('A');
 const [compareSortKey, setCompareSortKey] = useState('pts');   // 'name' | 'pts'
@@ -552,6 +554,21 @@ const handleChipsOverallSort = (key) => {
     key === chipsOverallSortKey ? (prev === 'asc' ? 'desc' : 'asc')
                                 : (key === 'chip' ? 'asc' : 'desc'));
 };
+
+const compareTeamRows = useMemo(() => {
+  const rows = Array.isArray(league?.rows) ? [...league.rows] : [];
+  if (compareTeamSort === 'alpha') {
+    rows.sort((a, b) =>
+      String(a?.manager_name || '').localeCompare(String(b?.manager_name || ''))
+    );
+  } else {
+    // league rank order (rank if present; fallback to entry_id)
+    rows.sort((a, b) =>
+      (Number(a?.rank ?? a?.entry_id ?? 1e18) - Number(b?.rank ?? b?.entry_id ?? 1e18))
+    );
+  }
+  return rows;
+}, [league?.rows, compareTeamSort]);
 
   const chipsWeekRows = useMemo(() => {
     const rows = Array.isArray(league?.rows) ? league.rows : [];
@@ -1876,7 +1893,26 @@ activeOpacity={0.7}
   >
     
       <View style={S.analyticsHeaderRow}>
-        <Text style={S.analyticsTitle}>Compare teams</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+  <Text style={S.analyticsTitle}>Compare Teams</Text>
+
+  <Pressable
+    onPress={() => setCompareTeamSort((m) => (m === 'rank' ? 'alpha' : 'rank'))}
+    style={{
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: C.border2,
+      backgroundColor: 'transparent',
+    }}
+  >
+    <Text style={{ color: C.muted, fontSize: 12, fontWeight: '800' }}>
+      Sort Managers By {compareTeamSort === 'rank' ? 'Rank' : 'A–Z'}
+    </Text>
+  </Pressable>
+</View>
+
         <TouchableOpacity onPress={() => setCompareOpen(false)}>
           <Text style={S.link}>Close</Text>
         </TouchableOpacity>
@@ -1924,7 +1960,8 @@ activeOpacity={0.7}
     {openA && (
       <View style={S.dropdown}>
         <FlatList
-          data={league?.rows ?? []}
+          data={compareTeamRows}
+
           keyExtractor={(x) => String(x.entry_id)}
           
           nestedScrollEnabled
@@ -1980,7 +2017,8 @@ activeOpacity={0.7}
     {openB && (
       <View style={S.dropdown}>
         <FlatList
-          data={league?.rows ?? []}
+          data={compareTeamRows}
+
           keyExtractor={(x) => String(x.entry_id)}
          
           nestedScrollEnabled
