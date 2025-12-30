@@ -18,20 +18,25 @@ export default function SettingsModal({
   onClose,
   displaySettings,
   setDisplaySettings,
+  notifPrefs,
+  setNotifPrefs,
 }) {
   // Expanded by default
   const [glossaryOpen, setGlossaryOpen] = useState(true);
 
   // ✅ Local copy that controls all switches while the modal is open
   const [localSettings, setLocalSettings] = useState(displaySettings || {});
+    const [localNotifPrefs, setLocalNotifPrefs] = useState(notifPrefs || {});
 
   const { mode, setMode } = useTheme();
   const C = useColors();
   const navigation = useNavigation();
 
-  // Seed local settings ONLY when the modal becomes visible (prevents snap-back)
-  useEffect(() => {
-    if (visible) setLocalSettings(displaySettings || {});
+    useEffect(() => {
+    if (visible) {
+      setLocalSettings(displaySettings || {});
+      setLocalNotifPrefs(notifPrefs || {});
+    }
   }, [visible]); // intentionally NOT depending on displaySettings
 
   const toggles = useMemo(
@@ -48,15 +53,18 @@ export default function SettingsModal({
   const toggleKey = (key) => (val) =>
     setLocalSettings((prev) => ({ ...prev, [key]: val }));
 
-  // Commit local → parent then close
-  const handleClose = () => {
-    setDisplaySettings(localSettings);
-    onClose && onClose();
+    const handleClose = () => {
+    setDisplaySettings?.(localSettings);
+    setNotifPrefs?.(localNotifPrefs);
+    onClose?.();
   };
+
 
   const handleChangeId = () => {
     // Commit settings, navigate, then close modal
     setDisplaySettings(localSettings);
+      setNotifPrefs?.(localNotifPrefs);
+
     try {
       navigation.navigate('ID');
     } catch {}
@@ -170,8 +178,10 @@ export default function SettingsModal({
       animationType="fade"
       onRequestClose={handleClose} // ensure hardware back commits too
     >
-      <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+      <Pressable style={styles.backdrop} onPress={handleClose}>
+
+          <Pressable style={styles.sheet} onPress={() => {}}>
+
           <Text style={styles.title}>Display Settings</Text>
 
           {/* Appearance */}
@@ -208,6 +218,29 @@ export default function SettingsModal({
               />
             </View>
           ))}
+
+                    <View style={styles.divider} />
+
+          {/* Notifications */}
+          <Text style={styles.sectionTitle}>Notifications</Text>
+
+          {[
+            { key: 'myTeamGoalsAssists', label: 'My team: Goals & Assists' },
+            { key: 'top10Threats', label: 'Top 10 threats' },
+            { key: 'priceWarnings', label: 'Price change warnings' },
+          ].map(({ key, label }) => (
+            <View key={key} style={styles.row}>
+              <Text style={styles.rowLabel}>{label}</Text>
+              <Switch
+                value={!!localNotifPrefs?.[key]}
+                onValueChange={(v) => setLocalNotifPrefs((p) => ({ ...(p || {}), [key]: v }))}
+                trackColor={{ false: C.border2, true: C.ok }}
+                ios_backgroundColor={C.border2}
+                thumbColor={localNotifPrefs?.[key] ? '#fff' : '#ddd'}
+              />
+            </View>
+          ))}
+
 
           {/* Links */}
           <Text style={[styles.glossItem, { marginTop: 6 }]}>
@@ -276,8 +309,9 @@ export default function SettingsModal({
               <Text style={styles.closeText}>Close</Text>
             </Pressable>
           </View>
-        </View>
-      </View>
+          </Pressable>
+</Pressable>
+
     </Modal>
   );
 }

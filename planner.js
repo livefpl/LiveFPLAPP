@@ -5238,96 +5238,77 @@ const statDefs = useMemo(() => {
                   </Text>
                 </View>
               ) : (
-                <ScrollView>
-                  {sorted.map((row) => (
-                    <View
-                      key={row.pid}
-                      style={{
-                        flexDirection: 'row',
-                        borderTopWidth: 1,
-                        borderColor: C.border,
-                      }}
-                    >
-                      {/* frozen identity */}
-                      <View
-                        style={{
-                          width: NAME_COL_W,
-                          borderRightWidth: 1,
-                          borderColor: C.border,
-                          paddingVertical: 6,
-                          paddingHorizontal: 6,
-                        }}
-                      >
-                        <View
-                          style={{
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                          }}
-                        >
-                          <Image
-                            source={{
-                              uri: clubCrestUri?.(row.teamNum),
-                            }}
-                            style={{
-                              width: 18,
-                              height: 18,
-                              marginRight: 6,
-                              borderRadius: 3,
-                            }}
-                            resizeMode="contain"
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text
-                              style={{
-                                color: C.ink,
-                                fontWeight: '700',
-                                fontSize: 11,
-                              }}
-                              numberOfLines={1}
-                            >
-                              {row.name}
-                            </Text>
+  <FlatList
+    data={sorted}
+    keyExtractor={(row) => String(row.pid)}
+    keyboardShouldPersistTaps="handled"
+    nestedScrollEnabled
+    removeClippedSubviews
+    initialNumToRender={18}
+    maxToRenderPerBatch={24}
+    windowSize={7}
+    updateCellsBatchingPeriod={50}
+    renderItem={({ item: row }) => (
+      <View
+        style={{
+          flexDirection: 'row',
+          borderTopWidth: 1,
+          borderColor: C.border,
+        }}
+      >
+        {/* frozen identity */}
+        <View
+          style={{
+            width: NAME_COL_W,
+            borderRightWidth: 1,
+            borderColor: C.border,
+            paddingVertical: 6,
+            paddingHorizontal: 6,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <Image
+              source={{ uri: clubCrestUri?.(row.teamNum) }}
+              style={{ width: 18, height: 18, marginRight: 6, borderRadius: 3 }}
+              resizeMode="contain"
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={{ color: C.ink, fontWeight: '700', fontSize: 11 }}
+                numberOfLines={1}
+              >
+                {row.name}
+              </Text>
 
-                            {/* Position + team + italic stats "i" */}
-                            <View
-                              style={{
-                                flexDirection: 'row',
-                                alignItems: 'center',
-                              }}
-                            >
-                              <Text
-                                style={{ color: C.muted, fontSize: 10 }}
-                                numberOfLines={1}
-                              >
-                                {(POS_LABELS[row.type] || '?') +
-                                  ''}
-                              </Text>
-                              <TouchableOpacity
-                                onPress={() => {
-                                  setStatsPid(row.pid);
-                                  setStatsOpen(true);
-                                }}
-                                hitSlop={{
-                                  top: 6,
-                                  bottom: 6,
-                                  left: 6,
-                                  right: 6,
-                                }}
-                                style={{ marginLeft: 6 }}
-                              >
-                                <Text style={S.rItalicI2}>i</Text>
-                              </TouchableOpacity>
-                            </View>
-                          </View>
-                        </View>
-                      </View>
+              {/* Position + italic stats "i" */}
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={{ color: C.muted, fontSize: 10 }} numberOfLines={1}>
+                  {(POS_LABELS[row.type] || '?') + ''}
+                </Text>
 
-                      {columns.map((k) => (
-                        <RowCell key={k} k={k} row={row} />
-                      ))}
-                    </View>
-                  ))}
-                </ScrollView>
+                <TouchableOpacity
+                  onPress={() => {
+                    setStatsPid(row.pid);
+                    setStatsOpen(true);
+                  }}
+                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  style={{ marginLeft: 6 }}
+                >
+                  <Text style={S.rItalicI2}>i</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+
+        {columns.map((k) => (
+          <RowCell key={k} k={k} row={row} />
+        ))}
+      </View>
+    )}
+  />
+)}
+
               )}
             </View>
           </View>

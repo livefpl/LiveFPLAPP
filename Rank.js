@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Sharing from 'expo-sharing';
 import PlayerInfoModal from './PlayerInfoModal';
 import EventFeed from './EventFeed';
+import messaging from '@react-native-firebase/messaging';
 
 import { TouchableWithoutFeedback } from 'react-native';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
@@ -137,6 +138,94 @@ const LetterCircle = ({
     </View>
   );
 };
+
+
+async function getNotifPrefsFromStorage() {
+  try {
+    const raw = await AsyncStorage.getItem('notif.prefs.v1');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function updateMyTeamPushSubsOncePerGW({ gw, players, fplId }) {
+  const gwNum = Number(gw) || 0;
+  if (!gwNum || !Array.isArray(players) || players.length === 0) return;
+  
+  const prefs = (await getNotifPrefsFromStorage()) || null;
+const wantPlayers = !(prefs && prefs.myTeamGoalsAssists === false);
+  const wantPrices = !(prefs && prefs.priceWarnings === false);
+
+  const key = `push.subs.myteam:${String(fplId || '')}`;
+
+  // Only update once per GW
+  let prev = null;
+  try {
+    const prevRaw = await AsyncStorage.getItem(key);
+     prev = prevRaw ? JSON.parse(prevRaw) : null;
+    if (prev?.gw && Number(prev.gw) === gwNum) return;
+  } catch {}
+
+  const ids = Array.from(
+    new Set(
+      players
+        .map((p) => Number(p?.pid ?? p?.id ?? p?.element ?? p?.fpl_id))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )
+  );
+
+  if (!ids.length) return;
+
+  
+
+  if (wantPlayers) {
+    const prevIds = Array.isArray(prev?.players) ? prev.players.map(Number).filter((n) => n > 0) : [];
+    const prevSet = new Set(prevIds);
+    const nextSet = new Set(ids);
+
+    const toUnsub = prevIds.filter((id) => !nextSet.has(id)).map((id) => String(id));
+    const toSub = ids.filter((id) => !prevSet.has(id)).map((id) => String(id));
+
+    try {
+      for (const t of toUnsub) await messaging().unsubscribeFromTopic(t);
+      for (const t of toSub) await messaging().subscribeToTopic(t);
+      if (__DEV__) console.log('[PUSH TOPICS] myteam players', { sub: toSub.length, unsub: toUnsub.length });
+    } catch (e) {
+      console.warn('[PUSH TOPICS] myteam player topic update failed', e);
+    }
+  } else {
+    // if user disabled player notifs, unsubscribe ALL previous player topics (once, when GW changes)
+    const prevIds = Array.isArray(prev?.players) ? prev.players.map(Number).filter((n) => n > 0) : [];
+    try {
+      for (const id of prevIds) await messaging().unsubscribeFromTopic(String(id));
+      if (__DEV__) console.log('[PUSH TOPICS] myteam players disabled → unsub all', prevIds.length);
+    } catch (e) {
+      console.warn('[PUSH TOPICS] myteam player disable unsub failed', e);
+    }
+  }
+
+  // Prices: single global topic
+  try {
+    if (wantPrices) {
+      await messaging().subscribeToTopic('prices');
+      if (__DEV__) console.log('[PUSH TOPICS] subscribed to prices');
+    } else {
+      await messaging().unsubscribeFromTopic('prices');
+      if (__DEV__) console.log('[PUSH TOPICS] unsubscribed from prices');
+    }
+  } catch (e) {
+    console.warn('[PUSH TOPICS] prices topic update failed', e);
+  }
+  try {
+    await AsyncStorage.setItem(
+      key,
+      JSON.stringify({ gw: gwNum, players: ids, updatedAt: Date.now() })
+    );
+  } catch {}
+}
 
 const Crest = ({ team, size = 28 }) => (
   <Image source={{ uri: clubCrestUri(team || 1) }} style={{ width: size, height: size, borderRadius: size/2 }} />
@@ -303,6 +392,20 @@ const FootballLineupWithImages = () => {
   const route = useRoute();
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
+    // 🔔 DEV ONLY: verify push subscriptions in AsyncStorage
+  useEffect(() => {
+    if (!__DEV__) return;
+
+    (async () => {
+      const keys = await AsyncStorage.getAllKeys();
+      console.log('[PUSH DEBUG] keys:', keys);
+
+      for (const k of keys.filter(k => k.startsWith('push.subs'))) {
+        console.log('[PUSH DEBUG]', k, await AsyncStorage.getItem(k));
+      }
+    })();
+  }, []);
+
   const [adHeight, setAdHeight] = useState(0); // 0 when no ad/failed/hidden
 // help modal for "Points" tile
 const [helpVisible, setHelpVisible] = useState(false);
@@ -1334,6 +1437,43 @@ useFocusEffect(
     includeSubs: false,
     showManagerName: true,
   });
+    const DEFAULT_NOTIF_PREFS = {
+    myTeamGoalsAssists: true,
+    top10Threats: true,
+    priceWarnings: true,
+  };
+
+  const [notifPrefs, setNotifPrefs] = useState(DEFAULT_NOTIF_PREFS);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const raw = await AsyncStorage.getItem('notif.prefs.v1');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (mounted && parsed && typeof parsed === 'object') {
+            setNotifPrefs({ ...DEFAULT_NOTIF_PREFS, ...parsed });
+            return;
+          }
+        }
+      } catch {}
+
+      // Seed defaults once if missing / bad
+      try { await AsyncStorage.setItem('notif.prefs.v1', JSON.stringify(DEFAULT_NOTIF_PREFS)); } catch {}
+      if (mounted) setNotifPrefs(DEFAULT_NOTIF_PREFS);
+    })();
+    return () => { mounted = false; };
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await AsyncStorage.setItem('notif.prefs.v1', JSON.stringify(notifPrefs || DEFAULT_NOTIF_PREFS));
+      } catch {}
+    })();
+  }, [notifPrefs]);
+
 
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedPlayerStats, setSelectedPlayerStats] = useState([]);
@@ -1780,6 +1920,10 @@ for (const p of playersData) {
   exposureFromPlayers[p.pid] = deriveMul(p);
 }
 setExposureMap(exposureFromPlayers);
+            // Push subs: update once per GW when the team loads successfully (own team only)
+      if (!viewFplId) {
+        await updateMyTeamPushSubsOncePerGW({ gw: payload?.gw, players: playersData, fplId: fplId });
+      }
 
       setPlayers(playersData);
     } catch (e) {
@@ -2445,6 +2589,9 @@ const handleShare = useCallback(async () => {
                   onClose={() => setsettingsModalVisible(false)}
                   displaySettings={displaySettings}
                   setDisplaySettings={setDisplaySettings}
+                    notifPrefs={notifPrefs}
+                  setNotifPrefs={setNotifPrefs}
+
                 />
               </View>
 

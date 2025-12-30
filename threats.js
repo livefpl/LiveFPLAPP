@@ -790,8 +790,47 @@ useEffect(() => {
 
   (async () => {
     try {
+      // Respect notification prefs (default ON)
+      let prefs = null;
+      try {
+        const rawPrefs = await AsyncStorage.getItem('notif.prefs.v1');
+        prefs = rawPrefs ? JSON.parse(rawPrefs) : null;
+      } catch {}
+      if (prefs && prefs.top10Threats === false) return;
+
+      const gwRaw = await getGWSalt();
+      const gw = Number(gwRaw) || 0;
+
+      const myId = await AsyncStorage.getItem('fplId');
+      const pushKey = `push.subs.threats:${String(myId || '')}`;
+
+      // Only update once per GW
+      try {
+        const prevRaw = await AsyncStorage.getItem(pushKey);
+        const prev = prevRaw ? JSON.parse(prevRaw) : null;
+
+        if (!(prev?.gw && Number(prev.gw) === gw && Array.isArray(prev.players) && prev.players.length)) {
+          const ids = Array.from(
+            new Set(
+              threatsSorted
+                .slice(0, 10)
+                .map((p) => Number(p?.id))
+                .filter((n) => Number.isFinite(n) && n > 0)
+            )
+          );
+
+          if (ids.length && gw) {
+            await AsyncStorage.setItem(
+              pushKey,
+              JSON.stringify({ gw, players: ids, updatedAt: Date.now() })
+            );
+          }
+        }
+      } catch {}
+
+      // Keep existing lightweight cache (used elsewhere)
       const topThreats = threatsSorted
-        .slice(0, 5)
+        .slice(0, 10)
         .map((p) => ({
           id: Number(p.id),
           pct: Number(p._pctDisplay || 0),
