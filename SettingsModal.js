@@ -22,7 +22,7 @@ export default function SettingsModal({
   setNotifPrefs,
 }) {
   // Expanded by default
-  const [glossaryOpen, setGlossaryOpen] = useState(true);
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
 
   // ✅ Local copy that controls all switches while the modal is open
   const [localSettings, setLocalSettings] = useState(displaySettings || {});

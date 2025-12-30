@@ -2,6 +2,7 @@
 import AppHeader from './AppHeader';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useDeferredValue, memo } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import messaging from '@react-native-firebase/messaging';
 
 import {
   ActivityIndicator,
@@ -786,7 +787,7 @@ const tableThreatsBase = enriched
   }, [dataGames, eoMap, myExposure, ownedStatus, sortKey, sortDir, sampleHits, byId, myHit]);
 
 useEffect(() => {
-  if (!threatsSorted || !threatsSorted.length) return;
+  if (!tableThreats || !tableThreats.length) return;
 
   (async () => {
     try {
@@ -796,7 +797,32 @@ useEffect(() => {
         const rawPrefs = await AsyncStorage.getItem('notif.prefs.v1');
         prefs = rawPrefs ? JSON.parse(rawPrefs) : null;
       } catch {}
-      if (prefs && prefs.top10Threats === false) return;
+      if (prefs && prefs.top10Threats === false) {
+  const myId = await AsyncStorage.getItem('fplId');
+  const pushKey = `push.subs.threats:${String(myId || '')}`;
+
+  try {
+    const prevRaw = await AsyncStorage.getItem(pushKey);
+    const prev = prevRaw ? JSON.parse(prevRaw) : null;
+    const prevIds = Array.isArray(prev?.players)
+      ? prev.players.map(String)
+      : [];
+
+    for (const t of prevIds) {
+      await messaging().unsubscribeFromTopic(t);
+    }
+
+    console.log('[PUSH TOPICS] threats OFF -> unsubscribed', {
+      count: prevIds.length,
+    });
+  } catch (e) {
+    console.warn('[PUSH TOPICS] threats OFF unsubscribe failed', e);
+  }
+
+  await AsyncStorage.removeItem(pushKey);
+  return;
+}
+
 
       const gwRaw = await getGWSalt();
       const gw = Number(gwRaw) || 0;
@@ -808,23 +834,87 @@ useEffect(() => {
       try {
         const prevRaw = await AsyncStorage.getItem(pushKey);
         const prev = prevRaw ? JSON.parse(prevRaw) : null;
+        console.log('[PUSH TOPICS] threats debug', {
+    gw,
+    hasPrev: !!prev,
+    prevGw: prev?.gw,
+    prevCount: Array.isArray(prev?.players) ? prev.players.length : 0,
+    threatsLen: threatsSorted.length,
+  });
 
-        if (!(prev?.gw && Number(prev.gw) === gw && Array.isArray(prev.players) && prev.players.length)) {
-          const ids = Array.from(
-            new Set(
-              threatsSorted
-                .slice(0, 10)
-                .map((p) => Number(p?.id))
-                .filter((n) => Number.isFinite(n) && n > 0)
-            )
-          );
+  const ids = Array.from(
+  new Set(
+    tableThreats
+      .slice()
+      .sort((a, b) => (Number(b.ptsVsYou) - Number(a.ptsVsYou)) || (Number(b.eoVsYouPct) - Number(a.eoVsYouPct)))
+      .slice(0, 10)
+      .map((p) => Number(p?.id))
+      .filter((n) => Number.isFinite(n) && n > 0)
+  )
+);
+console.log('[PUSH TOPICS] threats ids', ids);
 
-          if (ids.length && gw) {
-            await AsyncStorage.setItem(
-              pushKey,
-              JSON.stringify({ gw, players: ids, updatedAt: Date.now() })
-            );
-          }
+        const prevIds = Array.isArray(prev?.players)
+  ? prev.players.map(Number).filter((n) => Number.isFinite(n) && n > 0)
+  : [];
+
+const prevSet = new Set(prevIds);
+const nextSet = new Set(ids);
+
+const sameGw = !!(prev?.gw && Number(prev.gw) === gw);
+
+// true if sets are identical
+let sameSet = prevIds.length === ids.length;
+if (sameSet) {
+  for (const id of ids) {
+    if (!prevSet.has(id)) { sameSet = false; break; }
+  }
+}
+
+const shouldUpdate = !sameGw || !sameSet;
+
+// If the set is unchanged but we never marked a successful subscribe, force once.
+const forceVerify = sameGw && sameSet && !prev?.ok;
+
+if ((shouldUpdate || forceVerify) && ids.length && gw) {
+
+
+          
+
+
+const toUnsub = prevIds.filter((id) => !nextSet.has(id)).map((id) => String(id));
+const toSub = ids.filter((id) => !prevSet.has(id)).map((id) => String(id));
+
+let ok = false;
+
+try {
+  // If we've never successfully subscribed before, force a resubscribe to ALL ids once.
+  if (forceVerify) {
+  for (const id of ids) await messaging().subscribeToTopic(String(id));
+  console.log('[PUSH TOPICS] threats (force verify)', { sub: ids.length, unsub: 0, gw });
+} else {
+
+    for (const t of toUnsub) await messaging().unsubscribeFromTopic(t);
+    for (const t of toSub) await messaging().subscribeToTopic(t);
+     console.log('[PUSH TOPICS] threats', { sub: toSub.length, unsub: toUnsub.length });
+  }
+  ok = true;
+} catch (e) {
+  ok = false;
+  console.warn('[PUSH TOPICS] threats topic update failed', e);
+}
+
+// ✅ Only write pushKey if the subscription call(s) succeeded.
+// If it failed, we WANT to retry next time.
+if (ok && ids.length && gw) {
+  await AsyncStorage.setItem(
+    pushKey,
+    JSON.stringify({ gw, players: ids, ok: true, updatedAt: Date.now() })
+  );
+} else if (!ok && __DEV__) {
+  console.log('[PUSH TOPICS] threats: NOT caching pushKey so we will retry');
+}
+
         }
       } catch {}
 
@@ -839,7 +929,7 @@ useEffect(() => {
       await AsyncStorage.setItem('myThreats', JSON.stringify(topThreats));
     } catch {}
   })();
-}, [threatsSorted]);
+}, [tableThreats, sortKey, sortDir]);
 
 
   // After the useMemo that defines star, killer, flop, ...

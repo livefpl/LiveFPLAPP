@@ -161,13 +161,21 @@ const wantPlayers = !(prefs && prefs.myTeamGoalsAssists === false);
 
   const key = `push.subs.myteam:${String(fplId || '')}`;
 
-  // Only update once per GW
+    // Only skip if same GW AND prefs haven't changed.
   let prev = null;
   try {
     const prevRaw = await AsyncStorage.getItem(key);
-     prev = prevRaw ? JSON.parse(prevRaw) : null;
-    if (prev?.gw && Number(prev.gw) === gwNum) return;
+    prev = prevRaw ? JSON.parse(prevRaw) : null;
+
+    const sameGw = !!(prev?.gw && Number(prev.gw) === gwNum);
+    const samePrefs =
+      !!prev &&
+      prev.wantPlayers === wantPlayers &&
+      prev.wantPrices === wantPrices;
+
+    if (sameGw && samePrefs) return;
   } catch {}
+
 
   const ids = Array.from(
     new Set(
@@ -222,10 +230,54 @@ const wantPlayers = !(prefs && prefs.myTeamGoalsAssists === false);
   try {
     await AsyncStorage.setItem(
       key,
-      JSON.stringify({ gw: gwNum, players: ids, updatedAt: Date.now() })
+      JSON.stringify({
+  gw: gwNum,
+  players: ids,
+  wantPlayers: wantPlayers,
+  wantPrices: wantPrices,
+  updatedAt: Date.now()
+})
+
     );
   } catch {}
 }
+
+
+async function applyMyTeamTopicsForCurrentPrefs({ fplId, notifPrefs }) {
+  const key = `push.subs.myteam:${String(fplId || '')}`;
+
+  try {
+    const raw = await AsyncStorage.getItem(key);
+    const prev = raw ? JSON.parse(raw) : null;
+    const ids = Array.isArray(prev?.players) ? prev.players.map(Number).filter(n => n > 0) : [];
+
+    const wantPlayers = !(notifPrefs && notifPrefs.myTeamGoalsAssists === false);
+    const wantPrices  = !(notifPrefs && notifPrefs.priceWarnings === false);
+
+    // player topics: resub or unsub-all (based on stored list)
+    if (ids.length) {
+      if (wantPlayers) {
+        for (const id of ids) await messaging().subscribeToTopic(String(id));
+        if (__DEV__) console.log('[PUSH TOPICS] prefs -> players ON (resub)', ids.length);
+      } else {
+        for (const id of ids) await messaging().unsubscribeFromTopic(String(id));
+        if (__DEV__) console.log('[PUSH TOPICS] prefs -> players OFF (unsub)', ids.length);
+      }
+    }
+
+    // prices topic
+    if (wantPrices) {
+      await messaging().subscribeToTopic('prices');
+      if (__DEV__) console.log('[PUSH TOPICS] prefs -> prices ON');
+    } else {
+      await messaging().unsubscribeFromTopic('prices');
+      if (__DEV__) console.log('[PUSH TOPICS] prefs -> prices OFF');
+    }
+  } catch (e) {
+    console.warn('[PUSH TOPICS] apply prefs now failed', e);
+  }
+}
+
 
 const Crest = ({ team, size = 28 }) => (
   <Image source={{ uri: clubCrestUri(team || 1) }} style={{ width: size, height: size, borderRadius: size/2 }} />
@@ -1473,6 +1525,20 @@ useFocusEffect(
       } catch {}
     })();
   }, [notifPrefs]);
+
+  const lastPrefsSigRef = useRef('');
+
+useEffect(() => {
+  // Only apply after prefs have loaded, and only for "my" team id
+  if (!fplId) return;
+
+  const sig = JSON.stringify(notifPrefs || {});
+  if (sig === lastPrefsSigRef.current) return;
+  lastPrefsSigRef.current = sig;
+
+  applyMyTeamTopicsForCurrentPrefs({ fplId, notifPrefs });
+}, [fplId, notifPrefs]);
+
 
 
   const [modalVisible, setModalVisible] = useState(false);
