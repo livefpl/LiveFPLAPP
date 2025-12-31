@@ -11,6 +11,7 @@ import {
   TextInput,
 } from 'react-native';
  import { InteractionManager } from 'react-native';
+import { Platform } from 'react-native';
 
 
 import * as Notifications from 'expo-notifications';
@@ -359,9 +360,6 @@ export default function App() {
 
 
 useEffect(() => {
-  let cancelled = false;
-  let t = null;
-
   const publisherId =
     process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
     require('./app.json').expo.extra.playwire.publisherId;
@@ -372,20 +370,9 @@ useEffect(() => {
     process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
     require('./app.json').expo.extra.playwire.androidAppId;
 
-  const task = InteractionManager.runAfterInteractions(() => {
-    // Extra tiny delay to get past the “first keyboard focus” window on iOS
-    t = setTimeout(() => {
-      if (cancelled) return;
-      initPlaywire({ publisherId, iosAppId, androidAppId });
-    }, 1200);
-  });
-
-  return () => {
-    cancelled = true;
-    if (t) clearTimeout(t);
-    try { task?.cancel?.(); } catch {}
-  };
+  initPlaywire({ publisherId, iosAppId, androidAppId });
 }, []);
+
 
 
 
@@ -399,10 +386,21 @@ useEffect(() => {
   return () => clearTimeout(t);
 }, []);
 
+async function ensureAndroidNotificationPermission() {
+  if (Platform.OS !== 'android') return;
+
+  const settings = await Notifications.getPermissionsAsync();
+
+  if (settings.status !== 'granted') {
+    await Notifications.requestPermissionsAsync();
+  }
+}
+
 
 useEffect(() => {
   const initFCM = async () => {
     try {
+      await ensureAndroidNotificationPermission();
       // iOS: ensure device is registered for remote messages
       await messaging().registerDeviceForRemoteMessages();
 

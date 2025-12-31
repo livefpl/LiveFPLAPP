@@ -1644,6 +1644,42 @@ const renderStatsListCompact = (stats = [], C) => {
     );
   };
 
+  const LIVE_FORCE_TTL_MS = 5 * 60 * 1000;
+
+function hasLiveGamesFromPayload(p) {
+  if (!p) return false;
+
+  // common flags
+  if (p.has_live_games === true || p.live_games === true || p.is_live === true) return true;
+
+  // ✅ Rank payload usually knows "live" via players (status: 'l')
+  const team = p.team || p.Team;
+  if (Array.isArray(team)) {
+    if (team.some(pl => String(pl?.status ?? '').toLowerCase() === 'l')) return true;
+    // if status is already mapped somewhere, this also works:
+    // if (team.some(pl => find_status(pl?.status ?? 'd') === 'live')) return true;
+  }
+
+  // fallback: games/fixtures shapes (your existing logic)
+  const games = p.games || p.Games || p.fixtures || p.Fixtures;
+  if (!Array.isArray(games)) return false;
+
+  return games.some(g => {
+    const status = String(g?.status ?? g?.Status ?? '').toLowerCase();
+    if (status.includes('live') || status.includes('playing') || status.includes('in play')) return true;
+
+    const started = g?.started ?? g?.Started;
+    const finished = g?.finished ?? g?.Finished ?? g?.ended ?? g?.Ended;
+    if (started === true && finished !== true) return true;
+
+    const minute = g?.minute ?? g?.Minute ?? g?.min ?? g?.Min;
+    if (Number.isFinite(Number(minute)) && Number(minute) > 0 && finished !== true) return true;
+
+    return false;
+  });
+}
+
+
   const pickPayload = (json, id) => {
     if (!json) return null;
     if (json[id]) return json[id];
@@ -1740,11 +1776,19 @@ const renderStatsListCompact = (stats = [], C) => {
       const tooOld    = cachedTs ? (now - cachedTs > TWO_DAYS_MS) : true;
       if (!tooOld) {
         const genMatches = Number.isFinite(remoteGen) && Number.isFinite(cachedGen) && (remoteGen === cachedGen);
-        if (genMatches) {
-          payload = parsed.data;                       // fresh by gen
-        } else if (!Number.isFinite(remoteGen) && (now - cachedTs < CACHE_TTL_MS)) {
-          payload = parsed.data;                       // CDN down → honor short TTL
-        }
+
+if (genMatches) {
+  const ageMs = now - cachedTs;
+  const cachedHasLive = hasLiveGamesFromPayload(parsed.data);
+
+  // If live games + cache older than 5 minutes: don't trust it even if gen matches.
+  if (!(cachedHasLive && ageMs > LIVE_FORCE_TTL_MS)) {
+    payload = parsed.data; // fresh enough
+  }
+} else if (!Number.isFinite(remoteGen) && (now - cachedTs < CACHE_TTL_MS)) {
+  payload = parsed.data; // CDN down → honor short TTL
+}
+
       }
     }
   } catch { /* ignore cache read errors */ }

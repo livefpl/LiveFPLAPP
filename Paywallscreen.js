@@ -110,6 +110,9 @@ export default function PaywallScreen(props) {
     setCopied(true);
     setTimeout(() => setCopied(false), 1200);
   };
+  const openRemoveAdsWebsite = () => {
+  Linking.openURL('https://www.livefpl.net/remove_ads');
+};
 
  const disabledReason = useMemo(() => {
   if (isExpoGo) return 'Not available in Expo Go';
@@ -209,24 +212,42 @@ export default function PaywallScreen(props) {
           </View>
 
           <View style={[styles.actionsRow, { borderTopColor: C.border2 }]}>
-            <TouchableOpacity
-              onPress={loadAccount}
-              style={[styles.actionBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
-            >
-              {refreshing ? (
-                <ActivityIndicator color={C.ink} />
-              ) : (
-                <Text style={[styles.actionText, { color: C.ink }]}>Refresh</Text>
-              )}
-            </TouchableOpacity>
+  <TouchableOpacity
+    onPress={loadAccount}
+    style={[styles.actionBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
+  >
+    {refreshing ? (
+      <ActivityIndicator color={C.ink} />
+    ) : (
+      <Text style={[styles.actionText, { color: C.ink }]}>Refresh</Text>
+    )}
+  </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={() => Linking.openURL(managementURL)}
-              style={[styles.actionBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
-            >
-              <Text style={[styles.actionText, { color: C.ink }]}>Manage in Store</Text>
-            </TouchableOpacity>
-          </View>
+  <TouchableOpacity
+    onPress={() => Linking.openURL(managementURL)}
+    style={[styles.actionBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
+  >
+    <Text style={[styles.actionText, { color: C.ink }]}>Store</Text>
+  </TouchableOpacity>
+
+  
+    <TouchableOpacity
+      onPress={openRemoveAdsWebsite}
+      style={[
+        styles.actionBtn,
+        {
+          borderColor: C.border2,
+          backgroundColor: 'transparent',
+        },
+      ]}
+    >
+      <Text style={[styles.actionText, { color: C.ink }]}>
+        Remove ads on website
+      </Text>
+    </TouchableOpacity>
+  
+</View>
+
 
           <Text style={[styles.help, { color: C.muted }]}>
             Use this Anonymous ID for any communication with LiveFPL customer service (Twitter or at

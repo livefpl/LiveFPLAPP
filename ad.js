@@ -5,6 +5,7 @@ import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
 import { usePro } from './ProContext';
 import { getInterstitialDebugState } from './AdInterstitial';
 import { ThemeProvider, useTheme, useColors } from './theme';
+import { onPlaywireReady } from './playwireInit';
 
 export const AD_FOOTER_HEIGHT = 50;
 
@@ -35,7 +36,8 @@ const isDark = navTheme?.dark;
   const [bannerKey, setBannerKey] = useState(0);
 
  useEffect(() => {
-  if ( !canMountBanner) return;
+  if (!canMountBanner || !sdkReady) return;
+
 
   let tries = 0;
   let stopped = false;
@@ -61,31 +63,13 @@ const isDark = navTheme?.dark;
     clearTimeout(startTimer);
     if (intervalId) clearInterval(intervalId);
   };
-}, [sdkReady, canMountBanner]);
+}, [canMountBanner,sdkReady]);
 
-  // Poll lightly until sdk is ready (no UI, no logs). This avoids mounting banner too early.
   useEffect(() => {
-    if (sdkReady) return;
-    let mounted = true;
-    const t0 = Date.now();
+  if (sdkReady) return;
+  onPlaywireReady(() => setSdkReady(true));
+}, [sdkReady]);
 
-    const tick = () => {
-      if (!mounted) return;
-      const s = getInterstitialDebugState();
-      const ok = s.initializedHint === 'yes';
-      if (ok) {
-        setSdkReady(true);
-        return;
-      }
-      if (Date.now() - t0 > TIMEOUT_MS) return; // give up silently
-      setTimeout(tick, 350);
-    };
-
-    tick();
-    return () => {
-      mounted = false;
-    };
-  }, [sdkReady]);
 
   const styles = useMemo(
     () =>
@@ -113,7 +97,7 @@ const isDark = navTheme?.dark;
     [C,isDark]
   );
 
-    if ( !canMountBanner) {
+    if (!canMountBanner || !sdkReady) {
     return <View style={styles.container} />;
   }
 
