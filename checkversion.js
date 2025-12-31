@@ -162,14 +162,14 @@ export default function ForceUpdateGate({
 
   if (mustUpdate) {
     const defaultStoreUrl = Platform.select({
-      ios: 'https://apps.apple.com',
-      android: 'https://play.google.com/store',
+      ios: 'https://apps.apple.com/us/app/livefpl/id6753036580',
+      android: 'https://play.google.com/store/apps/details?id=com.pocketgamerguides.livefpl',
     });
 
     return (
       <SafeAreaView style={{ flex: 1, padding: 24, alignItems: 'center', justifyContent: 'center' }}>
         <Text style={{ fontSize: 18, textAlign: 'center', marginBottom: 16 }}>
-          A new version of LiveFPL is required to continue.
+          A new version of LiveFPL app is required to continue. Please update the app.
         </Text>
         <TouchableOpacity
           onPress={() => Linking.openURL(updateUrl || storeUrl || defaultStoreUrl)}
