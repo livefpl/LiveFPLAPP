@@ -772,7 +772,7 @@ const simAgg = useMemo(() => {
     const myMul = getMul(p);
 
     // cumulative positive points from *this* edit-set *before* this delta
-    const posPtsSoFar = Number(returnsPosPts.get(p.id) || 0);
+    const posPtsSoFar = 0;
 
     let eoEff = effectiveEOMult(p.eo, posPtsSoFar, delta);
 
