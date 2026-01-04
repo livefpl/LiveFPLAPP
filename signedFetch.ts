@@ -15,6 +15,7 @@ import { bump } from './meter';
 export const CLOUDRUN_BASE = 'https://livefpl-api-489391001748.europe-west4.run.app';
 
 const STORE_KEY = 'session.v1';
+const RETRY_ON_401_KEY = '__retried401'; // internal flag to avoid infinite loops
 
 // -------- version.json (updating gate) ----------
 const VERSION_URL = 'https://livefpl.us/version.json';
@@ -108,7 +109,7 @@ export async function ensureSession(): Promise<Session> {
     }
   }
 
-  const res = await fetch(`${CLOUDRUN_BASE}/auth/start`, {
+    const res = await fetch(`${CLOUDRUN_BASE}/auth/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -121,6 +122,8 @@ export async function ensureSession(): Promise<Session> {
   const s = (await res.json()) as Session;
   await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(s));
   return s;
+
+  
 }
 
 /**
@@ -167,20 +170,27 @@ export async function signedFetch(urlOrPath: string, init: RequestInit = {}): Pr
   const payload = [method, pathOnly, bodyStr, ts, nonce].join('\n');
   const sig = await sha256b64(`v1:${sigSecret}:${payload}:${sigSecret}`);
 
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     ...init,
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${jwt}`,
-      'X-Date': ts,
-      'X-Nonce': nonce,
-      'X-Signature': sig,
-      'X-App-Version': Application.nativeApplicationVersion ?? '',
-      'X-App-Build': Application.nativeBuildVersion ?? '',
-      ...(init.headers || {}),
-    } as Record<string, string>,
+  ...(init.headers || {}), // caller headers first
+  'Content-Type': 'application/json',
+  'Authorization': `Bearer ${jwt}`,
+  'X-Date': ts,
+  'X-Nonce': nonce,
+  'X-Signature': sig,
+  'X-App-Version': Application.nativeApplicationVersion ?? '',
+  'X-App-Build': Application.nativeBuildVersion ?? '',
+} as Record<string, string>,
+
     body: (bodyStr || undefined) as any,
   });
+
+  if (res.status === 401 && !(init as any)[RETRY_ON_401_KEY]) {
+  try { await SecureStore.deleteItemAsync(STORE_KEY); } catch {}
+  const nextInit: RequestInit = { ...(init as any), [RETRY_ON_401_KEY]: true };
+  return signedFetch(urlOrPath, nextInit);
+}
 
   // Count this real Cloud Run call (worth 2)
   setTimeout(() => {

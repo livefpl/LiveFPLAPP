@@ -787,6 +787,138 @@ const simAgg = useMemo(() => {
   return { myDelta, fieldDelta, net: myDelta - fieldDelta };
 }, [players, playerDeltaMap, returnsPosPts, overrideMul]);
 
+// ----------------------------
+// NEW: aggregate sim across ALL edited games (perGame)
+// ----------------------------
+const simAggAll = useMemo(() => {
+  let myDelta = 0, fieldDelta = 0;
+
+  // cumulative positive points per player across all edited games
+  // (used for EO attenuation similar to returnsPosPts in the single-game path)
+  const posSoFar = new Map();
+
+  // helper: does a fake bundle have anything in it?
+  const bundleHasEdits = (bundle) => {
+    const f = bundle?.fake;
+    if (!f) return false;
+    return (
+      f.goals.size || f.goalAssists.size || f.assists.size ||
+      f.yc.size || f.rc.size || f.bonus.size || f.defcon.size ||
+      !!bundle.force90
+    );
+  };
+
+  // use the same captain/bench override logic you already use
+  const getMul = (pid) => overrideMul.get(pid) ?? Number(myExposure?.[pid] || 0);
+
+  for (let i = 0; i < games.length; i++) {
+    const g = games[i];
+    if (!g) continue;
+
+    const bundle = getBundleFor(i);
+    if (!bundleHasEdits(bundle)) continue;
+
+    const f = bundle.fake || emptyFake();
+
+    const baseH = Number(g?.[2] || 0);
+    const baseA = Number(g?.[3] || 0);
+
+    // build players for this game (has eo + myMul from exposure)
+    const list = getPlayersForGame(g);
+    const byId = new Map(list.map(p => [p.id, p]));
+
+    // score deltas (same pattern as your global summary)
+    let dH = 0, dA = 0;
+    for (const [pid, d] of f.goals.entries()) {
+      const p = byId.get(pid);
+      if (!p) continue;
+      if (p.side === 'H') dH += d; else dA += d;
+    }
+    const simH = baseH + dH;
+    const simA = baseA + dA;
+
+    const status   = String(g?.[4] || '');
+    const isEndedG = /end|full|ft|finish|final|result|full[-\s]?time/i.test(status);
+    const isLiveG  = /live/i.test(status);
+    const isYetG =
+      /yet|kick|tbd|scheduled|not/i.test(status) ||
+      (!isEndedG && (!(g?.[12]?.length || g?.[13]?.length)) && (baseH + baseA === 0));
+
+    const anyEdits =
+      f.goals.size || f.goalAssists.size || f.assists.size ||
+      f.yc.size || f.rc.size || f.bonus.size || f.defcon.size || bundle.force90;
+
+    const give90G   = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdits));
+    const allowDefG = give90G || (dH !== 0 || dA !== 0);
+
+    const teamConceded = { H: simA, A: simH };
+    const teamCS = { H: simA === 0, A: simH === 0 };
+
+    // merge assists (goal dialog + direct)
+    const mergedAssists = (() => {
+      const m = new Map(f.assists);
+      for (const [k,v] of f.goalAssists.entries()) m.set(k, (m.get(k)||0) + v);
+      return m;
+    })();
+
+    // per-player deltas for this game
+    for (const p of list) {
+      const minBase = p.baseMinPts;
+      const minNew  = give90G ? 2 : minBase;
+      const deltaMin = minNew - minBase;
+
+      const dGoals  = Number(f.goals.get(p.id) || 0);
+      const dAssists = Number(mergedAssists.get(p.id) || 0);
+      const dYC     = Number(f.yc.get(p.id) || 0);
+      const dRC     = Number(f.rc.get(p.id) || 0);
+      const dBonus  = Number(f.bonus.get(p.id) || 0);
+      const dDefU   = Number(f.defcon.get(p.id) || 0);
+
+      const deltaDirect =
+        dGoals * goalPoints(p.type) +
+        dAssists * 3 +
+        dYC * (-1) +
+        dRC * (-3) +
+        dBonus * (1) +
+        dDefU * (2);
+
+      const defEligible = give90G || p.baseMinPts >= 2;
+
+      const deltaCS = (allowDefG && defEligible)
+        ? ((teamCS[p.side] ? csPoints(p.type) : 0) - p.baseCSPts)
+        : 0;
+
+      const deltaGC = (allowDefG && defEligible)
+        ? (gcPenalty(teamConceded[p.side], p.type) - p.baseGCPts)
+        : 0;
+
+      const delta = deltaDirect + deltaMin + deltaCS + deltaGC;
+      if (!delta) continue;
+
+      // positive-return points from THIS game’s edits (for EO attenuation)
+      const gPos = Math.max(0, dGoals)  * goalPoints(p.type);
+      const aPos = Math.max(0, dAssists) * 3;
+      const bPos = Math.max(0, dBonus)  * 1;
+      const dPos = Math.max(0, dDefU)   * 2;
+      const posAdd = gPos + aPos + bPos + dPos;
+
+      const myMul = getMul(p.id);
+      const posPtsSoFar = Number(posSoFar.get(p.id) || 0);
+
+      let eoEff = effectiveEOMult(p.eo, posPtsSoFar, delta);
+      if (SAFE_CLAMP_FIRST_RETURN && delta > 0 && posPtsSoFar === 0 && myMul > 0) {
+        eoEff = Math.min(eoEff, myMul);
+      }
+
+      myDelta   += myMul * delta;
+      fieldDelta += eoEff * delta;
+
+      if (posAdd > 0) posSoFar.set(p.id, posPtsSoFar + posAdd);
+    }
+  }
+
+  return { myDelta, fieldDelta, net: myDelta - fieldDelta };
+}, [games, getBundleFor, emptyFake, getPlayersForGame, overrideMul, myExposure]);
 
   const gwBasePtsByPid = useMemo(() => {
     const m = new Map();
@@ -826,14 +958,26 @@ const simAgg = useMemo(() => {
     return Math.min(totalManagers || 12000000, Math.max(1, r));
   }, [ranker, anchorTotal, pointShift, tieFrac, totalManagers]);
 
-  const myTotalDelta    = simAgg.myDelta + tweakBaseDelta;
-  const fieldTotalDelta = simAgg.fieldDelta;
+  const myTotalDelta    = simAggAll.myDelta + tweakBaseDelta;
+  const fieldTotalDelta = simAggAll.fieldDelta;
   const netTotalDelta   = myTotalDelta - fieldTotalDelta;
   const netSaturated = Math.sign(netTotalDelta) * (SATURATE_K * (1 - Math.exp(-Math.abs(netTotalDelta) / SATURATE_K)));
   const estRank = estimateRank(netSaturated);
 
-  const hasScenario = useMemo(() =>
-    force90 || overrideMul.size > 0 || hasEdits, [force90, overrideMul, hasEdits]);
+ const hasScenario = useMemo(() => {
+  if (overrideMul.size > 0) return true;
+  for (let i = 0; i < games.length; i++) {
+    const b = getBundleFor(i);
+    const f = b?.fake;
+    if (!f) continue;
+    if (
+      b.force90 ||
+      f.goals.size || f.goalAssists.size || f.assists.size ||
+      f.yc.size || f.rc.size || f.bonus.size || f.defcon.size
+    ) return true;
+  }
+  return false;
+}, [games, getBundleFor, overrideMul]);
 
   /* --------- Direction arrows (vs OLD when available) --------- */
   const dirVs = (base, now) => {

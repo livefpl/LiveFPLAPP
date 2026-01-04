@@ -226,7 +226,7 @@ export default function SettingsModal({
 
           {[
             { key: 'myTeamGoalsAssists', label: 'My team: Goals & Assists' },
-            { key: 'top10Threats', label: 'Top 10 threats' },
+            { key: 'top10Threats', label: 'Top 10 threats: Goals & Assists' },
             { key: 'priceWarnings', label: 'Price change warnings' },
           ].map(({ key, label }) => (
             <View key={key} style={styles.row}>
