@@ -62,7 +62,7 @@ TextInput.defaultProps.allowFontScaling = false;
 
 const LOCAL_BUILD = 1;
 const CONFIG_URL = 'https://livefpl.us/version.json';
-const DEFAULT_REMOTE_VERSION = 1;
+const DEFAULT_REMOTE_VERSION = 2;
 
 setConfig({ N: 1000, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
 
@@ -259,7 +259,7 @@ if (activeRoute === 'Templates') {
           return (
             <View onLayout={(e) => setChromeH(e.nativeEvent.layout.height || 60)}>
               <MorePopover />
-              <AdFooter />
+              <AdFooter  routeKey={activeRoute} />
               <BottomTabBar
                 {...props}
                 state={{

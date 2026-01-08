@@ -13,7 +13,7 @@ const BANNER_SIZE = { width: 320, height: 50 };
 const AD_ALIAS = 'banner-320x50';
 const TIMEOUT_MS = 18000;
 
-export default function AdFooter() {
+export default function AdFooter({ routeKey = 'unknown' }) {
   const C = useColors();
   const { isPro } = usePro();
 const { navTheme } = useTheme();
@@ -31,6 +31,12 @@ const isDark = navTheme?.dark;
     const t = setTimeout(() => setCanMountBanner(true), 1500);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+  // when page changes, force an immediate remount so it loads a new ad for that page
+  if (!canMountBanner || !sdkReady) return;
+  setBannerKey((k) => k + 1);
+}, [routeKey, canMountBanner, sdkReady]);
 
     // If banners stay blank, force a remount occasionally to trigger a fresh request.
   const [bannerKey, setBannerKey] = useState(0);
@@ -106,7 +112,8 @@ const isDark = navTheme?.dark;
     <View style={styles.container}>
       <View style={styles.bannerFrame}>
         <PlaywireBannerView
-        key={`pw_banner_${bannerKey}`}
+        key={`pw_banner_${routeKey}_${bannerKey}`}
+
           adUnitId={AD_ALIAS}
           size={BANNER_SIZE}
           style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}

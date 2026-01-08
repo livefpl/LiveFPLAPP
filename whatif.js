@@ -669,13 +669,19 @@ const getPlayersForGame = useCallback((g) => {
     baseRCByPid, baseBonusByPid, baseDefconByPid
   ]);
 
-  const resetAll = useCallback(() => {
-    // reset only the CURRENT game's simulated state
-    setFake(emptyFake());
-    setForce90(false);
-    setOverrideMul(new Map());
-    setShowEditor(false);
-  }, [emptyFake]);
+const resetAll = useCallback(() => {
+  // Reset the ENTIRE scenario (all games), not just the current game
+  setPerGame(new Map());      // <-- this is the key fix
+  setFake(emptyFake());
+  setForce90(false);
+  setOverrideMul(new Map());
+
+  // optional UX: close editor & any open pickers
+  setShowEditor(false);
+  setQuickKind(null);
+  setShowDiff(false);
+}, [emptyFake]);
+
 
   const scoreDelta = useMemo(() => {
     let dH = 0, dA = 0;
