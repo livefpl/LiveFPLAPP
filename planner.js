@@ -3088,7 +3088,7 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
       </TouchableOpacity>
       <TouchableOpacity style={S.iconBtn} onPress={resetFromCurrentGW}>
         <MaterialCommunityIcons name="backup-restore" size={18} color="#ef4444" />
-        <Text style={[S.iconBtnLabel, { color: '#ef4444' }]}>Reset GW+</Text>
+        <Text style={[S.iconBtnLabel, { color: '#ef4444' }]}>Reset</Text>
       </TouchableOpacity>
       <TouchableOpacity
   style={S.iconBtn}
@@ -3098,7 +3098,14 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
   <MaterialCommunityIcons name="chart-box-outline" size={18} color={C.ink} />
   <Text style={S.iconBtnLabel}>Stats</Text>
 </TouchableOpacity>
-<TouchableOpacity style={S.iconBtn} onPress={() => setPlanPickerOpen(true)}>
+<TouchableOpacity
+  style={S.iconBtn}
+  onPress={() => {
+    Keyboard.dismiss();
+    requestAnimationFrame(() => setPlanPickerOpen(true));
+  }}
+>
+
     <MaterialCommunityIcons name="layers-outline" size={16} color={C.ink} />
     <Text style={S.iconBtnLabel}>Plans</Text>
   </TouchableOpacity>
@@ -5477,61 +5484,7 @@ const statDefs = useMemo(() => {
             </View>
           </View>
         </ScrollView>
-<Modal
-  visible={planPickerOpen}
-  transparent
-  animationType="fade"
-  onRequestClose={() => setPlanPickerOpen(false)}
->
-  <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 20 }}>
-    <View style={{ backgroundColor: C.card, borderRadius: 14, padding: 12, maxHeight: 420 }}>
-      <Text style={{ color: C.ink, fontWeight: '900', fontSize: 14, marginBottom: 10 }}>
-        Plans
-      </Text>
 
-      <FlatList
-        data={plans}
-        keyExtractor={(p) => p.id}
-        renderItem={({ item }) => (
-          <TouchableOpacity
-            onPress={() => switchToPlan(item.id)}
-            style={{
-              paddingVertical: 10,
-              paddingHorizontal: 10,
-              borderRadius: 12,
-              marginBottom: 6,
-              borderWidth: 1,
-              borderColor: item.id === activePlanId ? C.accent : C.border,
-              backgroundColor: item.id === activePlanId ? C.bg : 'transparent',
-            }}
-          >
-            <Text style={{ color: C.ink, fontWeight: '800' }}>
-              {item.name}{item.id === activePlanId ? '  ✓' : ''}
-            </Text>
-          </TouchableOpacity>
-        )}
-      />
-
-      <TouchableOpacity
-        onPress={createNewPlan}
-        style={{
-          marginTop: 8,
-          paddingVertical: 10,
-          borderRadius: 12,
-          borderWidth: 1,
-          borderColor: C.border,
-          alignItems: 'center',
-        }}
-      >
-        <Text style={{ color: C.accent, fontWeight: '900' }}>+ New plan</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity onPress={() => setPlanPickerOpen(false)} style={{ alignSelf: 'flex-end', marginTop: 10 }}>
-        <Text style={{ color: C.accent, fontWeight: '900' }}>Close</Text>
-      </TouchableOpacity>
-    </View>
-  </View>
-</Modal>
 
         {/* Column picker with reorder (Up/Down) */}
         <Modal
@@ -7028,7 +6981,61 @@ const clearOverride = () => {
           position={""}
         />
         <CompareModal />
-        
+        <Modal
+  visible={planPickerOpen}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setPlanPickerOpen(false)}
+>
+  <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 20 }}>
+    <View style={{ backgroundColor: C.card, borderRadius: 14, padding: 12, maxHeight: 420 }}>
+      <Text style={{ color: C.ink, fontWeight: '900', fontSize: 14, marginBottom: 10 }}>
+        Plans
+      </Text>
+
+      <FlatList
+        data={plans}
+        keyExtractor={(p) => p.id}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            onPress={() => switchToPlan(item.id)}
+            style={{
+              paddingVertical: 10,
+              paddingHorizontal: 10,
+              borderRadius: 12,
+              marginBottom: 6,
+              borderWidth: 1,
+              borderColor: item.id === activePlanId ? C.accent : C.border,
+              backgroundColor: item.id === activePlanId ? C.bg : 'transparent',
+            }}
+          >
+            <Text style={{ color: C.ink, fontWeight: '800' }}>
+              {item.name}{item.id === activePlanId ? '  ✓' : ''}
+            </Text>
+          </TouchableOpacity>
+        )}
+      />
+
+      <TouchableOpacity
+        onPress={createNewPlan}
+        style={{
+          marginTop: 8,
+          paddingVertical: 10,
+          borderRadius: 12,
+          borderWidth: 1,
+          borderColor: C.border,
+          alignItems: 'center',
+        }}
+      >
+        <Text style={{ color: C.accent, fontWeight: '900' }}>+ New plan</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={() => setPlanPickerOpen(false)} style={{ alignSelf: 'flex-end', marginTop: 10 }}>
+        <Text style={{ color: C.accent, fontWeight: '900' }}>Close</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
         <BankEditor />
       </SafeAreaView>
     );
