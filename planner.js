@@ -44,6 +44,7 @@
 
 import { InteractionManager } from 'react-native';
 import PlayerInfoModal from './PlayerInfoModal';
+import { usePro } from './ProContext';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -91,6 +92,8 @@ const CHIP_LABELS = {
   bboost: 'Bench Boost',
   '3xc': 'Triple Captain',
 };
+const FREE_MAX_PLANS = 2;
+const PRO_MAX_PLANS = 9999; // effectively unlimited
 
 const PITCH_RATIO = 540 / 405;
 let PITCH_HEIGHT = Math.min(SCREEN_W * PITCH_RATIO, SCREEN_H * 0.8);
@@ -165,7 +168,11 @@ const API_ALL_INFO   = 'https://livefpl.us/planner/all_player_info.json';
 const TEAMS_JSON     = 'https://livefpl.us/teams.json';
 const EXT_API_URL     = 'https://livefpl.us/planner/extended_api.json';
 
-const STATE_KEY = (id) => `planner_state_${id}`;
+const STATE_KEY = (id, planId = 'main') => `planner_state_${id}__${planId}`;
+const PLANS_KEY = (id) => `planner_plans_${id}`;
+const ACTIVE_PLAN_KEY = (id) => `planner_active_plan_${id}`;
+const DEFAULT_PLAN_ID = 'main';
+
 const PREF_MINIS_KEY = 'planner_pref_showMinis';
 const ZOOM_KEY = 'planner_zoom_v1';
 // New: local FDR override storage
@@ -922,6 +929,17 @@ const closePicker = () => setPicker({ visible: false, type: null });
   const [weeks, setWeeks] = useState({});
   const [gw, setGw] = useState(null);
 
+  const { isPro } = usePro();
+  const maxPlans = useMemo(
+  () => (isPro ? PRO_MAX_PLANS : FREE_MAX_PLANS),
+  [isPro]
+);
+
+const [plans, setPlans] = useState([]);                 // [{id,name,createdAt}]
+const [activePlanId, setActivePlanId] = useState(DEFAULT_PLAN_ID);
+const [planPickerOpen, setPlanPickerOpen] = useState(false);
+
+
   // UI
   const [transferMode, setTransferMode] = useState(null);
   const [benchFrom, setBenchFrom] = useState(null);
@@ -961,12 +979,102 @@ const [allStatsOpen, setAllStatsOpen] = useState(false);
   const historyRef = useRef([]);
 
   // ---- persistent state (weeks/gw/bankOverrides) ----
-const savePlannerState = useCallback(async (id, weeksObj, gwNum, bankOv) => {
+const savePlannerState = useCallback(async (id,planId, weeksObj, gwNum, bankOv) => {
   try {
     const payload = { weeks: weeksObj, gw: gwNum, bankOverrides: bankOv || {} };
-    await AsyncStorage.setItem(STATE_KEY(id), JSON.stringify(payload));
+    await AsyncStorage.setItem(STATE_KEY(id,planId), JSON.stringify(payload));
   } catch {}
 }, []);
+
+const switchToPlan = useCallback(async (planId) => {
+  if (!fplId) return;
+
+  const nextId = planId;
+
+
+  setPlanPickerOpen(false);
+  setLoading(true);
+
+  try {
+    await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(nextId));
+  } catch {}
+
+  try {
+    const { ai } = await loadStatic();
+    const snap = snapshot || (await loadSnapshot(fplId));
+    if (!snapshot) setSnapshot(snap);
+
+    let restoredWeeks = null, restoredGw = null, restoredBankOv = {};
+    try {
+      const raw = await AsyncStorage.getItem(STATE_KEY(fplId, nextId));
+      if (raw) {
+        const saved = JSON.parse(raw);
+        restoredWeeks  = saved?.weeks || null;
+        restoredGw     = Number(saved?.gw) || null;
+        restoredBankOv = saved?.bankOverrides || {};
+      }
+    } catch {}
+
+    if (restoredWeeks && Object.keys(restoredWeeks).length) {
+      const recomputed = recomputeAll(restoredWeeks, snap, ai, restoredBankOv);
+      setWeeks(recomputed);
+
+      const keys = Object.keys(recomputed).map(Number).filter(n => Number.isFinite(n));
+      const minGw = keys.length ? Math.min(...keys) : Number(snap.base_gw || snap.gw || snap.start_gw || 1);
+      const maxGw = keys.length ? Math.max(...keys) : minGw;
+      const safeGw = Math.min(Math.max(restoredGw || minGw, minGw), maxGw);
+      setGw(safeGw);
+
+      setBankOverrides(restoredBankOv || {});
+    } else {
+      const seeded = seedFromSnapshot(snap);
+      const recomputed = recomputeAll(seeded.weeks, snap, ai);
+      setWeeks(recomputed);
+      setGw(seeded.gw);
+      setBankOverrides({});
+    }
+
+    setActivePlanId(nextId);
+  } catch (e) {
+    Alert.alert('Planner', 'Failed to switch plan.');
+  } finally {
+    setLoading(false);
+  }
+}, [fplId, isPro, loadStatic, loadSnapshot, snapshot]);
+
+const createNewPlan = useCallback(async () => {
+  if (!fplId) return;
+  if (plans.length >= maxPlans) {
+  Alert.alert(
+    'Plan limit reached',
+    isPro
+      ? 'You’ve reached the maximum number of plans.'
+      : `Free accounts can have up to ${FREE_MAX_PLANS} plans. Upgrade to Pro for unlimited plans.`
+  );
+  return;
+}
+
+
+  const newId = `p_${Date.now().toString(36)}`;
+  const newPlan = { id: newId, name: `Plan ${plans.length + 1}`, createdAt: Date.now() };
+  const nextPlans = [...plans, newPlan];
+
+  try {
+    await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
+    await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), newId);
+
+    // Clone current plan state into the new plan as a starting point
+    const payload = { weeks, gw, bankOverrides: bankOverrides || {} };
+    await AsyncStorage.setItem(STATE_KEY(fplId, newId), JSON.stringify(payload));
+
+    setPlans(nextPlans);
+    setActivePlanId(newId);
+    setPlanPickerOpen(false);
+  } catch {
+    Alert.alert('Planner', 'Failed to create a new plan.');
+  }
+}, [fplId, isPro, plans, weeks, gw, bankOverrides,maxPlans]);
+
 
 
 // Planner data is considered ready when core datasets are loaded
@@ -1294,39 +1402,91 @@ useEffect(() => {
       if (!mounted) return;
       setSnapshot(snap);
 
-      // 3) Try restore
-      let restoredWeeks = null, restoredGw = null, restoredBankOv = {};
-      try {
-        const raw = await AsyncStorage.getItem(STATE_KEY(fplId));
-        if (raw) {
-          const saved = JSON.parse(raw);
-          restoredWeeks  = saved?.weeks || null;
-          restoredGw     = Number(saved?.gw) || null;
-          restoredBankOv = saved?.bankOverrides || {};
-        }
-      } catch {}
+      
+      // 3) Plans: load registry + active
+let plansList = [{ id: DEFAULT_PLAN_ID, name: 'Main', createdAt: Date.now() }];
+let desiredPlanId = DEFAULT_PLAN_ID;
 
-      if (restoredWeeks && Object.keys(restoredWeeks).length) {
-        // Recompute everything against *current* snapshot & players info
-        const recomputed = recomputeAll(restoredWeeks, snap, ai, restoredBankOv);
-        setWeeks(recomputed);
+try {
+  const rawPlans = await AsyncStorage.getItem(PLANS_KEY(fplId));
+  if (rawPlans) {
+    const parsed = JSON.parse(rawPlans);
+    if (Array.isArray(parsed) && parsed.length) plansList = parsed;
+  }
+} catch {}
 
-        // Clamp/repair GW pointer
-        const keys = Object.keys(recomputed).map(Number).filter(n => Number.isFinite(n));
-        const minGw = keys.length ? Math.min(...keys) : Number(snap.base_gw || snap.gw || snap.start_gw || 1);
-        const maxGw = keys.length ? Math.max(...keys) : minGw;
-        const safeGw = Math.min(Math.max(restoredGw || minGw, minGw), maxGw);
-        setGw(safeGw);
+try {
+  const rawActive = await AsyncStorage.getItem(ACTIVE_PLAN_KEY(fplId));
+  if (rawActive) desiredPlanId = String(rawActive);
+} catch {}
 
-        // Restore bank overrides
-        setBankOverrides(restoredBankOv || {});
-      } else {
-        // First run → seed from snapshot then recompute
-        const seeded = seedFromSnapshot(snap);
-        const recomputed = recomputeAll(seeded.weeks, snap, ai);
-        setWeeks(recomputed);
-        setGw(seeded.gw);
-      }
+// Enforce plan limit (handles downgrade from Pro -> Free)
+if (!isPro && plansList.length > FREE_MAX_PLANS) {
+  // Keep "main" if present, plus the next plan
+  const main = plansList.find(p => p.id === DEFAULT_PLAN_ID);
+  const rest = plansList.filter(p => p.id !== DEFAULT_PLAN_ID);
+
+  plansList = main ? [main, rest[0]].filter(Boolean) : plansList.slice(0, FREE_MAX_PLANS);
+
+  // Persist trimmed list
+  try { await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(plansList)); } catch {}
+
+  // If active plan got trimmed away, pick the first allowed and persist it too
+  if (!plansList.some(p => p.id === desiredPlanId)) {
+    desiredPlanId = plansList[0]?.id || DEFAULT_PLAN_ID;
+    try { await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(desiredPlanId)); } catch {}
+  }
+}
+
+
+
+
+// Ensure desired exists
+if (!plansList.some(p => p.id === desiredPlanId)) desiredPlanId = DEFAULT_PLAN_ID;
+
+setPlans(plansList);
+setActivePlanId(desiredPlanId);
+
+// 4) Try restore plan state (with legacy migration)
+let restoredWeeks = null, restoredGw = null, restoredBankOv = {};
+
+// Legacy single-plan migration: if old key exists and new main doesn't, copy it once.
+try {
+  const legacy = await AsyncStorage.getItem(`planner_state_${fplId}`);
+  const mainNew = await AsyncStorage.getItem(STATE_KEY(fplId, DEFAULT_PLAN_ID));
+  if (legacy && !mainNew) {
+    await AsyncStorage.setItem(STATE_KEY(fplId, DEFAULT_PLAN_ID), legacy);
+  }
+} catch {}
+
+try {
+  const raw = await AsyncStorage.getItem(STATE_KEY(fplId, desiredPlanId));
+  if (raw) {
+    const saved = JSON.parse(raw);
+    restoredWeeks  = saved?.weeks || null;
+    restoredGw     = Number(saved?.gw) || null;
+    restoredBankOv = saved?.bankOverrides || {};
+  }
+} catch {}
+
+if (restoredWeeks && Object.keys(restoredWeeks).length) {
+  const recomputed = recomputeAll(restoredWeeks, snap, ai, restoredBankOv);
+  setWeeks(recomputed);
+
+  const keys = Object.keys(recomputed).map(Number).filter(n => Number.isFinite(n));
+  const minGw = keys.length ? Math.min(...keys) : Number(snap.base_gw || snap.gw || snap.start_gw || 1);
+  const maxGw = keys.length ? Math.max(...keys) : minGw;   // <-- FIXED BUG
+  const safeGw = Math.min(Math.max(restoredGw || minGw, minGw), maxGw);
+  setGw(safeGw);
+
+  setBankOverrides(restoredBankOv || {});
+} else {
+  const seeded = seedFromSnapshot(snap);
+  const recomputed = recomputeAll(seeded.weeks, snap, ai);
+  setWeeks(recomputed);
+  setGw(seeded.gw);
+}
+
     } catch (e) {
       // Fallback: seed minimally if anything failed
       try {
@@ -1341,13 +1501,13 @@ useEffect(() => {
     }
   })();
   return () => { mounted = false; };
-}, [fplId, loadStatic, loadSnapshot]);
+}, [fplId, loadStatic, loadSnapshot,isPro]);
 useEffect(() => {
   if (!fplId) return;
   // avoid saving half-initialized state during boot
   if (loading) return;
-  savePlannerState(fplId, weeks, gw, bankOverrides);
-}, [fplId, weeks, gw, bankOverrides, loading, savePlannerState]);
+  savePlannerState(fplId, activePlanId, weeks, gw, bankOverrides);
+}, [fplId, weeks, gw, bankOverrides, loading, savePlannerState,activePlanId]);
 
 function capFromSnapshot(snap) {
   if (!snap) return null;
@@ -2938,6 +3098,10 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
   <MaterialCommunityIcons name="chart-box-outline" size={18} color={C.ink} />
   <Text style={S.iconBtnLabel}>Stats</Text>
 </TouchableOpacity>
+<TouchableOpacity style={S.iconBtn} onPress={() => setPlanPickerOpen(true)}>
+    <MaterialCommunityIcons name="layers-outline" size={16} color={C.ink} />
+    <Text style={S.iconBtnLabel}>Plans</Text>
+  </TouchableOpacity>
 
 
 
@@ -5313,6 +5477,61 @@ const statDefs = useMemo(() => {
             </View>
           </View>
         </ScrollView>
+<Modal
+  visible={planPickerOpen}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setPlanPickerOpen(false)}
+>
+  <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', padding: 20 }}>
+    <View style={{ backgroundColor: C.card, borderRadius: 14, padding: 12, maxHeight: 420 }}>
+      <Text style={{ color: C.ink, fontWeight: '900', fontSize: 14, marginBottom: 10 }}>
+        Plans
+      </Text>
+
+      <FlatList
+        data={plans}
+        keyExtractor={(p) => p.id}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            onPress={() => switchToPlan(item.id)}
+            style={{
+              paddingVertical: 10,
+              paddingHorizontal: 10,
+              borderRadius: 12,
+              marginBottom: 6,
+              borderWidth: 1,
+              borderColor: item.id === activePlanId ? C.accent : C.border,
+              backgroundColor: item.id === activePlanId ? C.bg : 'transparent',
+            }}
+          >
+            <Text style={{ color: C.ink, fontWeight: '800' }}>
+              {item.name}{item.id === activePlanId ? '  ✓' : ''}
+            </Text>
+          </TouchableOpacity>
+        )}
+      />
+
+      <TouchableOpacity
+        onPress={createNewPlan}
+        style={{
+          marginTop: 8,
+          paddingVertical: 10,
+          borderRadius: 12,
+          borderWidth: 1,
+          borderColor: C.border,
+          alignItems: 'center',
+        }}
+      >
+        <Text style={{ color: C.accent, fontWeight: '900' }}>+ New plan</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={() => setPlanPickerOpen(false)} style={{ alignSelf: 'flex-end', marginTop: 10 }}>
+        <Text style={{ color: C.accent, fontWeight: '900' }}>Close</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+</Modal>
 
         {/* Column picker with reorder (Up/Down) */}
         <Modal
