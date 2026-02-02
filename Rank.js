@@ -719,7 +719,7 @@ const openPlayerInfo = (pOrId) => {
         accessibilityLabel="Show pre-subs rank"
       >
         <Text style={{ fontSize: 10, fontWeight: '700', color: !value ? 'white' : C.muted }}>
-          Pre
+          No-Subs
         </Text>
       </TouchableOpacity>
 
@@ -736,7 +736,7 @@ const openPlayerInfo = (pOrId) => {
         accessibilityLabel="Show post-subs rank"
       >
         <Text style={{ fontSize: 10, fontWeight: '700', color: value ? 'white' : C.muted }}>
-          Post
+          Subs
         </Text>
       </TouchableOpacity>
     </View>
@@ -3100,7 +3100,7 @@ const handleShare = useCallback(async () => {
 
           <View style={styles.container}>
             <InfoBanner
-              text="Full extended info available at"
+              text="Full detailed info available at"
               link={`www.livefpl.net/${effectiveIdForLink ? effectiveIdForLink : ''}`}
             />
             <View style={{ width: '100%', paddingHorizontal: 12, marginBottom: 6, position: 'relative' }}>
