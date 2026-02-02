@@ -13,7 +13,6 @@
   import { InteractionManager } from 'react-native';
   import { Platform } from 'react-native';
 
-import { setApiTier } from './signedFetch';
 
   import * as Notifications from 'expo-notifications';
 
@@ -105,25 +104,14 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
   // This ensures interstitials are blocked until Pro state is known,
   // and then blocked for Pro users.
   function AdsProGate() {
-  const { isReady, isPro } = usePro();
+    const { isReady, isPro } = usePro();
 
-  useEffect(() => {
-    setAdGuard(() => !isReady || !!isPro);
-  }, [isReady, isPro]);
+    useEffect(() => {
+      setAdGuard(() => !isReady || !!isPro);
+    }, [isReady, isPro]);
 
-  // ✅ NEW: choose backend based on Pro status
-  useEffect(() => {
-    // default to free until RevenueCat state is known
-    if (!isReady) {
-      setApiTier('free');
-      return;
-    }
-    setApiTier(isPro ? 'pro' : 'free');
-  }, [isReady, isPro]);
-
-  return null;
-}
-
+    return null;
+  }
 
 
   /* ------------------------ Tabs ------------------------ */

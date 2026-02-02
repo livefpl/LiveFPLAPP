@@ -11,10 +11,35 @@ import * as Application from 'expo-application';
 import { bump } from './meter';
 
 // === CONFIG ===
-// Keep BASE without trailing slash to avoid accidental '//'
-export const CLOUDRUN_BASE = 'https://livefpl-api-489391001748.europe-west4.run.app';
+// signedFetch.ts
 
-const STORE_KEY = 'session.v1';
+// === CONFIG ===
+// Keep BASE without trailing slash to avoid accidental '//'
+export const FREE_CLOUDRUN_BASE = 'https://livefpl-api-489391001748.europe-west4.run.app';
+
+// TODO: set this to your NEW Pro server base (Cloud Run service / LB / etc)
+export const PRO_CLOUDRUN_BASE  = 'https://livefpl-test-489391001748.us-central1.run.app';
+
+// Which backend should we use right now?
+type ApiTier = 'free' | 'pro';
+let __apiTier: ApiTier = 'free';
+
+// Allow app code to switch tier at runtime
+export function setApiTier(tier: ApiTier) {
+  __apiTier = tier;
+}
+
+// Helper
+function cloudRunBase(): string {
+  return __apiTier === 'pro' ? PRO_CLOUDRUN_BASE : FREE_CLOUDRUN_BASE;
+}
+
+// IMPORTANT: sessions are NOT compatible between servers → keep separate SecureStore keys
+function storeKey(): string {
+  return __apiTier === 'pro' ? 'session.v1.pro' : 'session.v1.free';
+}
+
+
 const RETRY_ON_401_KEY = '__retried401'; // internal flag to avoid infinite loops
 
 // -------- version.json (updating gate) ----------
@@ -77,7 +102,7 @@ function validateLeaguePathOrThrow(pathname: string) {
   const nextSeg = after.split(/[/?#]/)[0] ?? '';
   const isNumeric = /^\d+$/.test(nextSeg);
   if (!isNumeric) {
-    const example = '/LH_api/leagues/123?autosubs=1';
+    const example = '/LH_api2/leagues/123?autosubs=1';
     const msg = `Invalid league URL: "${pathname}". Expected a numeric id after "/leagues/". Example: ${example}`;
     console.warn(msg);
     throw new Error(msg);
@@ -99,17 +124,16 @@ async function nonceHex(len = 16): Promise<string> {
 
 export async function ensureSession(): Promise<Session> {
   const now = Date.now() / 1000;
-  const raw = await SecureStore.getItemAsync(STORE_KEY);
+  const raw = await SecureStore.getItemAsync(storeKey());
   if (raw) {
     try {
       const s = JSON.parse(raw) as Session;
       if (s?.exp && s.exp - 60 > now) return s;
-    } catch {
-      // ignore parse error -> fall through to refresh
-    }
+    } catch {}
   }
 
-    const res = await fetch(`${CLOUDRUN_BASE}/auth/start`, {
+  const base = cloudRunBase();
+  const res = await fetch(`${base}/auth/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -120,10 +144,8 @@ export async function ensureSession(): Promise<Session> {
   });
   if (!res.ok) throw new Error(`auth/start ${res.status}`);
   const s = (await res.json()) as Session;
-  await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(s));
+  await SecureStore.setItemAsync(storeKey(), JSON.stringify(s));
   return s;
-
-  
 }
 
 /**
@@ -132,12 +154,17 @@ export async function ensureSession(): Promise<Session> {
  * NOTE: Blocks when version.json has updating == 1 (one-time Alert + throw).
  */
 export async function signedFetch(urlOrPath: string, init: RequestInit = {}): Promise<Response> {
+ const base = cloudRunBase();
+
   const isPath = urlOrPath.startsWith('/');
-  const url = isPath ? `${CLOUDRUN_BASE}${urlOrPath}` : urlOrPath;
+  const url = isPath ? `${base}${urlOrPath}` : urlOrPath;
   const u = new URL(url);
 
-  // Not our API -> plain fetch (no signing, no bump, no gate)
-  if (!u.href.startsWith(CLOUDRUN_BASE)) {
+  const isOurs =
+    u.href.startsWith(FREE_CLOUDRUN_BASE) ||
+    u.href.startsWith(PRO_CLOUDRUN_BASE);
+
+  if (!isOurs) {
     return fetch(url, init);
   }
 
@@ -187,7 +214,7 @@ export async function signedFetch(urlOrPath: string, init: RequestInit = {}): Pr
   });
 
   if (res.status === 401 && !(init as any)[RETRY_ON_401_KEY]) {
-  try { await SecureStore.deleteItemAsync(STORE_KEY); } catch {}
+  try { await SecureStore.deleteItemAsync(storeKey()); } catch {}
   const nextInit: RequestInit = { ...(init as any), [RETRY_ON_401_KEY]: true };
   return signedFetch(urlOrPath, nextInit);
 }
@@ -211,8 +238,13 @@ export async function signedFetch(urlOrPath: string, init: RequestInit = {}): Pr
  * NOTE: Cloud Run calls will be blocked when version.json has updating == 1.
  */
 export async function smartFetch(urlOrPath: string, init: RequestInit = {}): Promise<Response> {
-  if (urlOrPath.startsWith('/') || urlOrPath.startsWith(CLOUDRUN_BASE)) {
-    return signedFetch(urlOrPath, init); // includes the updating gate
+  if (
+    urlOrPath.startsWith('/') ||
+    urlOrPath.startsWith(FREE_CLOUDRUN_BASE) ||
+    urlOrPath.startsWith(PRO_CLOUDRUN_BASE)
+  ) {
+    return signedFetch(urlOrPath, init);
   }
   return fetch(urlOrPath, init);
 }
+

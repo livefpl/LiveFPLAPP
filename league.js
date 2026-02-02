@@ -511,6 +511,8 @@ const toggleCompareSort = (key) => {
   );
   setCompareSortKey(key);
 };
+const [selectedLoaded, setSelectedLoaded] = useState(false);
+const [detailedView, setDetailedView] = useState(false);
 
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -839,6 +841,19 @@ useEffect(() => {
   })();
 }, [fplId,selectedLoaded]); 
 
+useEffect(() => {
+  (async () => {
+    try {
+      const v = await AsyncStorage.getItem('league:detailedView');
+      if (v != null) setDetailedView(v === '1');
+    } catch {}
+  })();
+}, []);
+
+useEffect(() => {
+  AsyncStorage.setItem('league:detailedView', detailedView ? '1' : '0').catch(() => {});
+}, [detailedView]);
+
 
  useEffect(() => {
   let cancelled = false;
@@ -901,8 +916,9 @@ useEffect(() => {
       // Non-Celebs: if we have no payload yet, fetch once to refresh options
       if (!payload) {
         const resp = await smartFetch(
-          `https://livefpl-api-489391001748.europe-west4.run.app/LH_api2/${encodeURIComponent(fplId)}`
-        );
+  `/LH_api2/${encodeURIComponent(fplId)}`
+);
+
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const json = await resp.json();
         const fresh = pickPayload(json, fplId);
@@ -1025,9 +1041,9 @@ useEffect(() => {
 
       // 4) Fetch fresh league JSON
       const url =
-        String(leagueId) === 'celebs'
-          ? `https://livefpl.us/api/celebs_${autosubs ? 1 : 0}.json`
-          : `https://livefpl-api-489391001748.europe-west4.run.app/LH_api/leagues/${encodeURIComponent(leagueId)}?autosubs=${autosubs ? 1 : 0}`;
+  String(leagueId) === 'celebs'
+    ? `https://livefpl.us/api/celebs_${autosubs ? 1 : 0}.json`
+    : `/LH_api2/leagues/${encodeURIComponent(leagueId)}?autosubs=${autosubs ? 1 : 0}`;
 
       const resp = await smartFetch(url, { signal: controller.signal });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1171,7 +1187,6 @@ useEffect(() => {
   const [sortKey, setSortKey] = useState('pos');
   const [sortDir, setSortDir] = useState('asc');
 // near other useState hooks
-const [selectedLoaded, setSelectedLoaded] = useState(false);
 
   const getSortVal = (row, key) => {
     switch (key) {
@@ -1410,9 +1425,10 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
         S={S}
         showYet={showYet}
         cols={COLS}
+         detailedView={detailedView}
       />
     );
-  }, [fplId, favs, expanded, C, isDark, S, showYet, COLS]);
+  }, [fplId, favs, expanded, C, isDark, S, showYet, COLS,detailedView]);
 
   // abort anything still in flight on unmount
   useEffect(() => {
@@ -1503,26 +1519,22 @@ activeOpacity={0.7}
           </TouchableOpacity>
         )}
       </View>
-      {/* === Search row (new line under the buttons) === */}
-<View style={[S.toolbarRow, { marginTop: 2, alignItems: 'center' }]}>
+      <View style={[S.toolbarRow, { marginTop: 2, alignItems: 'center' }]}>
   <View style={{ flex: 1 }}>
-  <ThemedTextInput
-  value={tableQuery}
-  onChangeText={setTableQuery}
-  placeholder="Search league…"
-  placeholderTextColor={C.muted}
-  multiline={false}
-  textAlignVertical="center"               // Android vertical centering
-  style={[
-    S.searchInputInline,
-    { paddingTop: 9, paddingBottom: 9, lineHeight: 14 }  // keep compact height
-    // 🔴 remove lineHeight: 36
-  ]}
-  returnKeyType="search"
-/>
-
-</View>
-
+    <ThemedTextInput
+      value={tableQuery}
+      onChangeText={setTableQuery}
+      placeholder="Search league…"
+      placeholderTextColor={C.muted}
+      multiline={false}
+      textAlignVertical="center"
+      style={[
+        S.searchInputInline,
+        { paddingTop: 9, paddingBottom: 9, lineHeight: 14 }
+      ]}
+      returnKeyType="search"
+    />
+  </View>
 
   <TouchableOpacity
     style={S.findBtn}
@@ -1532,8 +1544,18 @@ activeOpacity={0.7}
   >
     <Text style={S.findBtnText}>Find me</Text>
   </TouchableOpacity>
-  
+
+  <Pressable
+    onPress={() => setDetailedView(v => !v)}
+    style={[S.viewToggleBtn, detailedView && S.viewToggleBtnOn]}
+    accessibilityLabel="Toggle detailed view"
+  >
+    <Text style={[S.viewToggleText, detailedView && S.viewToggleTextOn]}>
+      {detailedView ? 'Detailed' : 'Compact'}
+    </Text>
+  </Pressable>
 </View>
+
 
 
 
@@ -2300,7 +2322,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
 };
 
 /** ===== Row ===== */
-const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDark, S, showYet, cols }) => {
+const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDark, S, showYet, cols,detailedView  }) => {
   const ME_GRADIENT = isDark
     ? ['rgba(34,211,238,0.18)', 'rgba(99,102,241,0.18)']
     : ['#22d3ee', '#6366f1'];
@@ -2337,6 +2359,14 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
 
 
   const transfers = safeArr(row.transfers);
+  const transfersInline = useMemo(() => {
+  if (!transfers.length) return '';
+  const max = 10; // keep it compact
+  const head = transfers.slice(0, max).map(t => `${t.in}→${t.out}`).join(' • ');
+  const more = transfers.length > max ? `  +${transfers.length - max}` : '';
+  return head + more;
+}, [transfers]);
+
   const xferSum = transfers.reduce((acc, t) => acc + (typeof t.gain === 'number' ? t.gain : 0), 0);
   const hits = Number(row.gw_hits ?? row.hits ?? row.hit ?? 0) || 0;
   const xferNet = xferSum + hits;
@@ -2430,6 +2460,8 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
             );
           })}
         </View>
+        
+
       </View>
 
       {/* Yet */}
@@ -2475,6 +2507,7 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
           color={me ? '#ffffff' : (C.text ?? '#0f172a')}
         />
       </View>
+      
     </>
   );
 
@@ -2494,12 +2527,50 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
             end={{ x: 1, y: 0 }}
             style={[S.rowHeader, S.rowHeaderMine, isDark && { shadowOpacity: 0.35 }]}
           >
-            <HeaderInner />
+            <View style={S.rowHeaderTop}>
+    <HeaderInner />
+  </View>
+
+  {detailedView && !!transfersInline && (
+  <Text
+    numberOfLines={1}
+    ellipsizeMode="tail"
+    style={[
+      S.inlineTransfers,
+      // ✅ indent to start under the Manager column
+      { marginLeft: ((cols.pos || 0) / 100) * (Dimensions.get('window').width - 20) + 8 },
+      me && isDark && { color: 'rgba(255,255,255,0.92)' },
+    ]}
+  >
+    {transfersInline}
+  </Text>
+)}
+
           </LinearGradient>
         ) : (
           <View style={S.rowHeader}>
-            <HeaderInner />
+            <View style={S.rowHeaderTop}>
+    <HeaderInner />
+  </View>
+
+  {detailedView && !!transfersInline && (
+  <Text
+    numberOfLines={1}
+    ellipsizeMode="tail"
+    style={[
+      S.inlineTransfers,
+      // ✅ indent to start under the Manager column
+      { marginLeft: ((cols.pos || 0) / 100) * (Dimensions.get('window').width - 20) + 8 },
+      me && isDark && { color: 'rgba(255,255,255,0.92)' },
+    ]}
+  >
+    {transfersInline}
+  </Text>
+)}
+
           </View>
+          
+          
         )}
       </View>
 
@@ -2868,6 +2939,41 @@ dropdownItem: {
     stickyWrap: {
       backgroundColor: isDark ? 'rgba(15,23,42,1)' : 'rgba(234,240,255,1)',
     },
+    viewToggleBtn: {
+  height: 44,
+  paddingHorizontal: 10,
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: C.border2,
+  backgroundColor: C.card,
+  alignItems: 'center',
+  justifyContent: 'center',
+},
+viewToggleBtnOn: {
+  borderColor: C.accent,
+},
+viewToggleText: {
+  color: C.muted,
+  fontSize: 11,
+  fontWeight: '900',
+},
+viewToggleTextOn: {
+  color: C.accent,
+},
+rowHeaderTop: {
+  flexDirection: 'row',
+  alignItems: 'stretch',
+},
+
+inlineTransfers: {
+  marginTop: 3,
+  color: C.muted,
+  fontSize: 9,
+  fontWeight: '800',
+  flexShrink: 1,               // ✅ allow ellipsis instead of clipping
+  alignSelf: 'stretch',        // ✅ take full width
+},
+
     loadingBar: {
       flexDirection: 'row',
       alignItems: 'center',
@@ -2916,7 +3022,7 @@ dropdownItem: {
       elevation: 2,
     },
 
-    rowHeader: { flexDirection: 'row', alignItems: 'stretch', paddingHorizontal: 8, paddingVertical: 5 },
+    rowHeader: { flexDirection: 'column', alignItems: 'stretch', paddingHorizontal: 8, paddingVertical: 5 },
     rowHeaderMine: {
       borderRadius: RADIUS,
       shadowColor: 'rgba(0,0,0,0.25)',
@@ -3169,6 +3275,17 @@ eoManagerName: { color: C.ink, fontWeight: '700', flexShrink: 1 },
       marginTop: 2, width: '100%', textAlign: 'center', paddingVertical: 1, borderRadius: 6, overflow: 'hidden',
       fontSize: 10, fontWeight: '800', color: '#0b0c10',
     },
+transfersFullRow: {
+  width: '100%',
+  paddingTop: 6,
+  paddingBottom: 2,
+  paddingHorizontal: 10, // match your row's horizontal padding
+},
+
+transfersFullText: {
+  fontSize: 11,
+  opacity: 0.9,
+},
 
     analyticsBar: { alignItems: 'flex-end', marginBottom: 8 },
     analyticsBtn: {

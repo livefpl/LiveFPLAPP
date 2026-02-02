@@ -64,7 +64,7 @@ async function persistExposureForPayload(payload, effectiveId) {
 }
 
 
-import Svg, { Circle, Text as SvgText } from 'react-native-svg';
+import Svg, { Circle, Text as SvgText, Polyline, Line } from 'react-native-svg';
 
 const LetterCircle = ({
   label = 'A',
@@ -466,6 +466,108 @@ const [onePt, setOnePt] = useState(null);
  // near other refs
 const hydratedRef = useRef(false); // becomes true once we've loaded from AsyncStorage (or decided there's nothing to load)
 const [rankTab, setRankTab] = useState('pitch'); // 'pitch' | 'feed'
+// -----------------------------
+// History tab (FPL entry history)
+// -----------------------------
+const [historyLoading, setHistoryLoading] = useState(false);
+const [historyErr, setHistoryErr] = useState(null);
+const [historyData, setHistoryData] = useState(null);
+const [quickBarOpen, setQuickBarOpen] = useState(false);
+
+const HISTORY_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const historyCacheKey = (id) => `fpl.entry.history.v1:${String(id || '')}`;
+const managerBarRef = useRef(null);
+const [quickOpen, setQuickOpen] = useState(false);
+const quickJustOpenedRef = useRef(0);
+
+const [quickAnchor, setQuickAnchor] = useState({ x: 12, y: 0, w: 320, h: 0 });
+
+const openQuick = useCallback(() => {
+  quickJustOpenedRef.current = Date.now(); // <-- add this
+  requestAnimationFrame(() => {
+    try {
+      managerBarRef.current?.measureInWindow((x, y, w, h) => {
+        setQuickAnchor({ x, y, w, h });
+        setQuickOpen(true);
+      });
+    } catch {
+      setQuickOpen(true);
+    }
+  });
+}, []);
+
+const CHIP_ABBR = {
+  bboost: 'BB',
+  wildcard: 'WC',
+  freehit: 'FH',
+  '3xc': 'TC',
+};
+
+const buildChipByGw = (chips = []) => {
+  const m = {};
+  (chips || []).forEach((c) => {
+    const gw = Number(c?.event);
+    const name = String(c?.name || '').toLowerCase();
+    if (!gw || !name) return;
+    m[gw] = CHIP_ABBR[name] || name.toUpperCase();
+  });
+  return m;
+};
+
+const fmtShort = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return '-';
+  if (x >= 1e6) return `${(x / 1e6).toFixed(x >= 10e6 ? 0 : 1)}M`;
+  if (x >= 1e3) return `${(x / 1e3).toFixed(x >= 10e3 ? 0 : 1)}K`;
+  return String(Math.round(x));
+};
+
+const loadHistory = useCallback(async (id) => {
+  const fpl = Number(id);
+  if (!fpl) return;
+
+  setHistoryErr(null);
+
+  // cache
+  try {
+    const raw = await AsyncStorage.getItem(historyCacheKey(fpl));
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.ts && Date.now() - parsed.ts < HISTORY_TTL_MS && parsed?.data) {
+        setHistoryData(parsed.data);
+        return;
+      }
+    }
+  } catch {}
+
+  setHistoryLoading(true);
+  try {
+    const url = `https://fantasy.premierleague.com/api/entry/${fpl}/history/`;
+    const res = await fetch(url, { headers: { accept: 'application/json' } });
+    if (!res.ok) throw new Error(`FPL history fetch failed (${res.status})`);
+    const json = await res.json();
+    // tag with id so we can detect switching viewFplId
+    json._fplId = fpl;
+
+    setHistoryData(json);
+    try {
+      await AsyncStorage.setItem(historyCacheKey(fpl), JSON.stringify({ ts: Date.now(), data: json }));
+    } catch {}
+  } catch (e) {
+    setHistoryErr(String(e?.message || e));
+  } finally {
+    setHistoryLoading(false);
+  }
+}, []);
+
+// auto-load when user opens History tab
+useEffect(() => {
+  if (rankTab !== 'history') return;
+  const effectiveId = Number(viewFplId ?? fplId);
+  if (!effectiveId) return;
+  if (historyData?._fplId === effectiveId) return;
+  loadHistory(effectiveId);
+}, [rankTab, viewFplId, fplId, loadHistory, historyData?._fplId]);
 
 const [pitchScale, setPitchScale] = useState(1);
 const scaleRef = useRef(1);
@@ -643,6 +745,34 @@ const openPlayerInfo = (pOrId) => {
 
 const PitchFeedToggle = ({ value, onChange }) => {
   const isPitch = value === 'pitch';
+  const isFeed = value === 'feed';
+  const isHistory = value === 'history';
+
+  const Btn = ({ active, label, onPress }) => (
+    <TouchableOpacity
+      onPress={onPress}
+      style={{
+        paddingHorizontal: 6,
+        height: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: active ? C.accent : 'transparent',
+      }}
+      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+    >
+      <Text
+        numberOfLines={1}
+        ellipsizeMode="clip"
+        style={{
+          fontSize: 9,
+          fontWeight: '700',
+          color: active ? 'white' : C.muted,
+        }}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
 
   return (
     <View
@@ -655,52 +785,13 @@ const PitchFeedToggle = ({ value, onChange }) => {
         backgroundColor: C.card,
       }}
     >
-      <TouchableOpacity
-        onPress={() => onChange('pitch')}
-        style={{
-          paddingHorizontal: 6,   // 👈 controls width
-          height: 20,
-          justifyContent: 'center',
-          alignItems: 'center',
-          backgroundColor: isPitch ? C.accent : 'transparent',
-        }}
-        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-      >
-        <Text numberOfLines={1} ellipsizeMode="clip"
-          style={{
-            fontSize: 9,
-            fontWeight: '700',
-            color: isPitch ? 'white' : C.muted,
-          }}
-        >
-          Pitch
-        </Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        onPress={() => onChange('feed')}
-        style={{
-          paddingHorizontal: 6,   // 👈 same padding = symmetry
-          height: 20,
-          justifyContent: 'center',
-          alignItems: 'center',
-          backgroundColor: !isPitch ? C.accent : 'transparent',
-        }}
-        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-      >
-        <Text numberOfLines={1} ellipsizeMode="clip"
-          style={{
-            fontSize: 9,
-            fontWeight: '700',
-            color: !isPitch ? 'white' : C.muted,
-          }}
-        >
-          Feed
-        </Text>
-      </TouchableOpacity>
+      <Btn active={isPitch} label="Pitch" onPress={() => onChange('pitch')} />
+      <Btn active={isFeed} label="Feed" onPress={() => onChange('feed')} />
+      <Btn active={isHistory} label="History" onPress={() => onChange('history')} />
     </View>
   );
 };
+
 
 
 
@@ -1553,6 +1644,408 @@ useEffect(() => {
     setModalVisible(true);
   };
 
+const HistoryChart = ({ rows, chips, width, height }) => {
+  const pts = (rows || [])
+    .filter((r) => Number.isFinite(Number(r?.event)) && Number.isFinite(Number(r?.overall_rank)))
+    .map((r) => ({ x: Number(r.event), y: Number(r.overall_rank) }))
+    .sort((a, b) => a.x - b.x);
+
+  if (pts.length < 2) return null;
+
+  const chipByGw = buildChipByGw(chips);
+
+  // Make sure we use the provided width (screen fit), no forced min width.
+  const w = Math.max(280, Number(width) || 320);
+  const h = Math.max(170, Number(height) || 190);
+
+  const padL = 44;
+  const padR = 10;
+  const padT = 10;
+  const padB = 34;
+
+  const xMin = Math.min(...pts.map((p) => p.x));
+  const xMax = Math.max(...pts.map((p) => p.x));
+  
+
+  const X = (x) =>
+    xMax === xMin ? padL : padL + ((x - xMin) / (xMax - xMin)) * (w - padL - padR);
+
+  const yMinRaw = Math.min(...pts.map((p) => p.y));
+const yMaxRaw = Math.max(...pts.map((p) => p.y));
+
+// More detail at the top + always show these
+const BENCH_ALWAYS = [ 100_000, 1_000_000];
+
+const yMin = Math.max(1, Math.min(yMinRaw, ...BENCH_ALWAYS));
+const yMax = Math.max(yMaxRaw, ...BENCH_ALWAYS);
+
+// log scale helpers
+const log10 = (v) => Math.log(v) / Math.LN10;
+const yMinL = log10(yMin);
+const yMaxL = log10(yMax);
+
+// Smaller rank (better) should be higher on screen
+const Y = (y) => {
+  const yy = Math.max(1, Number(y) || 1);
+  const yl = log10(yy);
+  return yMaxL === yMinL
+    ? padT
+    : padT + ((yl - yMinL) / (yMaxL - yMinL)) * (h - padT - padB);
+};
+
+  const poly = pts.map((p) => `${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ');
+
+
+let yTicks = [...BENCH_ALWAYS]; // always show these
+
+// also include endpoints (nice framing)
+const pushIfMissing = (v) => {
+  if (!yTicks.some((t) => Math.abs(t - v) < 1)) yTicks.push(v);
+};
+pushIfMissing(yMinRaw);
+pushIfMissing(yMaxRaw);
+
+yTicks = yTicks.slice().sort((a, b) => a - b);
+
+  
+  
+
+  const xVals = pts.map((p) => p.x);
+
+  // Chip markers: only those GWs that exist in our pts
+  const chipMarks = Object.keys(chipByGw)
+    .map((k) => Number(k))
+    .filter((gw) => pts.some((p) => p.x === gw))
+    .sort((a, b) => a - b);
+
+  const yAtGw = (gw) => {
+    const hit = pts.find((p) => p.x === gw);
+    return hit ? hit.y : null;
+  };
+
+  return (
+    <View
+      style={{
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: C.border,
+        backgroundColor: C.card,
+        borderRadius: 12,
+        padding: 10,
+        marginBottom: 10,
+      }}
+    >
+      <Text style={{ color: C.ink, fontWeight: '800', marginBottom: 8 }}>Overall Rank Trend</Text>
+
+      <Svg width={w} height={h}>
+        {/* Y grid + labels */}
+        {yTicks.map((val, i) => {
+          const yy = Y(val);
+          return (
+            <React.Fragment key={`y-${i}`}>
+              <Line x1={padL} y1={yy} x2={w - padR} y2={yy} stroke={C.border} strokeWidth={1} />
+              <SvgText
+                x={padL - 6}
+                y={yy}
+                fill={C.muted}
+                fontSize={10}
+                fontWeight="700"
+                textAnchor="end"
+                alignmentBaseline="middle"
+              >
+                {fmtShort(val)}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+
+        {/* Trend line */}
+        <Polyline points={poly} fill="none" stroke={C.accent} strokeWidth={2.5} />
+
+        
+
+        {/* Chip labels (BB/WC/TC/FH) */}
+        {chipMarks.map((gw) => {
+          const yv = yAtGw(gw);
+          if (!Number.isFinite(yv)) return null;
+          const xx = X(gw);
+          const yy = Y(yv);
+
+          return (
+            <React.Fragment key={`chip-${gw}`}>
+              {/* small dot above point */}
+              <SvgText
+                x={xx}
+                y={Math.max(padT + 2, yy - 14)}
+                fill={C.ink}
+                fontSize={9}
+                fontWeight="900"
+                textAnchor="middle"
+                alignmentBaseline="baseline"
+              >
+                {chipByGw[gw]}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+
+        {/* X labels: just numbers 1,2,3,... */}
+        {xVals.map((ev, i) => (
+          <SvgText
+            key={`x-${ev}-${i}`}
+            x={X(ev)}
+            y={h - 8}
+            fill={C.muted}
+            fontSize={8}
+            fontWeight="800"
+            textAnchor="middle"
+          >
+            {String(ev)}
+          </SvgText>
+        ))}
+      </Svg>
+
+      <Text style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>
+        (Higher on the chart = better rank)
+      </Text>
+    </View>
+  );
+};
+
+const QuickActionsBar = () => (
+  <View style={{ width: '100%', paddingHorizontal: 12, marginTop: 6 }}>
+    <View
+      style={[
+        styles.managerRow,
+        {
+          justifyContent: 'space-between',
+          paddingVertical: 8,
+          gap: 10,
+        },
+      ]}
+    >
+      {[
+        {
+          key: 'share',
+          icon: 'share-variant',
+          label: 'Share',
+          onPress: handleShare,
+          disabled: false,
+        },
+        {
+          key: 'out',
+          icon: 'magnify-minus',
+          label: 'Zoom -',
+          onPress: () => bumpScale(-STEP),
+          disabled: atMin,
+        },
+        {
+          key: 'in',
+          icon: 'magnify-plus',
+          label: 'Zoom +',
+          onPress: () => bumpScale(+STEP),
+          disabled: atMax,
+        },
+        {
+          key: 'trophies',
+          icon: 'trophy-outline',
+          label: 'Trophies',
+          onPress: () => navigation.navigate('Trophies'),
+          disabled: false,
+        },
+      ].map((b) => (
+        <TouchableOpacity
+          key={b.key}
+          onPress={b.onPress}
+          disabled={b.disabled}
+          style={{
+            flex: 1,
+            opacity: b.disabled ? 0.35 : 1,
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            backgroundColor: C.card2,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: C.border,
+            borderRadius: 12,
+            paddingVertical: 8,
+          }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <MaterialCommunityIcons name={b.icon} size={18} color={C.ink} />
+          <Text style={{ color: C.ink, fontSize: 11, fontWeight: '800' }}>
+            {b.label}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </View>
+  </View>
+);
+
+
+const HistoryTable = ({ rows, chips }) => {
+  const data = (rows || []).slice().sort((a, b) => Number(b?.event || 0) - Number(a?.event || 0));
+  const chipByGw = buildChipByGw(chips);
+
+  const col = {
+    gw: 44,
+    chip: 44,
+    or: 86,
+    gwr: 76,
+    chg: 66,
+    arr: 26,
+  };
+
+  const calc = (item, prev) => {
+  const cur = Number(item?.overall_rank);
+  const prv = Number(prev?.overall_rank);
+  const hasPrev = Number.isFinite(cur) && Number.isFinite(prv) && prv > 0;
+
+  const diff = hasPrev ? (prv - cur) : 0; // + = improved
+  const pct = hasPrev ? (diff / prv) * 100 : null;
+
+  const improved = pct == null ? null : diff >= 0;
+  const arrowKey = improved == null ? null : improved ? 'up' : 'down';
+  return { pct, arrowKey };
+};
+
+
+  const fixed = { gw: 44, chip: 44, arr: 26 }; // keep these fixed
+const flex = { or: 1.15, gwr: 1.0, chg: 1.0 }; // these expand/shrink nicely
+
+const HeaderCell = ({ w, flexGrow, children, align = 'left', minW = 0 }) => (
+  <Text
+    style={{
+      ...(w ? { width: w } : { flexGrow: flexGrow ?? 1, flexBasis: 0, minWidth: minW }),
+      color: C.muted,
+      fontWeight: '900',
+      fontSize: 11,
+      textAlign: align,
+    }}
+    numberOfLines={1}
+  >
+    {children}
+  </Text>
+);
+
+const Cell = ({ w, flexGrow, children, align = 'left', color = C.ink, bold = false, minW = 0 }) => (
+  <Text
+    style={{
+      ...(w ? { width: w } : { flexGrow: flexGrow ?? 1, flexBasis: 0, minWidth: minW }),
+      color,
+      fontWeight: bold ? '900' : '700',
+      fontSize: 12,
+      textAlign: align,
+      fontVariant: ['tabular-nums'],
+    }}
+    numberOfLines={1}
+    ellipsizeMode="clip"
+  >
+    {children}
+  </Text>
+);
+
+
+  return (
+    <View
+      style={{
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: C.border,
+        backgroundColor: C.card,
+        borderRadius: 12,
+        overflow: 'hidden',
+      }}
+    >
+      <View
+        style={{
+          paddingVertical: 10,
+          paddingHorizontal: 10,
+          backgroundColor: C.card2,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderColor: C.border,
+        }}
+      >
+        <Text style={{ color: C.ink, fontWeight: '900' }}>History</Text>
+        <Text style={{ color: C.muted, marginTop: 2, fontSize: 11 }}>
+          Overall Rank, GW Rank, change vs previous GW
+        </Text>
+      </View>
+
+      {/* table header row */}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 10,
+          paddingVertical: 8,
+          borderBottomWidth: StyleSheet.hairlineWidth,
+          borderColor: C.border,
+        }}
+      >
+        <HeaderCell w={fixed.gw}>GW</HeaderCell>
+<HeaderCell w={fixed.chip} align="center">Chip</HeaderCell>
+<HeaderCell w={fixed.arr} align="center"> </HeaderCell>
+
+<HeaderCell flexGrow={flex.or}  minW={78}>OR</HeaderCell>
+<HeaderCell flexGrow={flex.gwr} minW={92} align="right">GW Rank</HeaderCell>
+<HeaderCell flexGrow={flex.chg} minW={74} align="right">Δ%</HeaderCell>
+
+      </View>
+
+      {data.map((item, idx) => {
+        const prev = data[idx + 1];
+        const { pct, arrowKey } = calc(item, prev);
+
+        const gw = Number(item?.event);
+        const chip = chipByGw[gw] || '—';
+
+        return (
+          <View
+            key={`gw-${item?.event}-${idx}`}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingHorizontal: 10,
+              paddingVertical: 10,
+              borderBottomWidth: idx === data.length - 1 ? 0 : StyleSheet.hairlineWidth,
+              borderColor: C.border,
+            }}
+          >
+            <Cell w={fixed.gw} bold>{String(item?.event ?? '')}</Cell>
+
+<Cell w={fixed.chip} align="center" bold color={chip === '—' ? C.muted : C.ink}>
+  {chip}
+</Cell>
+
+<View style={{ width: fixed.arr, alignItems: 'center', justifyContent: 'center' }}>
+  {arrowKey ? (
+    <Image source={assetImages[arrowKey]} style={{ width: 14, height: 14, resizeMode: 'contain' }} />
+  ) : (
+    <Text style={{ color: C.muted, fontWeight: '900' }}>•</Text>
+  )}
+</View>
+
+<Cell flexGrow={flex.or}  minW={78} bold>{fmtShort(item?.overall_rank)}</Cell>
+<Cell flexGrow={flex.gwr} minW={92} align="right">{fmtShort(item?.rank)}</Cell>
+
+<Cell
+  flexGrow={flex.chg}
+  minW={74}
+  align="right"
+  color={pct == null ? C.muted : (pct >= 0 ? (C.good || '#22c55e') : (C.bad || '#ef4444'))}
+  bold
+>
+  {pct == null ? '-' : `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%`}
+</Cell>
+
+          </View>
+        );
+      })}
+    </View>
+  );
+};
+
+
 const renderStatsListCompact = (stats = [], C) => {
   if (!stats?.length) {
     return (
@@ -1796,9 +2289,10 @@ if (genMatches) {
 
       if (!payload) {
         const resp = await smartFetch(
-          `https://livefpl-api-489391001748.europe-west4.run.app/LH_api/${effectiveId}`,
-          { signal: ctrl.signal }
-        );
+  `/LH_api2/${encodeURIComponent(effectiveId)}`,
+  { signal: ctrl.signal }
+);
+
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const json = await resp.json();
         try {
@@ -2060,6 +2554,8 @@ setExposureMap(exposureFromPlayers);
   useFocusEffect(
     useCallback(() => {
       setRankTab('pitch');
+      setQuickBarOpen(false);
+    setQuickOpen(false);
       // kick off fetch
       fetchData();
 
@@ -2281,6 +2777,106 @@ const handleShare = useCallback(async () => {
   teamShort={infoPlayer.teamShort}
   position={infoPlayer.position}
 />
+<Modal
+  transparent
+  visible={quickOpen}
+  animationType="fade"
+  onRequestClose={() => setQuickOpen(false)}
+>
+  <TouchableWithoutFeedback
+    onPress={() => {
+      // Prevent “open tap” from immediately closing the modal
+      if (Date.now() - quickJustOpenedRef.current < 250) return;
+      setQuickOpen(false);
+    }}
+  >
+    <View style={{ flex: 1 }}>
+      <TouchableWithoutFeedback>
+        <View
+          style={{
+            position: 'absolute',
+            left: Math.max(12, quickAnchor.x),
+            width: Math.min(
+              Dimensions.get('window').width - 24,
+              quickAnchor.w || (Dimensions.get('window').width - 24)
+            ),
+            top: Math.min(
+              Dimensions.get('window').height - 160,
+              (quickAnchor.y || 0) + (quickAnchor.h || 0) + 8
+            ),
+            backgroundColor: C.card,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: C.border,
+            borderRadius: 14,
+            paddingVertical: 10,
+            paddingHorizontal: 10,
+            shadowColor: '#000',
+            shadowOpacity: 0.18,
+            shadowRadius: 10,
+            shadowOffset: { width: 0, height: 6 },
+            elevation: 10,
+          }}
+        >
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 10 }}>
+            {[
+              {
+                key: 'share',
+                icon: 'share-variant',
+                label: 'Share',
+                onPress: () => { setQuickOpen(false); handleShare(); },
+              },
+              {
+                key: 'out',
+                icon: 'magnify-minus',
+                label: 'Zoom -',
+                disabled: atMin,
+                onPress: () => bumpScale(-STEP),
+              },
+              {
+                key: 'in',
+                icon: 'magnify-plus',
+                label: 'Zoom +',
+                disabled: atMax,
+                onPress: () => bumpScale(+STEP),
+              },
+              {
+                key: 'trophies',
+                icon: 'trophy-outline',
+                label: 'Trophies',
+                onPress: () => { setQuickOpen(false); navigation.navigate('Trophies'); },
+              },
+            ].map((b) => (
+              <TouchableOpacity
+                key={b.key}
+                onPress={b.onPress}
+                disabled={!!b.disabled}
+                style={{
+                  flex: 1,
+                  opacity: b.disabled ? 0.35 : 1,
+                  backgroundColor: C.card2,
+                  borderWidth: StyleSheet.hairlineWidth,
+                  borderColor: C.border,
+                  borderRadius: 12,
+                  paddingVertical: 10,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <MaterialCommunityIcons name={b.icon} size={22} color={C.ink} />
+                <Text style={{ color: C.ink, fontSize: 11, fontWeight: '800' }}>
+                  {b.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      </TouchableWithoutFeedback>
+    </View>
+  </TouchableWithoutFeedback>
+</Modal>
+
 
 <Modal
   animationType="fade"
@@ -2568,7 +3164,7 @@ const handleShare = useCallback(async () => {
             { info.manager ? (
               <View style={{ width: '100%', paddingHorizontal: 12, marginBottom: 2 }}>
                 <View style={styles.managerRow}>
-                  <PitchFeedToggle value={rankTab} onChange={setRankTab} />
+<PitchFeedToggle value={rankTab} onChange={(v) => { setQuickOpen(false); setQuickBarOpen(false);setRankTab(v); }} />
                   
                   {displaySettings.showManagerName && (
   <>
@@ -2595,33 +3191,7 @@ const handleShare = useCallback(async () => {
   </>
 )}
 
-                  {/* Tiny share button next to manager name (visible UI; not captured) */}
-                  <TouchableOpacity onPress={handleShare} style={styles.shareTiny} hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}>
-                    <MaterialCommunityIcons name="share-variant" size={18} color={C.ink} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-   onPress={() => bumpScale(-STEP)}
-   disabled={atMin}
-   style={[styles.shareTiny, atMin && { opacity: 0.4 }]}
- >
-        <MaterialCommunityIcons name="magnify-minus" size={20} color={C.ink} />
-      </TouchableOpacity>
-      <TouchableOpacity
-   onPress={() => bumpScale(+STEP)}
-   disabled={atMax}
-   style={[styles.shareTiny, atMax && { opacity: 0.4 }]}
- >
-        <MaterialCommunityIcons name="magnify-plus" size={20} color={C.ink} />
-      </TouchableOpacity>
-      <TouchableOpacity
-  onPress={() => navigation.navigate('Trophies')}
-  style={styles.shareTiny}
-  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-  accessibilityLabel="Open trophies"
->
-  <MaterialCommunityIcons name="trophy-outline" size={18} color={C.ink} />
-</TouchableOpacity>
-
+                 
       {/* Settings cog moved here */}
 <TouchableOpacity
   onPress={() => setsettingsModalVisible(true)}
@@ -2631,7 +3201,28 @@ const handleShare = useCallback(async () => {
 >
   <MaterialCommunityIcons name="cog" size={18} color={C.ink} />
 </TouchableOpacity>
+<TouchableOpacity
+  onPress={handleRefresh}
+  disabled={refreshing || loading}
+  style={[styles.shareTiny, (refreshing || loading) && { opacity: 0.35 }]}
+  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+  accessibilityLabel="Refresh rank data"
+>
+  <MaterialCommunityIcons name="refresh" size={18} color={C.ink} />
+</TouchableOpacity>
+
+ <TouchableOpacity
+  onPress={() => setQuickBarOpen((v) => !v)}
+  style={styles.shareTiny}
+  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+  accessibilityLabel="Open quick actions"
+>
+  <MaterialCommunityIcons name={quickBarOpen ? 'minus' : 'plus'} size={18} color={C.ink} />
+</TouchableOpacity>
+
                 </View>
+                {quickBarOpen ? <QuickActionsBar /> : null}
+
               </View>
             ) : null}
 {rankTab === 'feed' ? (
@@ -2644,7 +3235,63 @@ const handleShare = useCallback(async () => {
       impactThreshold={0.01}
     />
   </View>
+) : rankTab === 'history' ? (
+  <ScrollView
+    style={{ width: '100%' }}
+    contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: 18 }}
+    refreshControl={
+      <RefreshControl
+        refreshing={historyLoading}
+        onRefresh={() => loadHistory(viewFplId ?? fplId)}
+        tintColor={C.ink}
+      />
+    }
+  >
+    {historyErr ? (
+      <View
+        style={{
+          backgroundColor: C.card,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: C.border,
+          borderRadius: 12,
+          padding: 12,
+          marginBottom: 10,
+        }}
+      >
+        <Text style={{ color: C.bad || '#ef4444', fontWeight: '900' }}>Couldn’t load history</Text>
+        <Text style={{ color: C.muted, marginTop: 6 }}>{historyErr}</Text>
+      </View>
+    ) : null}
+
+    {historyLoading && !historyData ? (
+      <View style={{ paddingVertical: 22, alignItems: 'center' }}>
+        <ActivityIndicator />
+        <Text style={{ color: C.muted, marginTop: 8 }}>Loading history…</Text>
+      </View>
+    ) : null}
+
+    {!!historyData?.current?.length ? (
+      <>
+        <HistoryChart rows={historyData.current} chips={historyData.chips} width={winW - 24} height={190} />
+<HistoryTable rows={historyData.current} chips={historyData.chips} />
+
+      </>
+    ) : !historyLoading ? (
+      <View
+        style={{
+          backgroundColor: C.card,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: C.border,
+          borderRadius: 12,
+          padding: 14,
+        }}
+      >
+        <Text style={{ color: C.muted, textAlign: 'center' }}>No history data.</Text>
+      </View>
+    ) : null}
+  </ScrollView>
 ) : (
+  
 
             <ImageBackground
               source={assetImages.pitch}
@@ -2835,6 +3482,7 @@ const handleShare = useCallback(async () => {
                     
 
                   </View>
+
                 </View>
               ) : null}
 

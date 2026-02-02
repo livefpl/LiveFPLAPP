@@ -43,7 +43,7 @@ export default function SettingsModal({
     () => [
       { key: 'showEOs',         label: 'Show Effective Ownership (EO)' },
       { key: 'showEvents',      label: 'Show event icons under players' },
-      { key: 'includeSubs',     label: 'Include subs in rank (post-rank)' },
+      
       { key: 'showManagerName', label: 'Show manager name at top' },
     ],
     []

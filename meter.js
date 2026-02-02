@@ -10,8 +10,8 @@ let _cooldownTimer = null;
 const _dedupe = new Map(); // key -> timestamp
 
 const _cfg = {
-  N: 10,                 // show after every N bumps
-  cooldownMs: 10_000,    // block back-to-back shows
+  N: 10,                // show after every N bumps
+  cooldownMs: 10_000,   // block back-to-back shows
   dedupeTtlMs: 2_000,   // ignore same key within this window
 };
 
@@ -56,6 +56,18 @@ export function getState() {
   };
 }
 
+/** Handy debug getter for UI/alerts */
+export function getMeterDebug() {
+  return {
+    counter: _counter,
+    state: _state,
+    lastShownAt: _lastShownAt,
+    N: _cfg.N,
+    cooldownMs: _cfg.cooldownMs,
+    dedupeTtlMs: _cfg.dedupeTtlMs,
+  };
+}
+
 export function reset() {
   _counter = 0;
   _state = 'idle';
@@ -79,7 +91,11 @@ export async function bump(opts = {}) {
   // Only consider firing when idle and threshold reached
   const atThreshold = _cfg.N > 0 && _counter % _cfg.N === 0;
   if (!atThreshold || _state !== 'idle') {
-    return { counter: _counter, fired: false, reason: _state !== 'idle' ? _state : 'threshold_not_hit' };
+    return {
+      counter: _counter,
+      fired: false,
+      reason: _state !== 'idle' ? _state : 'threshold_not_hit',
+    };
   }
 
   _state = 'loading_ad';

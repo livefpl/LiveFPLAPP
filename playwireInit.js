@@ -3,18 +3,25 @@ import { Platform } from 'react-native';
 import { Playwire } from '@intergi/react-native-playwire-sdk';
 import { markPlaywireInitialized, preloadInterstitial } from './AdInterstitial';
 
-// Production defaults:
-// - no console logger
-// - no noisy logs
-// - no test mode
 const PLAYWIRE_TEST_MODE = false;
 
 let _initStarted = false;
 let _sdkReady = false;
 let _waiters = [];
+let _lastInitErr = null;
+let _initAttempts = 0;
 
 export function isPlaywireReady() {
   return _sdkReady;
+}
+
+export function getPlaywireInitDebug() {
+  return {
+    sdkReady: _sdkReady,
+    initStarted: _initStarted,
+    initAttempts: _initAttempts,
+    lastInitErr: _lastInitErr,
+  };
 }
 
 export function onPlaywireReady(cb) {
@@ -29,43 +36,51 @@ function _setReady() {
   const ws = _waiters;
   _waiters = [];
   ws.forEach((fn) => {
-    try {
-      fn();
-    } catch {}
+    try { fn(); } catch {}
   });
 }
 
 export function initPlaywire({ publisherId, iosAppId, androidAppId }) {
-  if (_initStarted) return;
+  // If already ready, nothing to do.
+  if (_sdkReady) return true;
+
+  const appId = Platform.select({ ios: iosAppId, android: androidAppId });
+
+  // IMPORTANT: Do NOT permanently lock if config missing.
+  if (!publisherId || !appId) {
+    _lastInitErr = { kind: 'missing_config', publisherId: !!publisherId, appId: !!appId };
+    return false;
+  }
+
+  // Avoid parallel init attempts.
+  if (_initStarted) return false;
+
   _initStarted = true;
-
-  const appId = Platform.select({
-    ios: iosAppId,
-    android: androidAppId,
-  });
-
-  // If config missing, fail silently in production.
-  if (!publisherId || !appId) return;
+  _initAttempts += 1;
+  _lastInitErr = null;
 
   try {
-    // Keep this *before* initializeSDK.
     Playwire.setTest(!!PLAYWIRE_TEST_MODE);
 
     Playwire.initializeSDK(publisherId, appId, async () => {
-      // SDK finished init callback
       _setReady();
 
-      // Let interstitial module know SDK is ready
-      try {
-        markPlaywireInitialized();
-      } catch {}
-
-      // Preload an interstitial (silent)
-      try {
-        await preloadInterstitial();
-      } catch {}
+      try { markPlaywireInitialized(); } catch {}
+      try { await preloadInterstitial(); } catch {}
     });
-  } catch {
-    // Silent in production
+
+    return true;
+  } catch (e) {
+    // Allow retry within the same run.
+    _lastInitErr = { kind: 'exception', msg: String(e?.message || e).slice(0, 200) };
+    _initStarted = false;
+    return false;
   }
+}
+
+// Optional: manual “self-heal” hook if you detect stuck init.
+export function retryPlaywireInit(args) {
+  if (_sdkReady) return true;
+  _initStarted = false;
+  return initPlaywire(args);
 }
