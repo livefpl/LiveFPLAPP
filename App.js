@@ -64,7 +64,7 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
 
   const LOCAL_BUILD = 1;
   const CONFIG_URL = 'https://livefpl.us/version.json';
-  const DEFAULT_REMOTE_VERSION = 2;
+  const DEFAULT_REMOTE_VERSION = 3;
 
   setConfig({ N: 1000, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
 

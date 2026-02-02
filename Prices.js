@@ -1911,7 +1911,8 @@ function ActualTab({ ui }) {
       arr = arr.filter((r) => fold(r.player_name || '').includes(qq) || fold(r.team_name || '').includes(qq));
     }
 
-    return groupByDate(arr);
+      return groupByDate(arr).slice(0, 14);
+
   }, [payload, q, dir]);
 
   const latest = grouped?.[0];

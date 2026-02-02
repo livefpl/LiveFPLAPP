@@ -8,8 +8,8 @@
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "1.8.0",
-"runtimeVersion": "1.8.0",
+    "version": "1.9.0",
+"runtimeVersion": "1.9.0",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {
@@ -60,6 +60,8 @@
       "expo-font",
       
       "expo-tracking-transparency",
+      ["./plugins/withAppLovinPin", { "version": "13.2.0" }],
+
       [
         "./plugins/with-playwire",
         {
