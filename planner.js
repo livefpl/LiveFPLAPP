@@ -1042,6 +1042,98 @@ const switchToPlan = useCallback(async (planId) => {
   }
 }, [fplId, isPro, loadStatic, loadSnapshot, snapshot]);
 
+// --- Plans: rename / delete helpers (iOS prompt-first) ---
+const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
+  // Alert.prompt exists on iOS only.
+  if (Platform.OS === 'ios' && typeof Alert.prompt === 'function') {
+    Alert.prompt(
+      title,
+      message,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Save',
+          onPress: (txt) => {
+            const name = String(txt || '').trim();
+            if (!name) return;
+            onSubmit(name);
+          },
+        },
+      ],
+      'plain-text',
+      initialValue || ''
+    );
+    return;
+  }
+
+  // Minimal non-iOS fallback: keep behavior (no text input).
+  Alert.alert(title, message, [
+    { text: 'OK', onPress: () => onSubmit(String(initialValue || '').trim() || 'Plan') },
+    { text: 'Cancel', style: 'cancel' },
+  ]);
+}, []);
+
+const renamePlan = useCallback(async (planId, nextName) => {
+  if (!fplId) return;
+  const name = String(nextName || '').trim();
+  if (!name) return;
+
+  const nextPlans = plans.map(p => (p.id === planId ? { ...p, name } : p));
+  try {
+    await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
+    setPlans(nextPlans);
+  } catch {
+    Alert.alert('Planner', 'Failed to rename plan.');
+  }
+}, [fplId, plans]);
+
+const deletePlan = useCallback(async (planId) => {
+  if (!fplId) return;
+  if (planId === DEFAULT_PLAN_ID) {
+    Alert.alert('Planner', 'The Main plan cannot be deleted.');
+    return;
+  }
+  if (plans.length <= 1) return;
+
+  const plan = plans.find(p => p.id === planId);
+  Alert.alert(
+    'Delete plan?',
+    `Delete “${plan?.name || 'this plan'}”? This cannot be undone.`,
+    [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          const nextPlans = plans.filter(p => p.id !== planId);
+          const nextActive = (activePlanId === planId)
+            ? (nextPlans.find(p => p.id === DEFAULT_PLAN_ID)?.id || nextPlans[0]?.id || DEFAULT_PLAN_ID)
+            : activePlanId;
+
+          try {
+            await AsyncStorage.removeItem(STATE_KEY(fplId, planId));
+          } catch {}
+
+          try {
+            await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
+            await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(nextActive));
+            setPlans(nextPlans);
+            setActivePlanId(nextActive);
+          } catch {
+            Alert.alert('Planner', 'Failed to delete plan.');
+            return;
+          }
+
+          // If we deleted the active plan, load the new one.
+          if (activePlanId === planId && nextActive) {
+            switchToPlan(nextActive);
+          }
+        },
+      },
+    ]
+  );
+}, [fplId, plans, activePlanId, switchToPlan]);
+
 const createNewPlan = useCallback(async () => {
   if (!fplId) return;
   if (plans.length >= maxPlans) {
@@ -1055,25 +1147,43 @@ const createNewPlan = useCallback(async () => {
 }
 
 
-  const newId = `p_${Date.now().toString(36)}`;
-  const newPlan = { id: newId, name: `Plan ${plans.length + 1}`, createdAt: Date.now() };
-  const nextPlans = [...plans, newPlan];
+  const suggested = `Plan ${plans.length + 1}`;
 
-  try {
-    await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
-    await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), newId);
+  promptPlanName(
+    'New plan',
+    'Name your plan',
+    suggested,
+    async (planName) => {
+      const newId = `p_${Date.now().toString(36)}`;
+      const newPlan = { id: newId, name: planName, createdAt: Date.now() };
+      const nextPlans = [...plans, newPlan];
 
-    // Clone current plan state into the new plan as a starting point
-    const payload = { weeks, gw, bankOverrides: bankOverrides || {} };
-    await AsyncStorage.setItem(STATE_KEY(fplId, newId), JSON.stringify(payload));
+      try {
+        await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
+        await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), newId);
 
-    setPlans(nextPlans);
-    setActivePlanId(newId);
-    setPlanPickerOpen(false);
-  } catch {
-    Alert.alert('Planner', 'Failed to create a new plan.');
-  }
-}, [fplId, isPro, plans, weeks, gw, bankOverrides,maxPlans]);
+        // Start fresh from snapshot (not a clone of current plan)
+const snap = snapshot || (await loadSnapshot(fplId));
+if (!snapshot) setSnapshot(snap);
+
+const { ai } = await loadStatic(); // so recomputeAll has ai
+const seeded = seedFromSnapshot(snap);
+const recomputed = recomputeAll(seeded.weeks, snap, ai, {});
+const payload = { weeks: recomputed, gw: seeded.gw, bankOverrides: {} };
+
+await AsyncStorage.setItem(STATE_KEY(fplId, newId), JSON.stringify(payload));
+
+        setPlans(nextPlans);
+        setActivePlanId(newId);
+        await switchToPlan(newId);
+
+        setPlanPickerOpen(false);
+      } catch {
+        Alert.alert('Planner', 'Failed to create a new plan.');
+      }
+    }
+  );
+}, [fplId, isPro, plans, weeks, gw, bankOverrides, maxPlans, promptPlanName]);
 
 
 
@@ -1415,10 +1525,9 @@ try {
   }
 } catch {}
 
-try {
-  const rawActive = await AsyncStorage.getItem(ACTIVE_PLAN_KEY(fplId));
-  if (rawActive) desiredPlanId = String(rawActive);
-} catch {}
+// Always default to Main on restart (ignore saved active plan)
+try { await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(DEFAULT_PLAN_ID)); } catch {}
+desiredPlanId = DEFAULT_PLAN_ID;
 
 // Enforce plan limit (handles downgrade from Pro -> Free)
 if (!isPro && plansList.length > FREE_MAX_PLANS) {
@@ -6997,9 +7106,10 @@ const clearOverride = () => {
         data={plans}
         keyExtractor={(p) => p.id}
         renderItem={({ item }) => (
-          <TouchableOpacity
-            onPress={() => switchToPlan(item.id)}
+          <View
             style={{
+              flexDirection: 'row',
+              alignItems: 'center',
               paddingVertical: 10,
               paddingHorizontal: 10,
               borderRadius: 12,
@@ -7009,10 +7119,45 @@ const clearOverride = () => {
               backgroundColor: item.id === activePlanId ? C.bg : 'transparent',
             }}
           >
-            <Text style={{ color: C.ink, fontWeight: '800' }}>
-              {item.name}{item.id === activePlanId ? '  ✓' : ''}
-            </Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => switchToPlan(item.id)}
+              style={{ flex: 1, paddingRight: 8 }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: C.ink, fontWeight: '800' }}>
+                {item.name}{item.id === activePlanId ? '  ✓' : ''}
+              </Text>
+            </TouchableOpacity>
+
+            {/* rename */}
+            <TouchableOpacity
+              onPress={() =>
+                promptPlanName(
+                  'Rename plan',
+                  'Enter a new name',
+                  item.name,
+                  (nm) => renamePlan(item.id, nm)
+                )
+              }
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ padding: 4 }}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons name="pencil" size={18} color={C.muted} />
+            </TouchableOpacity>
+
+            {/* delete (no delete for Main) */}
+            {item.id !== DEFAULT_PLAN_ID && (
+              <TouchableOpacity
+                onPress={() => deletePlan(item.id)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: 4, marginLeft: 2 }}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons name="trash-can-outline" size={18} color={C.muted} />
+              </TouchableOpacity>
+            )}
+          </View>
         )}
       />
 

@@ -19,12 +19,17 @@ const pkg = { name: 'with-playwire', version: '1.0.0' };
  *   androidApplicationId: "<Android Google Ad Manager app id>",
  *   adManagerApp: true, // default true
  *   skadItems: [ { SKAdNetworkIdentifier: "xxxxxx.skadnetwork" }, ... ],
- *   githubUser: "<your GitHub username for Playwire Maven>"
+ *   githubUser: "<your GitHub username for Playwire Maven>",
+ *
+ *   // Optional:
+ *   iosPlaywireVersion: "11.6.0" // defaults to 11.6.0
  * }
  */
 const withPlaywire = (config, options = {}) => {
   const playwire = (config.extra && config.extra.playwire) || {};
   const opts = { ...options, ...playwire };
+
+  const iosPlaywireVersion = opts.iosPlaywireVersion || '11.6.0';
 
   /* ---------- iOS Info.plist: GADApplicationIdentifier + SKAdNetworkItems ---------- */
   config = withInfoPlist(config, (c) => {
@@ -37,17 +42,10 @@ const withPlaywire = (config, options = {}) => {
 
     // SKAdNetworkItems – merge without duplicating IDs
     if (Array.isArray(opts.skadItems) && opts.skadItems.length) {
-      const existing = Array.isArray(info.SKAdNetworkItems)
-        ? info.SKAdNetworkItems
-        : [];
-      const existingIds = new Set(
-        existing.map((e) => e.SKAdNetworkIdentifier)
-      );
+      const existing = Array.isArray(info.SKAdNetworkItems) ? info.SKAdNetworkItems : [];
+      const existingIds = new Set(existing.map((e) => e.SKAdNetworkIdentifier));
       const toAdd = opts.skadItems.filter(
-        (e) =>
-          e &&
-          e.SKAdNetworkIdentifier &&
-          !existingIds.has(e.SKAdNetworkIdentifier)
+        (e) => e && e.SKAdNetworkIdentifier && !existingIds.has(e.SKAdNetworkIdentifier)
       );
       info.SKAdNetworkItems = [...existing, ...toAdd];
     }
@@ -62,9 +60,7 @@ const withPlaywire = (config, options = {}) => {
     app['meta-data'] = app['meta-data'] || [];
 
     const ensureMeta = (name, value) => {
-      const node = app['meta-data'].find(
-        (m) => m.$['android:name'] === name
-      );
+      const node = app['meta-data'].find((m) => m.$['android:name'] === name);
       if (node) {
         node.$['android:value'] = String(value);
       } else {
@@ -75,68 +71,58 @@ const withPlaywire = (config, options = {}) => {
     };
 
     const adManagerApp = opts.adManagerApp !== false;
-    ensureMeta(
-      'com.google.android.gms.ads.AD_MANAGER_APP',
-      adManagerApp ? 'true' : 'false'
-    );
+    ensureMeta('com.google.android.gms.ads.AD_MANAGER_APP', adManagerApp ? 'true' : 'false');
 
     if (opts.androidApplicationId) {
-      ensureMeta(
-        'com.google.android.gms.ads.APPLICATION_ID',
-        opts.androidApplicationId
-      );
+      ensureMeta('com.google.android.gms.ads.APPLICATION_ID', opts.androidApplicationId);
     }
     return c;
   });
 
-  /* ---------- iOS Podfile: sources + AppLovin mediation adapter ---------- */
+  /* ---------- iOS Podfile: sources + Playwire + AppLovin mediation adapter ---------- */
   config = withDangerousMod(config, [
     'ios',
     async (c) => {
-      const podfilePath = path.join(
-        c.modRequest.projectRoot,
-        'ios',
-        'Podfile'
-      );
+      const podfilePath = path.join(c.modRequest.projectRoot, 'ios', 'Podfile');
 
       let contents = await fs.promises.readFile(podfilePath, 'utf8');
 
       // 1) Ensure sources at the top:
-      const cocoaSource =
-        "source 'https://github.com/CocoaPods/Specs.git'";
-      const playwireSource =
-        "source 'https://github.com/intergi/playwire-ios-podspec'";
+      const cocoaSource = "source 'https://github.com/CocoaPods/Specs.git'";
+      const playwireSource = "source 'https://github.com/intergi/playwire-ios-podspec'";
 
       const hasCocoaSource = contents.includes(cocoaSource);
       const hasPlaywireSource = contents.includes(playwireSource);
 
       let sourceBlock = '';
-      if (!hasCocoaSource) {
-        sourceBlock += cocoaSource + '\n';
-      }
-      if (!hasPlaywireSource) {
-        sourceBlock += playwireSource + '\n';
-      }
+      if (!hasCocoaSource) sourceBlock += cocoaSource + '\n';
+      if (!hasPlaywireSource) sourceBlock += playwireSource + '\n';
 
       if (sourceBlock) {
         // Prepend sources ahead of existing contents
         contents = sourceBlock + contents;
       }
 
-      // 2) Ensure AppLovin mediation adapter pod is in the main target block
+      // 2) Ensure required pods are present in the first target block
       const targetRegex = /target ['"][^'"]+['"] do/;
-      const hasAppLovinAdapter = contents.includes(
-        "pod 'GoogleMobileAdsMediationAppLovin'"
-      );
 
-      if (targetRegex.test(contents) && !hasAppLovinAdapter) {
+      const ensurePodInFirstTarget = (podLine) => {
+        if (contents.includes(podLine)) return;
+        if (!targetRegex.test(contents)) return;
+
         contents = contents.replace(targetRegex, (match) => {
-          // Insert the mediation adapter right after the target line
-          return `${match}\n  pod 'GoogleMobileAdsMediationAppLovin'`;
+          // Insert right after the first target line
+          return `${match}\n  ${podLine}`;
         });
-      }
+      };
 
-      await fs.promises.writeFile(podfilePath, contents);
+      // Playwire is the missing piece on iOS (Android already pulls playwiresdk_total)
+      ensurePodInFirstTarget(`pod 'Playwire', '${iosPlaywireVersion}'`);
+
+      // Keep your mediation adapter
+      ensurePodInFirstTarget(`pod 'GoogleMobileAdsMediationAppLovin'`);
+
+      await fs.promises.writeFile(podfilePath, contents, 'utf8');
       return c;
     },
   ]);
@@ -192,10 +178,7 @@ const withPlaywire = (config, options = {}) => {
         }
 `;
 
-    contents = contents.replace(
-      /allprojects\s*{\s*repositories\s*{/,
-      (match) => `${match}${repoBlock}`
-    );
+    contents = contents.replace(/allprojects\s*{\s*repositories\s*{/, (match) => `${match}${repoBlock}`);
 
     mod.contents = contents;
     return c;
@@ -224,8 +207,4 @@ const withPlaywire = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(
-  withPlaywire,
-  pkg.name,
-  pkg.version
-);
+module.exports = createRunOncePlugin(withPlaywire, pkg.name, pkg.version);
