@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useTheme, useColors } from './theme';
+import UpdatesDebugPanel from './UpdatesDebugPanel';
 
 export default function SettingsModal({
   visible,
@@ -311,7 +312,7 @@ export default function SettingsModal({
           </View>
           </Pressable>
 </Pressable>
-
+<UpdatesDebugPanel />
     </Modal>
   );
 }

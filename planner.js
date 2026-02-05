@@ -1,5 +1,3 @@
-
-
 // planner.js — rank-like pitch + action sheet + C/VC badges + sellOverrides
 // Tap jersey -> actions (Cap, Vice, Transfer Out, Bench, Change Selling Price)
 // Autosave + forward propagation of future GWs after edits
@@ -2393,12 +2391,28 @@ const ratingRgbFromBase = useMemo(() => {
     const startIdx = Math.max(0, (startGw || gw || 1) - 1);
     const take = 5;
     const out = [];
+    
     for (let gi = startIdx; gi < perGw.length && out.length < take; gi++) {
-      const g = perGw[gi] || [];
-      for (const [label] of g) {
-        const { color, text } = getRatingAndColor(label);
-        out.push({ label, color, textColor: text, gw: gi + 1 });
-        if (out.length >= take) break;
+      const gwFixtures = perGw[gi] || [];
+      
+      if (gwFixtures.length === 0) {
+        // Blank gameweek - add a placeholder
+        out.push({
+          gw: gi + 1,
+          fixtures: [],
+          isBlank: true
+        });
+      } else {
+        // Single or double gameweek
+        const fixtures = gwFixtures.map(([label]) => {
+          const { color, text } = getRatingAndColor(label);
+          return { label, color, textColor: text };
+        });
+        out.push({
+          gw: gi + 1,
+          fixtures,
+          isBlank: false
+        });
       }
     }
     return out;
@@ -2656,10 +2670,16 @@ statsTd: { flex: 0.2, color: C.ink, fontWeight:'700', fontSize:12, flexWrap:'wra
       bottomRounded: { borderBottomLeftRadius: 4, borderBottomRightRadius: 4, overflow: 'hidden' },
 
       miniRow: { flexDirection: 'row', width: IMG_W_BASE, alignSelf: 'center', overflow: 'hidden' },
+      miniGwColumn: {
+        flexDirection: 'column',
+        flex: 1,
+      },
       miniCell: {
-        flex: 1, includeFontPadding: false,
+        includeFontPadding: false,
         fontSize: 7, lineHeight: 10, letterSpacing: 0.15,
         textAlign: 'center', overflow: 'hidden',
+        minHeight: 10,
+        paddingVertical: 1,
         borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: C.border,
       },
 
@@ -3236,9 +3256,10 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
   const PlayerSlot = ({ pid, isBenchRow }) => {
     const name = namesById?.[pid] || String(pid);
     const st = statusMeta(pid, extendedInfo);
-    const fixtures = nextFixtures(pid, gw);
-    const big = fixtures[0];
-    const minis = fixtures.slice(1, 4);
+    const fixtureGWs = nextFixtures(pid, gw);
+    const firstGW = fixtureGWs[0];
+    const big = firstGW?.fixtures?.[0]; // First fixture of first GW
+    const miniGWs = fixtureGWs.slice(1, 4); // Next 3 GWs for mini display
     const inXI = current?.picks?.slice(0, 11).includes(pid);
     const isNew = newInsSet.has(pid);
     const tcOn = current?.chip === '3xc';
@@ -3333,21 +3354,42 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
           {money(getSellPriceTenths(pid))}
         </Text>
 
-        {showMinis && minis.length > 0 && (
+        {showMinis && miniGWs.length > 0 && (
           <View style={[S.miniRow, S.bottomRounded]}>
-            {minis.map((f, i) => (
-              <Text
-                key={`${pid}-m-${i}`}
-                numberOfLines={1}
-                ellipsizeMode="clip"
-                allowFontScaling={false}
-                style={[S.miniCell, { backgroundColor: f.color, color: f.textColor }]}
-              >
-                {tinyFixture(f.label)}
-              </Text>
-            ))}
-            {Array.from({ length: Math.max(0, 3 - minis.length) }).map((_, i) => (
-              <Text key={`pad-${pid}-${i}`} style={[S.miniCell, { color: '#000' }]}>{' '}</Text>
+            {miniGWs.map((gwData, gwIdx) => {
+              if (gwData.isBlank) {
+                // Blank gameweek - show placeholder
+                return (
+                  <View key={`${pid}-gw${gwData.gw}`} style={S.miniGwColumn}>
+                    <Text style={[S.miniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}>
+                      —
+                    </Text>
+                  </View>
+                );
+              }
+              
+              // Single or double gameweek - stack fixtures vertically
+              return (
+                <View key={`${pid}-gw${gwData.gw}`} style={S.miniGwColumn}>
+                  {gwData.fixtures.map((f, fixIdx) => (
+                    <Text
+                      key={`${pid}-gw${gwData.gw}-f${fixIdx}`}
+                      numberOfLines={1}
+                      ellipsizeMode="clip"
+                      allowFontScaling={false}
+                      style={[S.miniCell, { backgroundColor: f.color, color: f.textColor }]}
+                    >
+                      {tinyFixture(f.label)}
+                    </Text>
+                  ))}
+                </View>
+              );
+            })}
+            {/* Pad with empty columns if fewer than 3 GWs */}
+            {Array.from({ length: Math.max(0, 3 - miniGWs.length) }).map((_, i) => (
+              <View key={`pad-${pid}-${i}`} style={S.miniGwColumn}>
+                <Text style={[S.miniCell, { color: '#000' }]}>{' '}</Text>
+              </View>
             ))}
           </View>
         )}
@@ -3514,7 +3556,7 @@ const teamId      = ext?.team ?? elements?.[pid]?.team;
 const teamLabel    = teamNameByPid?.[pid] || '';
 
 const subtitle    = [posShort, teamLabel].filter(Boolean).join(' · ');
-const fixtures    = nextFixtures(pid, gw) || [];
+const fixtureGWs  = nextFixtures(pid, gw) || [];
 const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
 
     return (
@@ -3554,18 +3596,36 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
             </View>
             
 
-            {!!fixtures.length && (
+            {!!fixtureGWs.length && (
   <View style={[S.marketMiniRow, { flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}>
-    <View style={{ flex: 1, flexDirection:'row', flexWrap:'wrap' }}>
-      {fixtures.slice(0, 7).map((f, i) => (
-        <Text
-          key={`asfx-${i}`}
-          numberOfLines={1}
-          style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
-        >
-          {tinyFixture(f.label)}
-        </Text>
-      ))}
+    <View style={{ flex: 1, flexDirection:'row', flexWrap:'wrap', gap: 4 }}>
+      {fixtureGWs.slice(0, 5).map((gwData, gwIdx) => {
+        if (gwData.isBlank) {
+          return (
+            <View key={`asgw-${gwIdx}`} style={{ flexDirection: 'column' }}>
+              <Text
+                numberOfLines={1}
+                style={[S.marketMiniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}
+              >
+                —
+              </Text>
+            </View>
+          );
+        }
+        return (
+          <View key={`asgw-${gwIdx}`} style={{ flexDirection: 'column', gap: 1 }}>
+            {gwData.fixtures.map((f, fixIdx) => (
+              <Text
+                key={`asgw-${gwIdx}-f${fixIdx}`}
+                numberOfLines={1}
+                style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+              >
+                {tinyFixture(f.label)}
+              </Text>
+            ))}
+          </View>
+        );
+      })}
     </View>
     <TouchableOpacity
       onPress={() => openInfo(pid)}
@@ -3798,8 +3858,17 @@ const safeNumber = (x, d=0) => (Number.isFinite(+x) ? +x : d);
 
 // Pull next N fixtures for a player from your nextFixtures map
  const getFixturesForPid = (pid, n = FIX_HORIZON) => {
-   const list = nextFixtures(pid, gw) || [];   // this already returns {label,color,textColor,gw}
-   return list.slice(0, n).map(item => {
+   const gwList = nextFixtures(pid, gw) || [];   // now returns [{gw, fixtures[], isBlank}]
+   // Flatten fixtures from all GWs, preserving their GW info
+   const allFixtures = [];
+   for (const gwData of gwList) {
+     if (gwData.isBlank) continue; // Skip blank gameweeks
+     for (const fixture of gwData.fixtures) {
+       allFixtures.push({ ...fixture, gw: gwData.gw });
+     }
+   }
+   
+   return allFixtures.slice(0, n).map(item => {
      const s = shortFixture(item.label);       // "BRE (H)" / "MCI (A)"
      const home = /\(H\)/.test(s);
      const opp  = s.replace(/\s*\((H|A)\)\s*$/, '');
@@ -4547,7 +4616,7 @@ const SeasonStatsModal = () => {
   const subtitle   = [posShort, teamLabel].filter(Boolean).join(' · ');
   const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
 
-  const fixtures   = nextFixtures(statsPid, gw) || [];
+  const fixtureGWs = nextFixtures(statsPid, gw) || [];
   const news       = (e?.news || '').trim();
 
   // Priorities (first 9 like ActionSheet)
@@ -4674,18 +4743,36 @@ const SeasonStatsModal = () => {
         </View>
 
         {/* Fixtures chips */}
-        {!!fixtures.length && (
+        {!!fixtureGWs.length && (
           <View style={[S.marketMiniRow, { paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}>
-    <View style={{ flex:1, flexDirection:'row', flexWrap:'wrap' }}>
-      {fixtures.slice(0, 12).map((f, i) => (
-        <Text
-          key={`ssfx-${i}`}
-          numberOfLines={1}
-          style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
-        >
-          {tinyFixture(f.label)}
-        </Text>
-      ))}
+    <View style={{ flex:1, flexDirection:'row', flexWrap:'wrap', gap: 4 }}>
+      {fixtureGWs.slice(0, 8).map((gwData, gwIdx) => {
+        if (gwData.isBlank) {
+          return (
+            <View key={`ssgw-${gwIdx}`} style={{ flexDirection: 'column' }}>
+              <Text
+                numberOfLines={1}
+                style={[S.marketMiniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}
+              >
+                —
+              </Text>
+            </View>
+          );
+        }
+        return (
+          <View key={`ssgw-${gwIdx}`} style={{ flexDirection: 'column', gap: 1 }}>
+            {gwData.fixtures.map((f, fixIdx) => (
+              <Text
+                key={`ssgw-${gwIdx}-f${fixIdx}`}
+                numberOfLines={1}
+                style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+              >
+                {tinyFixture(f.label)}
+              </Text>
+            ))}
+          </View>
+        );
+      })}
     </View>
     <TouchableOpacity
       onPress={() => openInfo(statsPid)}
@@ -5925,7 +6012,7 @@ const TransferMarketModal = React.memo(() => {
         _status: st.status,
         _flag: st.flag,
         teamName: teamNameByPid?.[pid] || '',
-        _fixtures: nextFixtures(pid, gw),
+        _fixtureGWs: nextFixtures(pid, gw),
       };
 
       const activeSortKey = marketSort;
@@ -6016,17 +6103,35 @@ const TransferMarketModal = React.memo(() => {
             <Text style={S.rInlinePrice}>{` • ${POS_NAME[item.pos]} • ${money(item.price)}`}</Text>
           </View>
 
-          {!!item._fixtures?.length && (
-            <View style={S.marketMiniRow}>
-              {item._fixtures.slice(0, 7).map((f, i) => (
-                <Text
-                  key={`${item.id}-mf-${i}`}
-                  numberOfLines={1}
-                  style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
-                >
-                  {tinyFixture(f.label)}
-                </Text>
-              ))}
+          {!!item._fixtureGWs?.length && (
+            <View style={[S.marketMiniRow, { gap: 4 }]}>
+              {item._fixtureGWs.slice(0, 5).map((gwData, gwIdx) => {
+                if (gwData.isBlank) {
+                  return (
+                    <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column' }}>
+                      <Text
+                        numberOfLines={1}
+                        style={[S.marketMiniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}
+                      >
+                        —
+                      </Text>
+                    </View>
+                  );
+                }
+                return (
+                  <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column', gap: 1 }}>
+                    {gwData.fixtures.map((f, fixIdx) => (
+                      <Text
+                        key={`${item.id}-gw${gwIdx}-f${fixIdx}`}
+                        numberOfLines={1}
+                        style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+                      >
+                        {tinyFixture(f.label)}
+                      </Text>
+                    ))}
+                  </View>
+                );
+              })}
             </View>
           )}
 
@@ -6477,16 +6582,25 @@ function RankLine({ label, rank, den, suffix, style }) {
     const endCol = Math.min(gwCount - 1, startCol0 + Math.max(1, lookahead) - 1);
     const range = useMemo(() => Array.from({ length: endCol - startCol0 + 1 }, (_, i) => startCol0 + i), [startCol0, endCol]);
 const sumForTeam = useCallback((team) => {
-  let sum = 0, has = false;
+  let sum = 0, gwCount = 0;
   for (const gi of range) {
     const perGw = (fdr?.[team] || [])[gi] || [];
-    if (perGw.length === 0) continue;
-    for (const [label] of perGw) {
-      const d = diffOf(label); // respects custom overrides
-      if (Number.isFinite(d)) { sum += d; has = true; }
+    if (perGw.length === 0) {
+      // Blank gameweek - skip (don't count in average)
+      continue;
+    } else {
+      // Calculate average difficulty for this gameweek
+      let gwSum = 0;
+      for (const [label] of perGw) {
+        const d = diffOf(label);
+        if (Number.isFinite(d)) gwSum += d;
+      }
+      const gwAvg = gwSum / perGw.length;
+      sum += gwAvg;
+      gwCount++;
     }
   }
-  return has ? sum : null;
+  return gwCount > 0 ? sum : null;
 }, [fdr, range, diffOf]);
     const picksNow = useMemo(
       () => (current?.chip === 'bboost' ? (current?.picks || []) : (current?.picks || []).slice(0, 15)),
@@ -6505,13 +6619,25 @@ const sumForTeam = useCallback((team) => {
     const teams = useMemo(() => {
       if (!sortByDiff) return teamsRaw;
       const scored = teamsRaw.map((team) => {
-        let sum = 0;
+        let sum = 0, gwCount = 0;
         for (const gi of range) {
           const perGw = (fdr?.[team] || [])[gi] || [];
-          if (perGw.length === 0) continue;
-          for (const [label] of perGw) sum += diffOf(label);
+          if (perGw.length === 0) {
+            // Blank gameweek - skip
+            continue;
+          } else {
+            // Calculate average difficulty for this gameweek
+            let gwSum = 0;
+            for (const [label] of perGw) {
+              const d = diffOf(label);
+              if (Number.isFinite(d)) gwSum += d;
+            }
+            const gwAvg = gwSum / perGw.length;
+            sum += gwAvg;
+            gwCount++;
+          }
         }
-        return { team, sum };
+        return { team, sum: gwCount > 0 ? sum : 0 };
       });
       scored.sort((a,b) => ascDiff ? (a.sum - b.sum) : (b.sum - a.sum));
       return scored.map(x=>x.team);
@@ -6712,7 +6838,15 @@ const cycleSort = useCallback(() => {
                                 const perGw = (fdr?.[team] || [])[gi] || [];
                                 if (perGw.length === 0) {
                                   return (
-                                    <View key={`${team}-g${gi}-empty`} style={[S.tickCell, { width: CELL_W, minHeight: BASE_CELL_H, backgroundColor:'transparent' }]} />
+                                    <View key={`${team}-g${gi}-empty`} style={[S.tickCell, { 
+                                      width: CELL_W, 
+                                      minHeight: BASE_CELL_H, 
+                                      backgroundColor: 'rgba(128,128,128,0.1)',
+                                      justifyContent: 'center',
+                                      alignItems: 'center'
+                                    }]}>
+                                      <Text style={[S.tickCellTxt, { color: C.muted }]}>BGW</Text>
+                                    </View>
                                   );
                                 }
                                 return (
@@ -7185,5 +7319,3 @@ const clearOverride = () => {
       </SafeAreaView>
     );
   }
-
-
