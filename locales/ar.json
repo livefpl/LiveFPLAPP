@@ -259,15 +259,39 @@
     "eula": "اتفاقية الترخيص"
   },
   "changeId": {
-    "valueHeading": "أداة ترتيب FPL الموثوق بها منذ 2018",
+    "valueHeading": "أداة ترتيب FPL الموثوق بها منذ 2018 ❤️",
     "getFullExperience": "الحصول على التجربة الكاملة على الموقع",
     "openLiveFPLWebsite": "فتح موقع LiveFPL",
-    "pleaseEnterFplId": "أدخل معرف FPL بلاك.",
-    "fplIdNumbersOnly": "المعرف فقط أرقام (يمكنك لصق رابط FPL).",
+    "pleaseEnterFplId": "أدخل معرف FPL الخاص بك.",
+    "fplIdNumbersOnly": "المعرف يجب أن يكون أرقاماً فقط (يمكنك لصق رابط FPL كامل).",
     "failedToSaveId": "فشل حفظ المعرف. جرّب مرة أخرى.",
     "loading": "جاري التحميل…",
     "save": "حفظ",
-    "cancel": "إلغاء"
+    "cancel": "إلغاء",
+    "theme": "المظهر",
+    "switchToDarkMode": "التبديل إلى الوضع الداكن",
+    "switchToLightMode": "التبديل إلى الوضع الفاتح",
+    "placeholderId": "مثال: 1234567 أو الصق رابطاً",
+    "yourFplId": "معرف FPL الخاص بك",
+    "continue": "متابعة",
+    "buyMeACoffee": "ادعمني بقهوة (رابط خارجي)",
+    "enterYourFplId": "أدخل معرف FPL الخاص بك",
+    "weOnlyUsePublicFplId": "نستخدم فقط معرف FPL العام على هذا الجهاز.",
+    "detectedId": "المعرف المكتشف:",
+    "pasteLinkOrDigits": "الصق رابط FPL كامل أو أدخل أرقاماً فقط.",
+    "hideHelp": "إخفاء المساعدة",
+    "dontKnowIdFindIt": "لا تعرف معرفك؟ ابحث عنه هنا",
+    "findIdIn3Steps": "اعثر على معرفك في 3 خطوات",
+    "helpStep1Login": "سجّل الدخول في",
+    "helpStep2Open": "افتح",
+    "pointsLabel": "النقاط",
+    "or": "أو",
+    "gameweekHistory": "سجل الجولات",
+    "helpStep3Copy": "انسخ الرقم بعد",
+    "codeEntrySlash": "/entry/",
+    "tipPasteLink": "نصيحة: الصق رابط FPL—سنستخرج المعرف تلقائياً.",
+    "noticeTestVersion": "هذه نسخة تجريبية أولية من التطبيق. جميع المزايا مجانية وغير محدودة حالياً. خلال أسابيع قليلة، قد تتطلب بعض المزايا اشتراكاً للاستخدام غير المحدود.",
+    "buyRagabollyCoffee": "ادعم Ragabolly بقهوة"
   },
   "prices": {
     "tonight": "الليلة",
@@ -815,6 +839,7 @@
     "es": "Español",
     "ar": "العربية",
     "fr": "Français",
-    "de": "Deutsch"
+    "de": "Deutsch",
+    "id": "إندونيسي"
   }
 }

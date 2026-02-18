@@ -68,7 +68,7 @@ function ValueProps({ C, styles, t }) {
         activeOpacity={0.8}
         style={styles.learnMoreLink}
         accessibilityRole="link"
-        accessibilityLabel={t('paywall.openLiveFPLWebsite')}
+        accessibilityLabel={t('changeId.openLiveFPLWebsite')}
       >
         <Text style={styles.learnMoreText}>{t('changeId.getFullExperience')}</Text>
         <MaterialCommunityIcons name="open-in-new" size={13} color={C.muted} />
@@ -193,17 +193,17 @@ export default function ChangeID() {
           <View style={styles.card}>
             {/* Theme toggle row */}
             <View style={styles.themeRow}>
-              <Text style={styles.themeLabel}>Theme</Text>
+              <Text style={styles.themeLabel}>{t('changeId.theme')}</Text>
               <View style={styles.themeSeg}>
                 <TouchableOpacity
                   onPress={() => setMode('dark')}
                   activeOpacity={0.85}
                   style={[styles.segment, mode === 'dark' && styles.segmentActive]}
                   accessibilityRole="button"
-                  accessibilityLabel="Switch to dark mode"
+                  accessibilityLabel={t('changeId.switchToDarkMode')}
                 >
                   <Text style={[styles.segmentText, mode === 'dark' && styles.segmentTextActive]}>
-                    Dark
+                    {t('settings.dark')}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -211,18 +211,18 @@ export default function ChangeID() {
                   activeOpacity={0.85}
                   style={[styles.segment, mode === 'light' && styles.segmentActive]}
                   accessibilityRole="button"
-                  accessibilityLabel="Switch to light mode"
+                  accessibilityLabel={t('changeId.switchToLightMode')}
                 >
                   <Text style={[styles.segmentText, mode === 'light' && styles.segmentTextActive]}>
-                    Light
+                    {t('settings.light')}
                   </Text>
                 </TouchableOpacity>
               </View>
             </View>
 
-            <Text style={styles.title}>Enter your FPL ID</Text>
+            <Text style={styles.title}>{t('changeId.enterYourFplId')}</Text>
             <Text style={styles.subtitle}>
-              We only use your public FPL ID on this device.
+              {t('changeId.weOnlyUsePublicFplId')}
             </Text>
 
             <View
@@ -235,10 +235,10 @@ export default function ChangeID() {
   <ThemedTextInput
     ref={inputRef}
     style={styles.input} // transparent bg handled inside ThemedTextInput
-    placeholder="e.g. 1234567 or paste a link"
+    placeholder={t('changeId.placeholderId')}
     placeholderTextColor={C.muted}
     value={value}
-    onChangeText={(t) => setValue(sanitizeInput(t))}
+    onChangeText={(text) => setValue(sanitizeInput(text))}
     keyboardType="number-pad"
     inputMode="numeric"
     returnKeyType="done"
@@ -248,7 +248,7 @@ export default function ChangeID() {
     autoCapitalize="none"
     autoCorrect={false}
     selectionColor={C.accent}
-    accessibilityLabel="Your FPL ID"
+    accessibilityLabel={t('changeId.yourFplId')}
     maxLength={10}
     textContentType={Platform.OS === 'ios' ? 'oneTimeCode' : 'none'}
   />
@@ -259,10 +259,10 @@ export default function ChangeID() {
             <View style={{ minHeight: 18, marginTop: 6 }}>
               {isValid ? (
                 <Text style={styles.validHint}>
-                  Detected ID: <Text style={styles.validId}>{parsedId}</Text>
+                  {t('changeId.detectedId')} <Text style={styles.validId}>{parsedId}</Text>
                 </Text>
               ) : hasText ? (
-                <Text style={styles.mutedSmall}>Paste a full FPL link or enter digits only.</Text>
+                <Text style={styles.mutedSmall}>{t('changeId.pasteLinkOrDigits')}</Text>
               ) : null}
             </View>
 
@@ -272,12 +272,12 @@ export default function ChangeID() {
               disabled={saving}
               activeOpacity={0.85}
               accessibilityRole="button"
-              accessibilityLabel="Continue"
+              accessibilityLabel={t('changeId.continue')}
             >
               {saving ? (
                 <ActivityIndicator color="#ffffff" />
               ) : (
-                <Text style={styles.primaryBtnText}>Continue</Text>
+                <Text style={styles.primaryBtnText}>{t('changeId.continue')}</Text>
               )}
             </TouchableOpacity>
 
@@ -300,24 +300,24 @@ export default function ChangeID() {
                 color={C.muted}
               />
               <Text style={styles.helpToggleText}>
-                {showHelp ? 'Hide help' : 'Don’t know your ID? Find it'}
+                {showHelp ? t('changeId.hideHelp') : t('changeId.dontKnowIdFindIt')}
               </Text>
             </TouchableOpacity>
 
             {showHelp && (
               <View style={styles.helpBox}>
-                <Text style={styles.helpHeading}>Find your ID in 3 steps</Text>
+                <Text style={styles.helpHeading}>{t('changeId.findIdIn3Steps')}</Text>
                 <Text style={styles.helpBullet}>
-                  1) Log in at{' '}
+                  {t('changeId.helpStep1Login')}{' '}
                   <Text style={styles.linkish} onPress={() => openUrl('https://fantasy.premierleague.com')}>
                     fantasy.premierleague.com
                   </Text>
                 </Text>
                 <Text style={styles.helpBullet}>
-                  2) Open <Text style={styles.bold}>Points</Text> or <Text style={styles.bold}>Gameweek History</Text>
+                  {t('changeId.helpStep2Open')} <Text style={styles.bold}>{t('changeId.pointsLabel')}</Text> {t('changeId.or')} <Text style={styles.bold}>{t('changeId.gameweekHistory')}</Text>
                 </Text>
                 <Text style={styles.helpBullet}>
-                  3) Copy the number after <Text style={styles.codeInline}>/entry/</Text>
+                  {t('changeId.helpStep3Copy')} <Text style={styles.codeInline}>{t('changeId.codeEntrySlash')}</Text>
                 </Text>
 
                 <View style={styles.codeBlock}>
@@ -331,7 +331,7 @@ export default function ChangeID() {
                 </View>
 
                 <Text style={styles.tip}>
-                  Tip: Paste your FPL link—we’ll extract the ID automatically.
+                  {t('changeId.tipPasteLink')}
                 </Text>
               </View>
             )}
@@ -346,8 +346,7 @@ export default function ChangeID() {
               style={{ marginRight: 8 }}
             />
             <Text style={styles.noticeText}>
-              This is an initial test version of the app. All app features are free &amp; unlimited right now.
-              In a few weeks, some features may require a subscription to allow unlimited use.
+              {t('changeId.noticeTestVersion')}
             </Text>
           </View>
 
@@ -359,10 +358,10 @@ export default function ChangeID() {
               style={styles.coffeeBtn}
               activeOpacity={0.85}
               accessibilityRole="button"
-              accessibilityLabel="Buy me a coffee (opens external link)"
+              accessibilityLabel={t('changeId.buyMeACoffee')}
             >
               <MaterialCommunityIcons name="coffee" size={14} color={C.ink} />
-              <Text style={styles.coffeeText}>Buy Ragabolly a coffee</Text>
+              <Text style={styles.coffeeText}>{t('changeId.buyRagabollyCoffee')}</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>

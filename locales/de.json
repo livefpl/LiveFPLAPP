@@ -266,7 +266,31 @@
     "failedToSaveId": "ID konnte nicht gespeichert werden. Bitte erneut versuchen.",
     "loading": "Laden…",
     "save": "Speichern",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "theme": "Design",
+    "switchToDarkMode": "Dunkelmodus",
+    "switchToLightMode": "Hellmodus",
+    "placeholderId": "z. B. 1234567 oder Link einfügen",
+    "yourFplId": "Deine FPL-ID",
+    "continue": "Weiter",
+    "buyMeACoffee": "Spendiere mir einen Kaffee (externer Link)",
+    "enterYourFplId": "FPL-ID eingeben",
+    "weOnlyUsePublicFplId": "Wir nutzen nur deine öffentliche FPL-ID auf diesem Gerät.",
+    "detectedId": "Erkannte ID:",
+    "pasteLinkOrDigits": "FPL-Link einfügen oder nur Ziffern eingeben.",
+    "hideHelp": "Hilfe ausblenden",
+    "dontKnowIdFindIt": "Kennst du deine ID nicht? So findest du sie",
+    "findIdIn3Steps": "Finde deine ID in 3 Schritten",
+    "helpStep1Login": "Einloggen unter",
+    "helpStep2Open": "Öffne",
+    "pointsLabel": "Punkte",
+    "or": "oder",
+    "gameweekHistory": "Spielwochen-Verlauf",
+    "helpStep3Copy": "Kopiere die Zahl nach",
+    "codeEntrySlash": "/entry/",
+    "tipPasteLink": "Tipp: Füge deinen FPL-Link ein—wir extrahieren die ID automatisch.",
+    "noticeTestVersion": "Dies ist eine erste Testversion der App. Alle Funktionen sind derzeit kostenlos und unbegrenzt. In einigen Wochen könnten einige Funktionen ein Abo für unbegrenzte Nutzung erfordern.",
+    "buyRagabollyCoffee": "Spendiere Ragabolly einen Kaffee"
   },
   "prices": {
     "tonight": "Heute Nacht",
@@ -814,6 +838,7 @@
     "es": "Español",
     "ar": "العربية",
     "fr": "Français",
-    "de": "Deutsch"
+    "de": "Deutsch",
+    "id": "Indonesia"
   }
 }

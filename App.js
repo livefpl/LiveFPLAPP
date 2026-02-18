@@ -35,9 +35,30 @@ import { setApiTier } from './signedFetch';
   import { ProProvider, usePro } from './ProContext';
   import { FplIdProvider,useFplId } from './FplIdContext';
   import '@react-native-firebase/app';
-import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady } from './playwireInit';
+  import crashlytics from '@react-native-firebase/crashlytics';
+  import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady } from './playwireInit';
 
   import messaging from '@react-native-firebase/messaging';
+
+  // Only report crashes in production (avoid noise from dev builds)
+  if (Platform.OS !== 'web') {
+    try {
+      crashlytics().setCrashlyticsCollectionEnabled(!__DEV__);
+    } catch (e) { /* Crashlytics not available (e.g. Expo Go) */ }
+  }
+
+  // Report unhandled JS errors to Crashlytics (exact message + stack) so we see them in Firebase Console
+  if (Platform.OS !== 'web' && typeof global.ErrorUtils !== 'undefined') {
+    const prev = global.ErrorUtils.getGlobalHandler && global.ErrorUtils.getGlobalHandler();
+    global.ErrorUtils.setGlobalHandler((error, isFatal) => {
+      try {
+        const err = error && error.stack ? error : new Error(String(error));
+        crashlytics().recordError(err);
+        crashlytics().log('JS unhandled: ' + (error && error.message ? error.message : String(error)));
+      } catch (e) { /* Crashlytics not available (e.g. dev) */ }
+      if (typeof prev === 'function') prev(error, isFatal);
+    });
+  }
 
   import ForceUpdateGate from './checkversion';
   import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
@@ -65,7 +86,7 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
   TextInput.defaultProps = TextInput.defaultProps || {};
   TextInput.defaultProps.allowFontScaling = false;
 
-  const LOCAL_BUILD = 3;
+  const LOCAL_BUILD = 4;
   const CONFIG_URL = 'https://livefpl.us/version.json';
   const DEFAULT_REMOTE_VERSION = 1;
 

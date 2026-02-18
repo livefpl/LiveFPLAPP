@@ -1,0 +1,55 @@
+[33m81b8f52[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m, [m[1;31morigin/master[m[33m)[m works on iOS, crashes on android
+[33m3431fdd[m added explicit playwire pod2
+[33m3d79b37[m added explicit playwire pod
+[33m78cf219[m multi plan
+[33md918b92[m multi plan
+[33m46ffbd1[m applovin
+[33mec8300c[m trying pro server
+[33mcb8f1f9[m trying pro server
+[33m9dbce48[m added actual prices
+[33m2bbab46[m fixed whatif bug
+[33ma96b0bc[m fixed whatif bug
+[33m8185646[m submitting this build 1.8.0 to stores to include push notifications in store
+[33m317de18[m submitting this build 1.8.0 to stores to include push notifications in store
+[33m250dbed[m sending push and fixes to testflight and internal
+[33mc8e0bb5[m finalized push nots
+[33md43f54d[m added sub to topics
+[33m13761bb[m first fixes after release
+[33m895df8b[m tring expo FCM
+[33mf5ed95d[m added custom plugin
+[33m695b538[m added custom plugin
+[33mebcacb6[m Upgrade RNFirebase to 22
+[33m27efaf4[m Enable RNFirebase config plugins
+[33m48c4e00[m added FCM to app.json
+[33mc259762[m starting FCM process
+[33m573f615[m finalized feed and interstitial
+[33m371746f[m added feed to be sent for review as next version
+[33m9d8cc3e[m trying to fix crash
+[33m578c76c[m sent for review
+[33mcc9e56e[m trying sdk init
+[33m5813534[m trying interstitial
+[33m267231e[m added android subs
+[33m034c0b9[m added android subs
+[33m7d0658e[m added android subs
+[33m776c0f7[m added android subs
+[33mf29a869[m added android subs
+[33m504c458[m still issue in PW
+[33m3302b1c[m still issue in PW
+[33maff23ab[m still issue in PW
+[33mad4eede[m PW added and stats in planner
+[33m3aed248[m last version before PW
+[33m17f0f09[m improved leagues and threats
+[33m3864c83[m improved leagues and threats
+[33mfdb1a21[m improved fixtures modal
+[33ma8a61fe[m added past fixtures
+[33m8821ebd[m added past fixtures
+[33mce487dc[m added correct overlay
+[33mf575469[m added clipboard
+[33m654a4d7[m added apple subs first trial
+[33mf8cd88c[m removed google ads and playwire, added template/chips and ATT popup
+[33m275abb4[m fixed visual bugs and whatif
+[33m7d1b29d[m installed PW package
+[33m3fb9938[m App before ads/subs
+[33m9b3999b[m updated price page with filter and summary
+[33maafabd0[m changed icon
+[33mcf19422[m Initial commit

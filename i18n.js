@@ -1,11 +1,11 @@
-// i18n.js – bootstrap for app translations (en, es, ar, fr, de)
+// i18n.js – bootstrap for app translations (en, es, ar, fr, de, id)
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 import * as Localization from 'expo-localization';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const LANGUAGE_KEY = '@LiveFPL language';
-const SUPPORTED = ['en', 'es', 'ar', 'fr', 'de'];
+const SUPPORTED = ['en', 'es', 'ar', 'fr', 'de', 'id'];
 
 function mapLocaleToSupported(locale) {
   if (!locale) return 'en';
@@ -21,6 +21,7 @@ const resources = {
   ar: { translation: require('./locales/ar.json') },
   fr: { translation: require('./locales/fr.json') },
   de: { translation: require('./locales/de.json') },
+  id: { translation: require('./locales/id.json') },
 };
 
 i18n.use(initReactI18next).init({

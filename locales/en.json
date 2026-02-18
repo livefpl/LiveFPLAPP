@@ -277,7 +277,20 @@
     "enterYourFplId": "Enter your FPL ID",
     "weOnlyUsePublicFplId": "We only use your public FPL ID on this device.",
     "detectedId": "Detected ID:",
-    "pasteLinkOrDigits": "Paste a full FPL link or enter digits only."
+    "pasteLinkOrDigits": "Paste a full FPL link or enter digits only.",
+    "hideHelp": "Hide help",
+    "dontKnowIdFindIt": "Don't know your ID? Find it",
+    "findIdIn3Steps": "Find your ID in 3 steps",
+    "helpStep1Login": "Log in at",
+    "helpStep2Open": "Open",
+    "pointsLabel": "Points",
+    "or": "or",
+    "gameweekHistory": "Gameweek History",
+    "helpStep3Copy": "Copy the number after",
+    "codeEntrySlash": "/entry/",
+    "tipPasteLink": "Tip: Paste your FPL link—we'll extract the ID automatically.",
+    "noticeTestVersion": "This is an initial test version of the app. All app features are free & unlimited right now. In a few weeks, some features may require a subscription to allow unlimited use.",
+    "buyRagabollyCoffee": "Buy Ragabolly a coffee"
   },
   "prices": {
     "tonight": "Tonight",
@@ -826,6 +839,7 @@
     "es": "Spanish",
     "ar": "Arabic",
     "fr": "French",
-    "de": "German"
+    "de": "German",
+    "id": "Indonesian"
   }
 }

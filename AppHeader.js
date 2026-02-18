@@ -1,6 +1,6 @@
 // components/AppHeader.js
 import React, { useState, useEffect } from 'react';
-import { SafeAreaView, View, Image, Text, StyleSheet, TouchableOpacity, StatusBar, Alert } from 'react-native';
+import { SafeAreaView, View, Image, Text, StyleSheet, TouchableOpacity, StatusBar, Modal, Pressable, ScrollView } from 'react-native';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -15,7 +15,7 @@ import PaywallScreen from './Paywallscreen';
 const DEFAULT_LOGO = assetImages?.livefplLogo ?? assetImages?.logo;
 const SIDE_WIDTH = 70; // same on both sides to keep the logo centered
 
-const LANG_CODES = ['en', 'es', 'ar', 'fr', 'de'];
+const LANG_CODES = ['en', 'es', 'ar', 'fr', 'de', 'id'];
 
 export default function AppHeader({
   logoSource = DEFAULT_LOGO,
@@ -38,6 +38,7 @@ export default function AppHeader({
   const { isPro } = usePro();
 
   const [paywallOpen, setPaywallOpen] = useState(false); // ← local page overlay
+  const [langModalVisible, setLangModalVisible] = useState(false);
 
   const headerBg = navTheme?.colors?.background ?? colors.bg;
   const isDark = !!navTheme?.dark;
@@ -51,19 +52,11 @@ export default function AppHeader({
       ? onPressChangeId()
       : (setPaywallOpen(false), navigation.navigate('ID'));
 
-  // Language picker: show alert with 5 options
-  const showLanguagePicker = () => {
-    Alert.alert(
-      t('language.title'),
-      null,
-      [
-        ...LANG_CODES.map((code) => ({
-          text: t(`language.${code}`),
-          onPress: () => setStoredLanguage(code),
-        })),
-        { text: t('common.cancel'), style: 'cancel' },
-      ]
-    );
+  // Language picker: vertical list modal (Android shows Alert buttons horizontally)
+  const showLanguagePicker = () => setLangModalVisible(true);
+  const pickLanguage = (code) => {
+    setLangModalVisible(false);
+    if (code) setStoredLanguage(code);
   };
 
   // Local, no-navigation Go Pro handler → show page overlay
@@ -202,6 +195,50 @@ useEffect(() => {
         </View>
       </SafeAreaView>
 
+      {/* Language picker: vertical dropdown modal (Android-friendly) */}
+      <Modal
+        visible={langModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLangModalVisible(false)}
+      >
+        <Pressable
+          style={styles.langModalBackdrop}
+          onPress={() => setLangModalVisible(false)}
+        >
+          <Pressable style={[styles.langModalCard, { backgroundColor: colors.card, borderColor: colors.border }]} onPress={() => {}}>
+            <Text style={[styles.langModalTitle, { color: colors.ink }]}>{t('language.title')}</Text>
+            <ScrollView
+              style={styles.langModalScroll}
+              contentContainerStyle={styles.langModalScrollContent}
+              showsVerticalScrollIndicator={true}
+              keyboardShouldPersistTaps="handled"
+            >
+              {LANG_CODES.map((code) => (
+                <TouchableOpacity
+                  key={code}
+                  activeOpacity={0.7}
+                  style={[styles.langOption, { backgroundColor: colors.cardAccent }]}
+                  onPress={() => pickLanguage(code)}
+                >
+                  <Text style={[styles.langOptionText, { color: colors.ink }]}>{t(`language.${code}`)}</Text>
+                  {(i18n.language || 'en').split('-')[0].toLowerCase() === code && (
+                    <MaterialCommunityIcons name="check" size={18} color={colors.ink} />
+                  )}
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                style={[styles.langOption, styles.langOptionCancel, { backgroundColor: colors.cardAccent }]}
+                onPress={() => pickLanguage(null)}
+              >
+                <Text style={[styles.langOptionText, { color: colors.muted }]}>{t('common.cancel')}</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Full-screen overlay page (no navigation, no Modal) */}
       {paywallOpen && (
         <View style={styles.fullscreen}>
@@ -288,5 +325,53 @@ proText: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 9999,
     // PaywallScreen controls its own background
+  },
+
+  // Language modal (vertical list)
+  langModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  langModalCard: {
+    width: '100%',
+    maxWidth: 320,
+    maxHeight: '80%',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  langModalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 4,
+  },
+  langModalScroll: {
+    maxHeight: 400,
+  },
+  langModalScrollContent: {
+    paddingBottom: 8,
+  },
+  langOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginHorizontal: 8,
+    marginVertical: 2,
+    borderRadius: 8,
+  },
+  langOptionCancel: {
+    marginTop: 8,
+  },
+  langOptionText: {
+    fontSize: 16,
+    fontWeight: '500',
   },
 });
