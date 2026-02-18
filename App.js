@@ -35,27 +35,29 @@ import { setApiTier } from './signedFetch';
   import { ProProvider, usePro } from './ProContext';
   import { FplIdProvider,useFplId } from './FplIdContext';
   import '@react-native-firebase/app';
-  import crashlytics from '@react-native-firebase/crashlytics';
   import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady } from './playwireInit';
 
   import messaging from '@react-native-firebase/messaging';
 
-  // Only report crashes in production (avoid noise from dev builds)
+  // Crashlytics: lazy-required so OTA updates work on builds that don't have the native module yet.
+  // Only report crashes in production (avoid noise from dev builds).
   if (Platform.OS !== 'web') {
     try {
+      const crashlytics = require('@react-native-firebase/crashlytics').default;
       crashlytics().setCrashlyticsCollectionEnabled(!__DEV__);
-    } catch (e) { /* Crashlytics not available (e.g. Expo Go) */ }
+    } catch (e) { /* Crashlytics not available (e.g. Expo Go or old build without native module) */ }
   }
 
-  // Report unhandled JS errors to Crashlytics (exact message + stack) so we see them in Firebase Console
+  // Report unhandled JS errors to Crashlytics (exact message + stack) so we see them in Firebase Console.
   if (Platform.OS !== 'web' && typeof global.ErrorUtils !== 'undefined') {
     const prev = global.ErrorUtils.getGlobalHandler && global.ErrorUtils.getGlobalHandler();
     global.ErrorUtils.setGlobalHandler((error, isFatal) => {
       try {
+        const crashlytics = require('@react-native-firebase/crashlytics').default;
         const err = error && error.stack ? error : new Error(String(error));
         crashlytics().recordError(err);
         crashlytics().log('JS unhandled: ' + (error && error.message ? error.message : String(error)));
-      } catch (e) { /* Crashlytics not available (e.g. dev) */ }
+      } catch (e) { /* Crashlytics not available (e.g. dev or old build) */ }
       if (typeof prev === 'function') prev(error, isFatal);
     });
   }
