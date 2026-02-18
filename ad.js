@@ -42,9 +42,6 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
   const { navTheme } = useTheme();
   const isDark = navTheme?.dark;
 
-  // Hard gate: Pro users see absolutely nothing ad-related.
-  if (isPro) return null;
-
   // SDK ready hint (set by your Playwire init)
   const [sdkReady, setSdkReady] = useState(
     () => getInterstitialDebugState().initializedHint === 'yes'
@@ -341,6 +338,9 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
         lastErr ? `lastErr=${JSON.stringify(lastErr).slice(0, 110)}` : null,
       ].filter(Boolean)
     : [];
+
+  // Hard gate: Pro users see absolutely nothing ad-related (after all hooks to satisfy Rules of Hooks).
+  if (isPro) return null;
 
   // Keep footer height stable even while not ready
   if (!canMountBanner || !sdkReady) {
