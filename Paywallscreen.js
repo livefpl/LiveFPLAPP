@@ -14,11 +14,13 @@ import Constants from 'expo-constants';
 import Purchases from 'react-native-purchases';
 import * as Clipboard from 'expo-clipboard';
 import AppHeader from './AppHeader';
+import { useTranslation } from 'react-i18next';
 import { useColors } from './theme';
 import { usePro } from './ProContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 
 export default function PaywallScreen(props) {
+  const { t } = useTranslation();
   const C = useColors();
   const { offerings, purchaseMonthly, purchaseAnnual, restore, isReady } = usePro();
 
@@ -57,7 +59,7 @@ export default function PaywallScreen(props) {
   const introLine = (pkg) => {
     const ip = pkg?.product?.introPrice;
     if (!ip?.priceString) return '';
-    return `Intro offer: ${ip.priceString}`;
+    return t('paywall.introOffer', { price: ip.priceString });
   };
 
   // ---- Load account details from RevenueCat ----
@@ -86,14 +88,14 @@ export default function PaywallScreen(props) {
   const expiresAt = entitlement?.expirationDate || entitlement?.expiresDate || null;
 
   const statusLine = useMemo(() => {
-    if (!isReady && !info) return 'Checking status…';
+    if (!isReady && !info) return t('paywall.checkingStatus');
     if (isProActive) {
       return expiresAt
-        ? `Pro (Active) — renews ${new Date(expiresAt).toLocaleString()}`
-        : 'Pro (Active)';
+        ? t('paywall.proActiveRenews', { date: new Date(expiresAt).toLocaleString() })
+        : t('paywall.proActive');
     }
-    return 'Free (No active subscription)';
-  }, [isReady, info, isProActive, expiresAt]);
+    return t('paywall.free');
+  }, [isReady, info, isProActive, expiresAt, t]);
 
   const managementURL = isIOS
     ? 'itms-apps://apps.apple.com/account/subscriptions'
@@ -115,15 +117,12 @@ export default function PaywallScreen(props) {
 };
 
  const disabledReason = useMemo(() => {
-  if (isExpoGo) return 'Not available in Expo Go';
-  if (!isReady) return 'Loading products…';
-  if (!offerings?.current) return 'No current offering configured.';
-
-  // If offerings are loaded but no products, show a generic message
-  if (!monthlyPkg && !annualPkg) return 'No subscription products available on this store.';
-
+  if (isExpoGo) return t('paywall.notAvailableInExpoGo');
+  if (!isReady) return t('paywall.loadingProducts');
+  if (!offerings?.current) return t('paywall.noOffering');
+  if (!monthlyPkg && !annualPkg) return t('paywall.noProducts');
   return null;
-}, [isExpoGo, isReady, offerings, monthlyPkg, annualPkg]);
+}, [isExpoGo, isReady, offerings, monthlyPkg, annualPkg, t]);
 
 
   const buyMonthly = async () => {
@@ -144,14 +143,14 @@ export default function PaywallScreen(props) {
   };
 
   // --------- Benefits list ---------
-  const benefits = [
-    { icon: 'check-circle-outline', text: 'Ad-free experience across the app and the site' },
-    { icon: 'check-circle-outline', text: 'Support LiveFPL and ongoing development' },
-    {
-      icon: 'check-circle-outline',
-      text: 'Full, unlimited access to all features (some features will become Pro-only in a few weeks)',
-    },
-  ];
+const benefits = [
+  { icon: 'check-circle-outline', key: 'paywall.benefit1' },
+  { icon: 'check-circle-outline', key: 'paywall.benefit2' },
+  { icon: 'check-circle-outline', key: 'paywall.benefit3' },
+  { icon: 'check-circle-outline', key: 'paywall.benefit4' },
+  { icon: 'check-circle-outline', key: 'paywall.benefit5' },
+];
+
 
   return (
     <View style={{ flex: 1, backgroundColor: C.bg }}>
@@ -164,12 +163,12 @@ export default function PaywallScreen(props) {
       >
         {/* Benefits card */}
         <View style={[styles.card, { backgroundColor: C.card, borderColor: C.border }]}>
-          <Text style={[styles.cardTitle, { color: C.ink }]}>Benefits of Premium Access</Text>
+          <Text style={[styles.cardTitle, { color: C.ink }]}>{t('paywall.benefitsOfPremium')}</Text>
           <View style={{ gap: 10 }}>
             {benefits.map((b, idx) => (
               <View key={idx} style={styles.benefitRow}>
                 <MaterialCommunityIcons name={b.icon} size={18} color={C.ink} />
-                <Text style={[styles.benefitText, { color: C.ink }]}>{b.text}</Text>
+                <Text style={[styles.benefitText, { color: C.ink }]}>{t(b.key)}</Text>
               </View>
             ))}
           </View>
@@ -177,10 +176,10 @@ export default function PaywallScreen(props) {
 
         {/* Account card */}
         <View style={[styles.card, { backgroundColor: C.card, borderColor: C.border }]}>
-          <Text style={[styles.cardTitle, { color: C.ink }]}>Account</Text>
+          <Text style={[styles.cardTitle, { color: C.ink }]}>{t('paywall.account')}</Text>
 
           <View style={styles.kvRow}>
-            <Text style={[styles.kKey, { color: C.muted }]}>Anonymous ID</Text>
+            <Text style={[styles.kKey, { color: C.muted }]}>{t('paywall.anonymousId')}</Text>
             {/* Cleaned ID with copy chip */}
             <View style={styles.idRow}>
               <Text
@@ -195,11 +194,11 @@ export default function PaywallScreen(props) {
                   onPress={copyId}
                   style={[styles.copyBtn, { backgroundColor: C.stripBg, borderColor: C.border2 }]}
                   accessibilityRole="button"
-                  accessibilityLabel="Copy Anonymous ID"
+                  accessibilityLabel={t('paywall.copyAnonymousId')}
                 >
                   <MaterialCommunityIcons name={copied ? 'check' : 'content-copy'} size={14} color={C.ink} />
                   <Text style={[styles.copyText, { color: C.ink }]}>
-                    {copied ? 'Copied' : 'Copy'}
+                    {copied ? t('paywall.copied') : t('paywall.copy')}
                   </Text>
                 </TouchableOpacity>
               ) : null}
@@ -207,7 +206,7 @@ export default function PaywallScreen(props) {
           </View>
 
           <View style={styles.kvRow}>
-            <Text style={[styles.kKey, { color: C.muted }]}>Status</Text>
+            <Text style={[styles.kKey, { color: C.muted }]}>{t('paywall.status')}</Text>
             <Text style={[styles.kVal, { color:  C.ink }]}>{statusLine}</Text>
           </View>
 
@@ -219,15 +218,16 @@ export default function PaywallScreen(props) {
     {refreshing ? (
       <ActivityIndicator color={C.ink} />
     ) : (
-      <Text style={[styles.actionText, { color: C.ink }]}>Refresh</Text>
+      <Text style={[styles.actionText, { color: C.ink }]}>{t('paywall.refresh')}</Text>
     )}
   </TouchableOpacity>
 
   <TouchableOpacity
     onPress={() => Linking.openURL(managementURL)}
     style={[styles.actionBtn, { borderColor: C.border2, backgroundColor: C.stripBg }]}
+    accessibilityLabel={t('paywall.manageSubscription')}
   >
-    <Text style={[styles.actionText, { color: C.ink }]}>Store</Text>
+    <Text style={[styles.actionText, { color: C.ink }]}>{t('paywall.store')}</Text>
   </TouchableOpacity>
 
   
@@ -242,7 +242,7 @@ export default function PaywallScreen(props) {
       ]}
     >
       <Text style={[styles.actionText, { color: C.ink }]}>
-        Remove ads on website
+        {t('paywall.removeAdsOnWebsite')}
       </Text>
     </TouchableOpacity>
   
@@ -250,14 +250,13 @@ export default function PaywallScreen(props) {
 
 
           <Text style={[styles.help, { color: C.muted }]}>
-            Use this Anonymous ID for any communication with LiveFPL customer service (Twitter or at
-            livefpl@gmail.com).
+            {t('paywall.useAnonymousIdForSupport')}
           </Text>
         </View>
 
         {/* Purchase card */}
         <View style={[styles.card, { backgroundColor: C.card, borderColor: C.border }]}>
-          <Text style={[styles.cardTitle, { color: C.ink }]}>Go Pro</Text>
+          <Text style={[styles.cardTitle, { color: C.ink }]}>{t('paywall.goPro')}</Text>
 
           {!isReady && (
             <View style={styles.row}>

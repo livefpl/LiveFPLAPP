@@ -4,6 +4,7 @@ import { View, StyleSheet, Text, Platform, TouchableOpacity, Linking } from 'rea
 import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
 import { usePro } from './ProContext';
 import { getInterstitialDebugState } from './AdInterstitial';
+import { useTranslation } from 'react-i18next';
 import { useTheme, useColors } from './theme';
 import { onPlaywireReady } from './playwireInit';
 import { useNavigation } from '@react-navigation/native';
@@ -33,6 +34,7 @@ function fmtMs(ms) {
 }
 
 export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
+  const { t } = useTranslation();
   const C = useColors();
   const { isPro } = usePro();
   const navigation = useNavigation();
@@ -384,14 +386,17 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
             >
               <View style={styles.fallbackLeft}>
                 <Text style={styles.fallbackTitle} numberOfLines={1}>
-                  Support LiveFPL • Remove ads
+                  {t('ad.placeholderTitle')}
                 </Text>
                 <Text style={styles.fallbackSub} numberOfLines={1}>
-                  Places you on a premium fast server.
+                  {t('ad.placeholderLine1')}
+                </Text>
+                <Text style={styles.fallbackSub} numberOfLines={1}>
+                  {t('ad.placeholderLine2')}
                 </Text>
               </View>
               <View style={styles.fallbackBtn}>
-                <Text style={styles.fallbackBtnText}>Go Premium</Text>
+                <Text style={styles.fallbackBtnText}>{t('ad.goPremium')}</Text>
               </View>
             </TouchableOpacity>
           </View>

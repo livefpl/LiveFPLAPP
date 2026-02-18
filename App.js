@@ -1,4 +1,5 @@
   // App.js
+  import './i18n';
   import React, { useEffect, useMemo, useRef, useState } from 'react';
   import {
     View,
@@ -56,15 +57,17 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
   import Achievements from './achievements';
   import TemplatesChipsAverages from './TemplatesChipsAverages';
   import Paywallscreen from './Paywallscreen';
+  import { useTranslation } from 'react-i18next';
+  import i18n, { initI18nLanguage } from './i18n';
 
   Text.defaultProps = Text.defaultProps || {};
   Text.defaultProps.allowFontScaling = false;
   TextInput.defaultProps = TextInput.defaultProps || {};
   TextInput.defaultProps.allowFontScaling = false;
 
-  const LOCAL_BUILD = 1;
+  const LOCAL_BUILD = 3;
   const CONFIG_URL = 'https://livefpl.us/version.json';
-  const DEFAULT_REMOTE_VERSION = 3;
+  const DEFAULT_REMOTE_VERSION = 1;
 
   setConfig({ N: 1000, cooldownMs: 5_000, dedupeTtlMs: 1_000 });
 
@@ -83,7 +86,7 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
         _lastMissAlertAt = now;
 
         Alert.alert(
-          'Interstitial missed',
+          i18n.t('rank.interstitialMissed'),
           [
             `count=${ctx.count}`,
             `source=${ctx.source}`,
@@ -128,6 +131,7 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
 
   /* ------------------------ Tabs ------------------------ */
   function MyTabs() {
+    const { t } = useTranslation();
     const { fplId } = useFplId();
     const C = useColors();
     const navigation = useNavigation();
@@ -177,21 +181,21 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
             ]}
           >
             <View style={styles.moreHeader}>
-              <RNText style={[styles.moreTitle, { color: C.ink }]}>More</RNText>
+              <RNText style={[styles.moreTitle, { color: C.ink }]}>{t('common.more')}</RNText>
               <TouchableOpacity
                 onPress={() => setMoreOpen(false)}
                 style={[styles.closeBtn, { borderColor: C.border, backgroundColor: C.stripBg }]}
               >
                 <MaterialCommunityIcons name="close" size={16} color={C.ink} />
-                <RNText style={[styles.closeText, { color: C.ink }]}>Close</RNText>
+                <RNText style={[styles.closeText, { color: C.ink }]}>{t('common.close')}</RNText>
               </TouchableOpacity>
             </View>
 
             {/* Keep only non-tab destinations here */}
-            <PopItem icon="medal" label="Gameweek Trophies" target="Trophies" />
-            <PopItem icon="account-edit" label="Change FPL ID" target="ID" />
-            <PopItem icon="crown" label="Premium/Remove Ads" target="Premium" />
-            {String(fplId) === '114740' && (<PopItem icon="advertisements" label="Ad Banner Test" target="AdTest" />
+            <PopItem icon="medal" label={t('moreMenu.gameweekTrophies')} target="Trophies" />
+            <PopItem icon="account-edit" label={t('moreMenu.changeFplId')} target="ID" />
+            <PopItem icon="crown" label={t('moreMenu.premiumRemoveAds')} target="Premium" />
+            {String(fplId) === '114740' && (<PopItem icon="advertisements" label={t('moreMenu.adBannerTest')} target="AdTest" />
             )}
           </View>
         </View>
@@ -206,8 +210,8 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
             tabBarIcon: ({ color }) => {
               let iconName;
               switch (route.name) {
-                case 'Battle':
-                  iconName = 'sword-cross';
+                case 'Stats':
+                  iconName = 'chart-box-outline';
                   break;
                 case 'Prices':
                   iconName = 'finance';
@@ -218,7 +222,7 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
                 case 'Rank':
                   iconName = 'chart-line';
                   break;
-                case 'Games':
+                case 'Matches':
                   iconName = 'soccer';
                   break;
                 case 'Planner':
@@ -233,7 +237,7 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
 
                 // Hidden routes (no tab button)
                 case 'Templates':
-                  iconName = 'poker-chip';
+                  iconName = 'chart-box-outline';
                   break;
                 case 'Trophies':
                   iconName = 'medal';
@@ -267,9 +271,9 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
           tabBar={(props) => {
             const i = props.state.index;
             let activeRoute = props.state.routeNames[i];
-            // 🔧 FORCE bottom tab to stay on Battle when viewing Templates
+            // 🔧 Keep tab on Stats when viewing Templates (embedded in Stats now)
   if (activeRoute === 'Templates') {
-    activeRoute = 'Battle';
+    activeRoute = 'Stats';
   }
 
             return (
@@ -299,23 +303,25 @@ import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady 
           <Tab.Screen
             name="Rank"
             component={Rank}
+            options={{ tabBarLabel: t('tabs.rank') }}
             listeners={({ navigation }) => ({
               tabPress: () => {
                 navigation.dispatch(CommonActions.navigate({ name: 'Rank', params: {}, merge: false }));
               },
             })}
           />
-          <Tab.Screen name="Battle" component={Threats} />
-          <Tab.Screen name="Leagues" component={Leagues} />
-          <Tab.Screen name="Prices" component={PricesPage} />
-          <Tab.Screen name="Games" component={Games} />
-          <Tab.Screen name="Planner" component={PlannerScreen} />
-          <Tab.Screen name="What If" component={WhatIf} />
+          <Tab.Screen name="Stats" component={Threats} options={{ tabBarLabel: t('tabs.stats') }} />
+          <Tab.Screen name="Leagues" component={Leagues} options={{ tabBarLabel: t('tabs.leagues') }} />
+          <Tab.Screen name="Prices" component={PricesPage} options={{ tabBarLabel: t('tabs.prices') }} />
+          <Tab.Screen name="Matches" component={Games} options={{ tabBarLabel: t('tabs.matches') }} />
+          <Tab.Screen name="Planner" component={PlannerScreen} options={{ tabBarLabel: t('tabs.planner') }} />
+          <Tab.Screen name="What If" component={WhatIf} options={{ tabBarLabel: t('tabs.whatIf') }} />
 
           {/* Toggle-only tab for popover */}
           <Tab.Screen
             name="More"
             component={Empty}
+            options={{ tabBarLabel: t('tabs.more') }}
             listeners={{
               tabPress: (e) => {
                 e.preventDefault();
@@ -616,10 +622,11 @@ function BannerTestScreen() {
 
   /* ------------------------ App ------------------------ */
   export default function App() {
+  useEffect(() => {
+    initI18nLanguage();
+  }, []);
 
-
-
- useEffect(() => {
+  useEffect(() => {
   const publisherId =
     process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
     require('./app.json').expo.extra.playwire.publisherId;
@@ -673,8 +680,10 @@ function BannerTestScreen() {
     const initFCM = async () => {
       try {
         await ensureAndroidNotificationPermission();
-        // iOS: ensure device is registered for remote messages
-        await messaging().registerDeviceForRemoteMessages();
+        // iOS-only: register for remote messages and get APNS token before FCM token
+        if (Platform.OS === 'ios') {
+          await messaging().registerDeviceForRemoteMessages();
+        }
 
         const authStatus = await messaging().requestPermission();
         console.log('[FCM] authStatus:', authStatus);
@@ -685,8 +694,10 @@ function BannerTestScreen() {
 
         console.log('[FCM] permission enabled:', enabled);
 
-        const apns = await messaging().getAPNSToken();
-        console.log('[FCM] apns token:', apns);
+        if (Platform.OS === 'ios') {
+          const apns = await messaging().getAPNSToken();
+          console.log('[FCM] apns token:', apns);
+        }
 
         const fcm = await messaging().getToken();
         console.log('[FCM] fcm token:', fcm);

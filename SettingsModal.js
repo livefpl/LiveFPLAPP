@@ -11,6 +11,7 @@ import {
   Linking,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { useTheme, useColors } from './theme';
 import UpdatesDebugPanel from './UpdatesDebugPanel';
 
@@ -29,9 +30,28 @@ export default function SettingsModal({
   const [localSettings, setLocalSettings] = useState(displaySettings || {});
     const [localNotifPrefs, setLocalNotifPrefs] = useState(notifPrefs || {});
 
+  const { t } = useTranslation();
   const { mode, setMode } = useTheme();
   const C = useColors();
   const navigation = useNavigation();
+
+  const toggles = useMemo(
+    () => [
+      { key: 'showEOs',         labelKey: 'settings.showEO' },
+      { key: 'showEvents',      labelKey: 'settings.showEventIcons' },
+      { key: 'showManagerName', labelKey: 'settings.showManagerName' },
+    ],
+    []
+  );
+
+  const notifItems = useMemo(
+    () => [
+      { key: 'myTeamGoalsAssists', labelKey: 'settings.myTeamGoalsAssists' },
+      { key: 'top10Threats', labelKey: 'settings.top10Threats' },
+      { key: 'priceWarnings', labelKey: 'settings.priceWarnings' },
+    ],
+    []
+  );
 
     useEffect(() => {
     if (visible) {
@@ -39,16 +59,6 @@ export default function SettingsModal({
       setLocalNotifPrefs(notifPrefs || {});
     }
   }, [visible]); // intentionally NOT depending on displaySettings
-
-  const toggles = useMemo(
-    () => [
-      { key: 'showEOs',         label: 'Show Effective Ownership (EO)' },
-      { key: 'showEvents',      label: 'Show event icons under players' },
-      
-      { key: 'showManagerName', label: 'Show manager name at top' },
-    ],
-    []
-  );
 
   // Update local state (not the parent) while open
   const toggleKey = (key) => (val) =>
@@ -183,10 +193,10 @@ export default function SettingsModal({
 
           <Pressable style={styles.sheet} onPress={() => {}}>
 
-          <Text style={styles.title}>Display Settings</Text>
+          <Text style={styles.title}>{t('settings.displaySettings')}</Text>
 
           {/* Appearance */}
-          <Text style={styles.sectionTitle}>Appearance</Text>
+          <Text style={styles.sectionTitle}>{t('settings.appearance')}</Text>
           <View style={styles.modeRow}>
             {['light', 'dark'].map((m) => {
               const active = mode === m;
@@ -196,10 +206,10 @@ export default function SettingsModal({
                   onPress={() => setMode(m)}
                   style={[styles.modeChip, active && styles.modeChipActive]}
                   accessibilityRole="button"
-                  accessibilityLabel={`Set theme: ${m}`}
+                  accessibilityLabel={t('settings.setTheme', { mode: m })}
                 >
                   <Text style={[styles.modeChipText, active && styles.modeChipTextActive]}>
-                    {m[0].toUpperCase() + m.slice(1)}
+                    {t(m === 'light' ? 'settings.light' : 'settings.dark')}
                   </Text>
                 </Pressable>
               );
@@ -207,9 +217,9 @@ export default function SettingsModal({
           </View>
 
           {/* Toggles */}
-          {toggles.map(({ key, label }) => (
+          {toggles.map(({ key, labelKey }) => (
             <View key={key} style={styles.row}>
-              <Text style={styles.rowLabel}>{label}</Text>
+              <Text style={styles.rowLabel}>{t(labelKey)}</Text>
               <Switch
                 value={!!localSettings[key]}
                 onValueChange={toggleKey(key)}
@@ -223,15 +233,11 @@ export default function SettingsModal({
                     <View style={styles.divider} />
 
           {/* Notifications */}
-          <Text style={styles.sectionTitle}>Notifications</Text>
+          <Text style={styles.sectionTitle}>{t('settings.notifications')}</Text>
 
-          {[
-            { key: 'myTeamGoalsAssists', label: 'My team: Goals & Assists' },
-            { key: 'top10Threats', label: 'Top 10 threats: Goals & Assists' },
-            { key: 'priceWarnings', label: 'Price change warnings' },
-          ].map(({ key, label }) => (
+          {notifItems.map(({ key, labelKey }) => (
             <View key={key} style={styles.row}>
-              <Text style={styles.rowLabel}>{label}</Text>
+              <Text style={styles.rowLabel}>{t(labelKey)}</Text>
               <Switch
                 value={!!localNotifPrefs?.[key]}
                 onValueChange={(v) => setLocalNotifPrefs((p) => ({ ...(p || {}), [key]: v }))}
@@ -245,15 +251,15 @@ export default function SettingsModal({
 
           {/* Links */}
           <Text style={[styles.glossItem, { marginTop: 6 }]}>
-            More tools for rank tiers and team ratings at{' '}
+            {t('settings.moreToolsAt')}{' '}
             <Text
               style={styles.link}
               accessibilityRole="link"
               onPress={() => Linking.openURL('https://www.livefpl.net')}
             >
-              livefpl.net
+              {t('settings.livefplNet')}
             </Text>{' '}
-            • EO table{' '}
+            • {t('settings.eoTable')}{' '}
             <Text
               style={styles.link}
               accessibilityRole="link"
@@ -270,49 +276,38 @@ export default function SettingsModal({
             style={styles.glossaryToggle}
             onPress={() => setGlossaryOpen((o) => !o)}
             accessibilityRole="button"
-            accessibilityLabel="Toggle glossary"
+            accessibilityLabel={t('settings.toggleGlossary')}
           >
-            <Text style={styles.glossTitle}>Glossary</Text>
+            <Text style={styles.glossTitle}>{t('settings.glossary')}</Text>
             <Text style={styles.chevron}>{glossaryOpen ? '▲' : '▼'}</Text>
           </Pressable>
 
           {glossaryOpen && (
             <ScrollView style={styles.glossary}>
-              {/* EO quick explainer */}
-              <Text style={styles.glossItem}>
-                <Text style={styles.bold}>EO:</Text> Effective Ownership = own% + captain% + triple-captain%.
-                It is the true effect of that player accounting for captaincy and benching.
-              </Text>
-              <Text style={styles.glossItem}>
-                <Text style={styles.bold}>Example:</Text> EO 50% → each point he scores adds 0.5 to the average. If everyone
-                owns + captains a player → EO 200%.
-              </Text>
-
-              {/* Emoji legend */}
-              <Text style={[styles.glossTitle, { marginTop: 8 }]}>Emoji legend</Text>
-              <Text style={styles.glossItem}>🎲 Differential — low EO; big gains if he hauls.</Text>
-              <Text style={styles.glossItem}>😴 Template — very common pick; returns keep you level.</Text>
-              <Text style={styles.glossItem}>
-                🕵 Spy — A player whose points will hurt you despite you owning him, as he's highly captained by others.
-              </Text>
-              <Text style={styles.glossItem}>⭐ Star — Your differential delivering the points.</Text>
-              <Text style={styles.glossItem}>🔃 Sub — Autosubbed.</Text>
+              <Text style={styles.glossItem}>{t('settings.eoExplainer')}</Text>
+              <Text style={styles.glossItem}>{t('settings.eoExample')}</Text>
+              <Text style={[styles.glossTitle, { marginTop: 8 }]}>{t('settings.emojiLegend')}</Text>
+              <Text style={styles.glossItem}>{t('settings.emojiDifferential')}</Text>
+              <Text style={styles.glossItem}>{t('settings.emojiTemplate')}</Text>
+              <Text style={styles.glossItem}>{t('settings.emojiSpy')}</Text>
+              <Text style={styles.glossItem}>{t('settings.emojiStar')}</Text>
+              <Text style={styles.glossItem}>{t('settings.emojiSub')}</Text>
             </ScrollView>
           )}
 
           {/* Actions */}
           <View style={styles.actionsRow}>
-            <Pressable style={styles.idBtn} onPress={handleChangeId} accessibilityRole="button" accessibilityLabel="Change ID">
-              <Text style={styles.idText}>Change ID</Text>
+            <Pressable style={styles.idBtn} onPress={handleChangeId} accessibilityRole="button" accessibilityLabel={t('settings.changeId')}>
+              <Text style={styles.idText}>{t('settings.changeId')}</Text>
             </Pressable>
 
-            <Pressable style={styles.closeBtn} onPress={handleClose} accessibilityRole="button" accessibilityLabel="Close settings">
-              <Text style={styles.closeText}>Close</Text>
+            <Pressable style={styles.closeBtn} onPress={handleClose} accessibilityRole="button" accessibilityLabel={t('settings.closeSettings')}>
+              <Text style={styles.closeText}>{t('common.close')}</Text>
             </Pressable>
           </View>
           </Pressable>
 </Pressable>
-<UpdatesDebugPanel />
+
     </Modal>
   );
 }

@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from './theme';
@@ -33,6 +34,7 @@ export default function EventFeed({
   height = 520,
   impactThreshold = 0.01,
 }) {
+  const { t } = useTranslation();
   const C = useColors();
 
   const [loading, setLoading] = useState(true);
@@ -212,10 +214,10 @@ const toggleGroupExpanded = useCallback((key) => {
   }, [groups]);
 
   const currentGameLabel = useMemo(() => {
-    if (gameFilter === 'all') return 'All games';
+    if (gameFilter === 'all') return t('feed.allGames');
     const hit = (gameOptions || []).find(x => String(x.id) === String(gameFilter));
-    return hit?.label || 'Selected game';
-  }, [gameFilter, gameOptions]);
+    return hit?.label || t('feed.selectedGame');
+  }, [gameFilter, gameOptions, t]);
 
   const filtered = useMemo(() => {
     const abs = Math.abs;
@@ -290,7 +292,7 @@ const toggleGroupExpanded = useCallback((key) => {
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Text style={{ color: impactOnly ? 'white' : C.muted, fontSize: 11, fontWeight: '800' }}>
-              Non zero impact only
+              {t('feed.impactOnly')}
             </Text>
           </TouchableOpacity>
 
@@ -305,7 +307,7 @@ const toggleGroupExpanded = useCallback((key) => {
 
         {/* game dropdown */}
         <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Text style={{ color: C.muted, fontSize: 11, fontWeight: '800' }}>Game</Text>
+          <Text style={{ color: C.muted, fontSize: 11, fontWeight: '800' }}>{t('feed.game')}</Text>
 
           <TouchableOpacity
             onPress={() => setGamePickerOpen(true)}
@@ -322,9 +324,9 @@ const toggleGroupExpanded = useCallback((key) => {
         </View>
 
         <View style={[styles.thead, { borderColor: C.border, backgroundColor: C.sunken || C.card2 }]}>
-          <Text style={[styles.thCell, { color: C.muted, flex: 1.2 }]}>Event</Text>
-          <Text style={[styles.thCell, { color: C.muted, width: 110, textAlign: 'right' }]}>Points gained</Text>
-          <Text style={[styles.thCell, { color: C.muted, width: 110, textAlign: 'right' }]}>Rank Change</Text>
+          <Text style={[styles.thCell, { color: C.muted, flex: 1.2 }]}>{t('feed.event')}</Text>
+          <Text style={[styles.thCell, { color: C.muted, width: 110, textAlign: 'right' }]}>{t('feed.pointsGained')}</Text>
+          <Text style={[styles.thCell, { color: C.muted, width: 110, textAlign: 'right' }]}>{t('feed.rankChange')}</Text>
         </View>
 
         {!!err && (
@@ -340,7 +342,7 @@ const toggleGroupExpanded = useCallback((key) => {
               style={[styles.modalCard, { backgroundColor: C.card, borderColor: C.border }]}
               onPress={() => {}}
             >
-              <Text style={{ color: C.ink, fontWeight: '900', marginBottom: 10 }}>Filter by game</Text>
+              <Text style={{ color: C.ink, fontWeight: '900', marginBottom: 10 }}>{t('feed.filterByGame')}</Text>
 
               <TouchableOpacity
                 onPress={() => {
@@ -349,7 +351,7 @@ const toggleGroupExpanded = useCallback((key) => {
                 }}
                 style={[styles.modalRow, { borderColor: C.border }]}
               >
-                <Text style={{ color: C.ink, fontWeight: '900' }}>All games</Text>
+                <Text style={{ color: C.ink, fontWeight: '900' }}>{t('feed.allGames')}</Text>
               </TouchableOpacity>
 
               <FlatList
@@ -396,7 +398,7 @@ const toggleGroupExpanded = useCallback((key) => {
     const improves = rankDelta < 0;
     const worsens = rankDelta > 0;
 
-    const title = prettyGroupTitle(item);
+    const title = prettyGroupTitle(item, t);
     const metaLine = buildMetaLine(item);
 
     const groupKey = `${Number(item?.ts || 0)}:${Number(item?.gen || 0)}:${index}`;
@@ -677,7 +679,7 @@ const groupOpen = expandedGroups.has(groupKey);
 
       {!!lastUpdated && !loading && (
         <Text style={{ color: C.muted, fontSize: 10, paddingTop: 6 }}>
-          Updated {new Date(lastUpdated).toLocaleTimeString()}
+          {t('feed.updatedAt', { time: new Date(lastUpdated).toLocaleTimeString() })}
         </Text>
       )}
     </View>
@@ -819,8 +821,9 @@ function formatTsCompact(tsMaybe, tsStrFallback) {
   return s;
 }
 
-function prettyGroupTitle(g) {
-  const base = String(g?.title || g?.kind || 'Update');
+function prettyGroupTitle(g, tFn) {
+  const defaultBase = tFn ? tFn('feed.update') : 'Update';
+  const base = String(g?.title || g?.kind || defaultBase);
   const baseLower = base.toLowerCase();
 
   const players = Array.isArray(g?.playersRendered)
@@ -843,7 +846,8 @@ function prettyGroupTitle(g) {
   const list = (arr, max = 4) => {
     if (!arr.length) return '';
     if (arr.length <= max) return arr.join(', ');
-    return `${arr.slice(0, max).join(', ')} +${arr.length - max} more`;
+    const more = tFn ? tFn('feed.moreCount', { count: arr.length - max }) : `+${arr.length - max} more`;
+    return `${arr.slice(0, max).join(', ')} ${more}`;
   };
 
   // --- classify by per-player text ---

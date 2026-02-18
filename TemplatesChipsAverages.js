@@ -17,7 +17,8 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import {  useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 
 import AppHeader from './AppHeader';
 import { useColors } from './theme';
@@ -187,10 +188,35 @@ async function loadEOOverlay(sample) {
 
 /* ---------------------- Parsing helpers ---------------------- */
 function collectPlayersFromGames(json) {
-  // Map pid -> { id, name, teamId, type, pts, seenLive, seenPlayed }
+  // Map pid -> { id, name, teamId, type, pts, seenLive, playedSlots, leftSlots }
   const byId = new Map();
+  const gamesList = json || [];
 
-  (json || []).forEach((game) => {
+  // DGW: per team, count total fixtures and how many are finished
+  const teamDgwState = new Map(); // teamId -> { total, done }
+  gamesList.forEach((game) => {
+    const statusStr = [game?.[4], game?.[5], game?.status, game?.stage].filter(Boolean).join(' ').toUpperCase();
+    const finished =
+      game?.finished === true ||
+      game?.is_finished === true ||
+      /(DONE|OFFICIAL|FINISHED|FULL.?TIME|FT|FINAL|ENDED)/.test(statusStr);
+    const teamHId = Number(game?.[16] ?? game?.home_team_id ?? 0);
+    const teamAId = Number(game?.[17] ?? game?.away_team_id ?? 0);
+    if (teamHId) {
+      const t = teamDgwState.get(teamHId) || { total: 0, done: 0 };
+      t.total += 1;
+      if (finished) t.done += 1;
+      teamDgwState.set(teamHId, t);
+    }
+    if (teamAId && teamAId !== teamHId) {
+      const t = teamDgwState.get(teamAId) || { total: 0, done: 0 };
+      t.total += 1;
+      if (finished) t.done += 1;
+      teamDgwState.set(teamAId, t);
+    }
+  });
+
+  gamesList.forEach((game) => {
     // Indices in your payload:
     // [0]=home name, [1]=away name, [2]=home score, [3]=away score
     // [4]=status string "Live Game"/"Done", [5]=stage "Projected"/"Official"
@@ -221,24 +247,22 @@ function collectPlayersFromGames(json) {
     const tableH = game?.[12] || game?.home_table || [];
     const tableA = game?.[13] || game?.away_table || [];
 
+    // DGW: sum all "minutes", "minutes Game 2" etc.
     const extractMinutes = (explained) => {
       let mins = 0;
       if (!Array.isArray(explained)) return 0;
 
       for (const e of explained) {
-        // Array form: ['minutes', 90, 2] or ['Minutes played', 66, 2]
         if (Array.isArray(e) && e.length >= 2) {
           const tag = String(e[0] ?? '').toLowerCase();
           if (tag.includes('min')) {
             const v = Number(e[1]);
-            if (Number.isFinite(v)) { mins = v; break; }
+            if (Number.isFinite(v)) mins += v;
           }
-        }
-        // Object form, just in case
-        else if (e && typeof e === 'object') {
+        } else if (e && typeof e === 'object') {
           const k = String(e.stat ?? e.key ?? e.name ?? '').toLowerCase();
           const v = Number(e.value ?? e.val ?? e.minutes ?? e.mins);
-          if (k.includes('min') && Number.isFinite(v)) { mins = v; break; }
+          if (k.includes('min') && Number.isFinite(v)) mins += v;
         }
       }
       return mins;
@@ -258,8 +282,9 @@ function collectPlayersFromGames(json) {
         const mins = extractMinutes(explained);
         const appeared = mins > 0;
 
-        const seenPlayed = prev.seenPlayed || (finished && appeared);
-        const seenLive   = prev.seenLive   || (startedNotFinished && appeared);
+        // DGW: count slots — 1 played per finished game they appeared in; leftSlots set after loop
+        const playedSlots = (prev.playedSlots || 0) + (finished && appeared ? 1 : 0);
+        const seenLive = prev.seenLive || (startedNotFinished && appeared);
 
         byId.set(id, {
           id,
@@ -268,13 +293,21 @@ function collectPlayersFromGames(json) {
           type: Number(type) || prev.type || 0,
           pts: (prev.pts || 0) + ptsNum,
           seenLive,
-          seenPlayed,
+          playedSlots,
         });
       });
     };
 
     pushRows(tableH, teamHId);
     pushRows(tableA, teamAId);
+  });
+
+  // Set leftSlots per player: team's fixtures not yet finished (each such fixture = 1 left for that player)
+  byId.forEach((p, id) => {
+    const tid = Number(p.teamId) || 0;
+    const s = teamDgwState.get(tid);
+    const leftSlots = s ? Math.max(0, s.total - s.done) : 0;
+    p.leftSlots = leftSlots;
   });
 
   return byId;
@@ -305,22 +338,25 @@ async function fetchLocalsForGW() {
   return j;
 }
 
-/* ---------------------- Chip label ---------------------- */
-function chipLabel(k) {
+/* ---------------------- Chip label (tFn passed from component for i18n) ---------------------- */
+function chipLabel(k, tFn) {
   const m = String(k).toLowerCase();
-  if (m === 'bboost') return 'Bench Boost';
-  if (m === '3xc') return 'Triple Captain';
-  if (m === 'freehit') return 'Free Hit';
-  if (m === 'wildcard') return 'Wildcard';
-  if (m === 'none') return 'None';
+  if (!tFn) return k;
+  if (m === 'bboost') return tFn('templates.benchBoost');
+  if (m === '3xc') return tFn('templates.tripleCaptain');
+  if (m === 'freehit') return tFn('templates.freeHit');
+  if (m === 'wildcard') return tFn('templates.wildcard');
+  if (m === 'none') return tFn('templates.none');
   return k;
 }
 
 /* ---------------------- Main Screen ---------------------- */
 export default function TemplatesChipsAverages() {
+  const { t } = useTranslation();
   const C = useColors();
-    const navigation = useNavigation();
-  
+  const navigation = useNavigation();
+  const route = useRoute();
+
   const P = useMemo(
     () => ({
       bg: C.bg,
@@ -367,14 +403,46 @@ export default function TemplatesChipsAverages() {
   const [myExposure, setMyExposure] = useState(null); // { id -> multiplier }
   const [myHit, setMyHit] = useState(0);
 
-  // Tabs
-  const [tab, setTab] = useState('templates'); // 'templates' | 'averages' | 'chips' | 'captains'
+  // Tabs: default Templates; when screen gains focus, sync from initialSection so choosing "Templates" (or Captains etc.) from Stats always shows that section
+  const [tab, setTab] = useState('templates');
+  useFocusEffect(
+    useCallback(() => {
+      const s = route?.params?.initialSection;
+      if (s && ['templates', 'averages', 'chips', 'captains'].includes(s)) setTab(s);
+    }, [route?.params?.initialSection])
+  );
 
   // Pickers for Chips/Captains
   const [capPickerOpen, setCapPickerOpen] = useState(false);
   const [capPickKey, setCapPickKey] = useState(null);
   const [chipPickerOpen, setChipPickerOpen] = useState(false);
   const [chipPickKey, setChipPickKey] = useState(null);
+
+  // Section dropdown: Stats sections + Template sections (same list as Stats). Live Battle only when there are live games.
+  const [sectionPickerOpen, setSectionPickerOpen] = useState(false);
+  const hasLive = useMemo(
+    () => (dataGames || []).some((g) => /live/.test(String(g?.[4] ?? ''))),
+    [dataGames]
+  );
+  const STATS_SECTIONS = useMemo(
+    () => [
+      ...(hasLive ? [{ key: 'live', labelKey: 'liveBattle' }] : []),
+      { key: 'diffs', labelKey: 'differentialsVsThreats' },
+      { key: 'all', labelKey: 'dangerTable' },
+    ],
+    [hasLive]
+  );
+  const TEMPLATE_SECTIONS = [
+    { key: 'templates', labelKey: 'templates' },
+    { key: 'averages', labelKey: 'averages' },
+    { key: 'chips', labelKey: 'chipUsage' },
+    { key: 'captains', labelKey: 'captains' },
+  ];
+  const ALL_SECTIONS = useMemo(() => [...STATS_SECTIONS, ...TEMPLATE_SECTIONS], [STATS_SECTIONS]);
+  const sectionLabel = (key) => {
+    const opt = [...STATS_SECTIONS, ...TEMPLATE_SECTIONS].find(o => o.key === key);
+    return opt ? t(`templates.${opt.labelKey}`) : key;
+  };
 
   /* ---------- data fetch ---------- */
   const fetchGames = useCallback(async (force = false) => {
@@ -399,7 +467,7 @@ export default function TemplatesChipsAverages() {
       setDataGames(json);
       cacheRef.current.set(key, { t: Date.now(), data: json });
     } catch (e) {
-      setErr('Failed to load games.');
+      setErr(t('templates.failedToLoadGames'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -552,10 +620,12 @@ export default function TemplatesChipsAverages() {
   }, [localsMeta, avgPickKey]);
 
   const avgSampleLabel = useMemo(() => {
-    // Prefer the actual local group name when available; otherwise nice defaults.
     if (chosenAvg?.name) return String(chosenAvg.name);
-    return SAMPLE_SHORT[sample] || 'Sample';
-  }, [chosenAvg, sample]);
+    if (sample === 'top10k') return t('templates.top10k');
+    if (sample === 'elite') return t('templates.elite');
+    if (sample === 'local') return t('templates.nearYou');
+    return t('templates.sample');
+  }, [chosenAvg, sample, t]);
 
   const hitsMean = Number(chosenAvg?.hits_mean || 0);
   const autosubsInc = Number(chosenAvg?.autosubs_increase_interp || 0);
@@ -598,33 +668,21 @@ export default function TemplatesChipsAverages() {
     return averages.sample.score + (autosubsInc - hitsMean);
   }, [averages, autosubsInc, hitsMean]);
 
-  // Player state map (pid -> 'live' | 'played' | 'left')
-  const playerState = useMemo(() => {
-    const map = new Map();
-    byId.forEach((p, pid) => {
-      if (p.seenLive) map.set(pid, 'live');
-      else if (p.seenPlayed) map.set(pid, 'played');
-      else map.set(pid, 'left');
-    });
-    return map;
-  }, [byId]);
-
- // Your counts (captain x2, TC x3, bench 0) — mirrors EO weighting in sample
-const myPlayState = useMemo(() => {
-  let liveCnt = 0, playedCnt = 0, leftCnt = 0;
-  const exposure = myExposure || {};
-  for (const [idStr, mul] of Object.entries(exposure)) {
-    const m = Number(mul) || 0;        // 0 (bench), 1 (normal), 2 (C), 3 (TC)
-    if (m <= 0) continue;              // ignore bench
-    const pid = Number(idStr);
-    const st = playerState.get(pid) || 'left';
-    if (st === 'live')      liveCnt   += m;
-    else if (st === 'played') playedCnt += m;
-    else                     leftCnt   += m;
-  }
-  return { liveCnt, playedCnt, leftCnt };
-}, [myExposure, playerState]);
-
+  // Play state: live = currently in a live game; played/left = slot counts (DGW: 1 played + 1 left per player possible)
+  const myPlayState = useMemo(() => {
+    let liveCnt = 0, playedCnt = 0, leftCnt = 0;
+    const exposure = myExposure || {};
+    for (const [idStr, mul] of Object.entries(exposure)) {
+      const m = Number(mul) || 0;        // 0 (bench), 1 (normal), 2 (C), 3 (TC)
+      if (m <= 0) continue;              // ignore bench
+      const pid = Number(idStr);
+      const p = byId.get(pid);
+      if (p?.seenLive) liveCnt += m;
+      playedCnt += m * (Number(p?.playedSlots) || 0);
+      leftCnt   += m * (Number(p?.leftSlots) || 0);
+    }
+    return { liveCnt, playedCnt, leftCnt };
+  }, [myExposure, byId]);
 
   // Sample counts (EO-weighted; average slots)
   const samplePlayState = useMemo(() => {
@@ -635,13 +693,13 @@ const myPlayState = useMemo(() => {
       if (!(pid >= 1)) continue;
       const frac = (Number(v) || 0) / 100;
       if (frac <= 0) continue;
-      const st = playerState.get(pid) || 'left';
-      if (st === 'live') liveCnt += frac;
-      else if (st === 'played') playedCnt += frac;
-      else leftCnt += frac;
+      const p = byId.get(pid);
+      if (p?.seenLive) liveCnt += frac;
+      playedCnt += frac * (Number(p?.playedSlots) || 0);
+      leftCnt   += frac * (Number(p?.leftSlots) || 0);
     }
     return { liveCnt, playedCnt, leftCnt };
-  }, [eoMap, playerState]);
+  }, [eoMap, byId]);
 
   /* ---------------------- UI ---------------------- */
   const styles = useMemo(() => StyleSheet.create({
@@ -806,7 +864,7 @@ const myPlayState = useMemo(() => {
       <View style={styles.toolbarWrapSticky}>
         <View style={styles.toolbar}>
           <View style={styles.toolbarRow}>
-            <Text style={styles.toolbarLabel}>Compare against:</Text>
+            <Text style={styles.toolbarLabel}>{t('threats.compareAgainst')}</Text>
             {SAMPLE_OPTIONS.map((opt) => {
               const active = sample === opt.value;
               return (
@@ -816,7 +874,7 @@ const myPlayState = useMemo(() => {
                   activeOpacity={0.8}
                   style={[styles.segment, active && styles.segmentActive]}
                 >
-                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{opt.label}</Text>
+                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{t(`templates.${opt.value === 'local' ? 'nearYou' : opt.value}`)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -825,7 +883,7 @@ const myPlayState = useMemo(() => {
             </TouchableOpacity>
           </View>
           {!!(sample === 'local' && /^missing:local/.test(eoErr)) && (
-            <Text style={{ color: P.muted, fontSize: 11, marginTop: 6 }}>{SAMPLE_COPY.local.needsSetup}</Text>
+            <Text style={{ color: P.muted, fontSize: 11, marginTop: 6 }}>{t('templates.needsSetup')}</Text>
           )}
         </View>
       </View>
@@ -833,42 +891,60 @@ const myPlayState = useMemo(() => {
   }
 
   function TopTabs() {
-    const tabs = [
-      { key: 'templates', label: 'Templates' },
-      { key: 'averages', label: 'Averages' },
-      { key: 'chips', label: 'Chip Usage' },
-      { key: 'captains', label: 'Captains' },
-    ];
     return (
       <View style={styles.tabsWrapSticky}>
-        <View style={styles.tabsRow}>
-          {tabs.map(t => {
-            const active = tab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                onPress={() => setTab(t.key)}
-                activeOpacity={0.85}
-                style={[styles.tabPill, active && styles.tabPillActive]}
-              >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
+        <Text style={[styles.sectionSub, { marginBottom: 4 }]}>{t('threats.selectStatHint')}</Text>
+        <TouchableOpacity
+          onPress={() => setSectionPickerOpen(true)}
+          activeOpacity={0.85}
+          style={[
+            styles.tabPill,
+            { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 12 },
+          ]}
+        >
+          <Text style={styles.tabText}>{sectionLabel(tab)}</Text>
+          <MaterialCommunityIcons name="chevron-down" size={20} color={P.muted} />
+        </TouchableOpacity>
+
+        <Modal visible={sectionPickerOpen} transparent animationType="fade">
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setSectionPickerOpen(false)}
+          >
+            <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+              <Text style={styles.modalTitle}>{t('templates.showStat')}</Text>
+              {ALL_SECTIONS.map((opt) => {
+                const isStatsSection = STATS_SECTIONS.some((s) => s.key === opt.key);
+                const isActive = isStatsSection ? false : tab === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.pickRow,
+                      isActive && { borderLeftWidth: 3, borderLeftColor: P.accent, paddingLeft: 13 },
+                    ]}
+                    onPress={() => {
+                      setSectionPickerOpen(false);
+                      if (isStatsSection) {
+                        navigation.navigate('Stats', { initialSection: opt.key });
+                      } else {
+                        setTab(opt.key);
+                      }
+                    }}
+                  >
+                    <Text style={{ color: P.ink, fontWeight: isActive ? '900' : '600' }}>
+                      {sectionLabel(opt.key)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <TouchableOpacity style={styles.closeBtn} onPress={() => setSectionPickerOpen(false)}>
+                <Text style={styles.closeBtnText}>{t('common.cancel')}</Text>
               </TouchableOpacity>
-            );
-          })}
-        </View>
-        <View style={styles.tabsRow}>
-            <TouchableOpacity
-              onPress={() => navigation.navigate('Battle')}
-              activeOpacity={0.85}
-              style={[styles.tabPill]}
-            >
-              <Text
-                style={[styles.tabText]}
-              >
-                Differentials/Threats/Live Battle
-              </Text>
-            </TouchableOpacity>
-          </View>
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </View>
     );
   }
@@ -888,36 +964,36 @@ const myPlayState = useMemo(() => {
     return (
       <View style={styles.card}>
         <View style={styles.avgHeader}>
-          <Text style={styles.avgTitle}>Averages</Text>
+          <Text style={styles.avgTitle}>{t('templates.averages')}</Text>
         </View>
 
         <View>
           <View style={styles.avgHeadRow}>
             <Text style={styles.avgThLabel}></Text>
-            <Text style={styles.avgTh}>You</Text>
+            <Text style={styles.avgTh}>{t('templates.you')}</Text>
             <Text style={styles.avgTh}>{avgSampleLabel}</Text>
           </View>
 
           <View style={styles.avgGridRow}>
-            <Text style={styles.avgTdLabel}>Average Score</Text>
+            <Text style={styles.avgTdLabel}>{t('templates.averageScore')}</Text>
             <Text style={styles.avgTd}>{averages.you.score.toFixed(2)}</Text>
             <Text style={styles.avgTd}>{adjustedSampleScore.toFixed(2)}</Text>
           </View>
 
           <View style={styles.avgGridRow}>
-            <Text style={styles.avgTdLabel}>Live</Text>
+            <Text style={styles.avgTdLabel}>{t('templates.live')}</Text>
             <Text style={styles.avgTd}>{myPlayState.liveCnt}</Text>
             <Text style={styles.avgTd}>{samplePlayState.liveCnt.toFixed(1)}</Text>
           </View>
 
           <View style={styles.avgGridRow}>
-            <Text style={styles.avgTdLabel}>Played</Text>
+            <Text style={styles.avgTdLabel}>{t('templates.played')}</Text>
             <Text style={styles.avgTd}>{myPlayState.playedCnt}</Text>
             <Text style={styles.avgTd}>{samplePlayState.playedCnt.toFixed(1)}</Text>
           </View>
 
           <View style={styles.avgGridRow}>
-            <Text style={styles.avgTdLabel}>Left</Text>
+            <Text style={styles.avgTdLabel}>{t('templates.left')}</Text>
             <Text style={styles.avgTd}>{myPlayState.leftCnt}</Text>
             <Text style={styles.avgTd}>{samplePlayState.leftCnt.toFixed(1)}</Text>
           </View>
@@ -996,7 +1072,7 @@ const myPlayState = useMemo(() => {
     return (
       <View style={styles.xiCard}>
         <SectionTitle icon="soccer-field">Highest EO Players in {relShort}</SectionTitle>
-        <Text style={styles.sectionSub}>Gain/Loss % shows your delta vs sample. Your owned players are highlighted.</Text>
+        <Text style={styles.sectionSub}>{t('templates.gainLossSub')}</Text>
 
         <View style={styles.xiRow}>
           {xi.gk.map(p => <XiTile key={`gk-${p.id}`} r={p} />)}
@@ -1018,16 +1094,16 @@ const myPlayState = useMemo(() => {
 
   /* ---------------------- Chip Usage & Captains (with pickers + bars) ---------------------- */
   const capPickLabel = useMemo(() => {
-    if (!localsMeta?.locals?.length) return 'Choose sample';
+    if (!localsMeta?.locals?.length) return t('templates.chooseSample');
     if (!capPickKey) {
-      if (sample === 'elite') return 'Elite';
-      if (sample === 'top10k') return 'Top 10K';
-      if (sample === 'local')  return 'Near You';
-      return 'Choose sample';
+      if (sample === 'elite') return t('templates.elite');
+      if (sample === 'top10k') return t('templates.top10k');
+      if (sample === 'local')  return t('templates.nearYou');
+      return t('templates.chooseSample');
     }
-    if (capPickKey === 'elite') return 'Elite';
-    if (capPickKey === 'top10k') return 'Top 10K';
-    if (capPickKey.startsWith('local:')) return 'Near You';
+    if (capPickKey === 'elite') return t('templates.elite');
+    if (capPickKey === 'top10k') return t('templates.top10k');
+    if (capPickKey.startsWith('local:')) return t('templates.nearYou');
     const chosen = (() => {
       const L = localsMeta.locals;
       const key = capPickKey;
@@ -1040,20 +1116,20 @@ const myPlayState = useMemo(() => {
       }
       return null;
     })();
-    return chosen?.name || 'Choose sample';
-  }, [localsMeta, capPickKey, sample]);
+    return chosen?.name || t('templates.chooseSample');
+  }, [localsMeta, capPickKey, sample, t]);
 
   const chipPickLabel = useMemo(() => {
-    if (!localsMeta?.locals?.length) return 'Choose sample';
+    if (!localsMeta?.locals?.length) return t('templates.chooseSample');
     if (!chipPickKey) {
-      if (sample === 'elite') return 'Elite';
-      if (sample === 'top10k') return 'Top 10K';
-      if (sample === 'local')  return 'Near You';
-      return 'Choose sample';
+      if (sample === 'elite') return t('templates.elite');
+      if (sample === 'top10k') return t('templates.top10k');
+      if (sample === 'local')  return t('templates.nearYou');
+      return t('templates.chooseSample');
     }
-    if (chipPickKey === 'elite') return 'Elite';
-    if (chipPickKey === 'top10k') return 'Top 10K';
-    if (chipPickKey.startsWith('local:')) return 'Near You';
+    if (chipPickKey === 'elite') return t('templates.elite');
+    if (chipPickKey === 'top10k') return t('templates.top10k');
+    if (chipPickKey.startsWith('local:')) return t('templates.nearYou');
     const chosen = (() => {
       const L = localsMeta.locals;
       const key = chipPickKey;
@@ -1066,16 +1142,16 @@ const myPlayState = useMemo(() => {
       }
       return null;
     })();
-    return chosen?.name || 'Choose sample';
-  }, [localsMeta, chipPickKey, sample]);
+    return chosen?.name || t('templates.chooseSample');
+  }, [localsMeta, chipPickKey, sample, t]);
 
   function ChipUsageCard() {
     const labelFrom = (k) => {
-      if (!k) return sample === 'elite' ? 'Elite' : sample === 'top10k' ? 'Top 10k' : 'Near You';
-      if (k === 'elite') return 'Elite';
-      if (k === 'top10k') return 'Top 10k';
-      if (k.startsWith('local:')) return 'Near You';
-      return 'Sample';
+      if (!k) return sample === 'elite' ? t('templates.elite') : sample === 'top10k' ? t('templates.top10k') : t('templates.nearYou');
+      if (k === 'elite') return t('templates.elite');
+      if (k === 'top10k') return t('templates.top10k');
+      if (k.startsWith('local:')) return t('templates.nearYou');
+      return t('templates.sample');
     };
 
     const chosenChip = useMemo(() => {
@@ -1120,42 +1196,42 @@ const myPlayState = useMemo(() => {
     return (
       <View style={styles.card}>
         <View style={styles.avgHeader}>
-          <Text style={styles.avgTitle}>Chip Usage</Text>
+          <Text style={styles.avgTitle}>{t('templates.chipUsage')}</Text>
           <TouchableOpacity style={styles.changeBtn} onPress={() => setChipPickerOpen(true)} activeOpacity={0.8}>
             <MaterialCommunityIcons name="account-switch-outline" size={16} color={P.ink} />
             <Text style={styles.changeBtnText}>{chipPickLabel}</Text>
           </TouchableOpacity>
         </View>
 
-        <SectionTitle icon="poker-chip" sub={`This GW · Sample: ${chipPickLabel}`}>This GW</SectionTitle>
+        <SectionTitle icon="poker-chip" sub={t('templates.thisGwSample', { sample: chipPickLabel })}>{t('templates.thisGw')}</SectionTitle>
         {Object.keys(chipWeek).length
-          ? Object.entries(chipWeek).map(([k, v]) => row(chipLabel(k), v, `wk-${k}`))
-          : <Text style={styles.muted}>No data.</Text>}
+          ? Object.entries(chipWeek).map(([k, v]) => row(chipLabel(k, t), v, `wk-${k}`))
+          : <Text style={styles.muted}>{t('templates.noData')}</Text>}
 
         <View style={{ height: 10 }} />
 
-       <SectionTitle icon="poker-chip" sub={`Season to date · Sample: ${chipPickLabel}`}>Season</SectionTitle>
+       <SectionTitle icon="poker-chip" sub={t('templates.seasonSample', { sample: chipPickLabel })}>{t('templates.season')}</SectionTitle>
         {Object.keys(chipOverall).length
-          ? Object.entries(chipOverall).map(([k, v]) => row(chipLabel(k), v, `ov-${k}`))
-          : <Text style={styles.muted}>No data.</Text>}
+          ? Object.entries(chipOverall).map(([k, v]) => row(chipLabel(k, t), v, `ov-${k}`))
+          : <Text style={styles.muted}>{t('templates.noData')}</Text>}
 
         {/* Chip picker modal */}
         <Modal visible={chipPickerOpen} transparent animationType="fade" onRequestClose={() => setChipPickerOpen(false)}>
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Choose a sample</Text>
+              <Text style={styles.modalTitle}>{t('templates.chooseSample')}</Text>
 
               <TouchableOpacity style={styles.pickRow} onPress={() => { setChipPickKey('elite'); setChipPickerOpen(false); }}>
-                <Text style={{ color: P.ink, fontWeight: '800' }}>Elite</Text>
+                <Text style={{ color: P.ink, fontWeight: '800' }}>{t('templates.elite')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.pickRow} onPress={() => { setChipPickKey('top10k'); setChipPickerOpen(false); }}>
-                <Text style={{ color: P.ink, fontWeight: '800' }}>Top 10K</Text>
+                <Text style={{ color: P.ink, fontWeight: '800' }}>{t('templates.top10k')}</Text>
               </TouchableOpacity>
 
               {localGroupNum != null && (
                 <TouchableOpacity style={styles.pickRow} onPress={() => { setChipPickKey(`local:${localGroupNum}`); setChipPickerOpen(false); }}>
-                  <Text style={{ color: P.ink, fontWeight: '800' }}>Near You</Text>
+                  <Text style={{ color: P.ink, fontWeight: '800' }}>{t('templates.nearYou')}</Text>
                 </TouchableOpacity>
               )}
 
@@ -1172,7 +1248,7 @@ const myPlayState = useMemo(() => {
               </ScrollView>
 
               <TouchableOpacity style={styles.closeBtn} onPress={() => setChipPickerOpen(false)} activeOpacity={0.8}>
-                <Text style={styles.closeBtnText}>Close</Text>
+                <Text style={styles.closeBtnText}>{t('common.close')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1223,52 +1299,52 @@ const myPlayState = useMemo(() => {
     );
 
     const labelFrom = (k) => {
-      if (!k) return sample === 'elite' ? 'Elite' : sample === 'top10k' ? 'Top 10k' : 'Near You';
-      if (k === 'elite') return 'Elite';
-      if (k === 'top10k') return 'Top 10k';
-      if (k.startsWith('local:')) return 'Near You';
-      return 'Sample';
+      if (!k) return sample === 'elite' ? t('templates.elite') : sample === 'top10k' ? t('templates.top10k') : t('templates.nearYou');
+      if (k === 'elite') return t('templates.elite');
+      if (k === 'top10k') return t('templates.top10k');
+      if (k.startsWith('local:')) return t('templates.nearYou');
+      return t('templates.sample');
     };
 
     return (
       <View style={styles.card}>
         <View style={styles.avgHeader}>
-          <Text style={styles.avgTitle}>Captains</Text>
+          <Text style={styles.avgTitle}>{t('templates.captains')}</Text>
           <TouchableOpacity style={styles.changeBtn} onPress={() => setCapPickerOpen(true)} activeOpacity={0.8}>
             <MaterialCommunityIcons name="account-switch-outline" size={16} color={P.ink} />
             <Text style={styles.changeBtnText}>{capPickLabel}</Text>
           </TouchableOpacity>
         </View>
 
-        <SectionTitle icon="crown-outline" sub={`This GW · Sample: ${capPickLabel}`}>Captain Choices</SectionTitle>
+        <SectionTitle icon="crown-outline" sub={t('templates.captainChoicesSample', { sample: capPickLabel })}>{t('templates.captainChoices')}</SectionTitle>
         <ScrollView style={{ maxHeight: S(240) }}>
-          {capRows.length ? capRows.map((r, i) => row(r, `cap-${r.id}-${i}`)) : <Text style={styles.muted}>No data.</Text>}
+          {capRows.length ? capRows.map((r, i) => row(r, `cap-${r.id}-${i}`)) : <Text style={styles.muted}>{t('templates.noData')}</Text>}
         </ScrollView>
 
         <View style={{ height: 10 }} />
 
-        <SectionTitle icon="alpha-t-box-outline" sub={`This GW · Sample: ${capPickLabel}`}>Triple Captains</SectionTitle>
+        <SectionTitle icon="alpha-t-box-outline" sub={t('templates.tripleCaptainsSample', { sample: capPickLabel })}>{t('templates.tripleCaptains')}</SectionTitle>
         <ScrollView style={{ maxHeight: S(200) }}>
-          {tcRows.length ? tcRows.map((r, i) => row(r, `tc-${r.id}-${i}`)) : <Text style={styles.muted}>No data.</Text>}
+          {tcRows.length ? tcRows.map((r, i) => row(r, `tc-${r.id}-${i}`)) : <Text style={styles.muted}>{t('templates.noData')}</Text>}
         </ScrollView>
 
         {/* Captains picker modal */}
         <Modal visible={capPickerOpen} transparent animationType="fade" onRequestClose={() => setCapPickerOpen(false)}>
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Choose a sample</Text>
+              <Text style={styles.modalTitle}>{t('templates.chooseSample')}</Text>
 
               <TouchableOpacity style={styles.pickRow} onPress={() => { setCapPickKey('elite'); setCapPickerOpen(false); }}>
-                <Text style={{ color: P.ink, fontWeight: '800' }}>Elite</Text>
+                <Text style={{ color: P.ink, fontWeight: '800' }}>{t('templates.elite')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.pickRow} onPress={() => { setCapPickKey('top10k'); setCapPickerOpen(false); }}>
-                <Text style={{ color: P.ink, fontWeight: '800' }}>Top 10K</Text>
+                <Text style={{ color: P.ink, fontWeight: '800' }}>{t('templates.top10k')}</Text>
               </TouchableOpacity>
 
               {localGroupNum != null && (
                 <TouchableOpacity style={styles.pickRow} onPress={() => { setCapPickKey(`local:${localGroupNum}`); setCapPickerOpen(false); }}>
-                  <Text style={{ color: P.ink, fontWeight: '800' }}>Near You</Text>
+                  <Text style={{ color: P.ink, fontWeight: '800' }}>{t('templates.nearYou')}</Text>
                 </TouchableOpacity>
               )}
 
@@ -1285,7 +1361,7 @@ const myPlayState = useMemo(() => {
               </ScrollView>
 
               <TouchableOpacity style={styles.closeBtn} onPress={() => setCapPickerOpen(false)} activeOpacity={0.8}>
-                <Text style={styles.closeBtnText}>Close</Text>
+                <Text style={styles.closeBtnText}>{t('common.close')}</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -14,6 +14,7 @@ import {
   Platform,
   UIManager,
 } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import useCachedJson from './useCachedJson';
 import { useColors } from './theme';
@@ -91,10 +92,10 @@ function LetterCircle({ label='A', size=S(12), bg='transparent', fg='white', str
 }
 
 /* ---------- Event & expected-stat pills ---------- */
-function EventsPills({ h, C, position }) {
+function EventsPills({ h, C, position, t: tFn }) {
   if (!h) return null;
   const mins = Number(h.minutes || 0);
-  if (mins === 0) return <Text style={{ color: C.muted, fontStyle:'italic', fontSize:S(12) }}>Didn’t play</Text>;
+  if (mins === 0) return <Text style={{ color: C.muted, fontStyle:'italic', fontSize:S(12) }}>{tFn ? tFn('playerInfo.didntPlay') : "Didn't play"}</Text>;
 
   const darkBlue = (() => {
     const baseHex = String(C.bg || C.card || '#000').replace('#','');
@@ -194,6 +195,7 @@ export default function PlayerInfoModal({
   position,
   getTeamShort,
 }) {
+  const { t } = useTranslation();
   const C = useColors();
   const [activeTab, setActiveTab] = useState('results'); // 'results' | 'fixtures'
   const [expanded, setExpanded] = useState(new Set());
@@ -362,7 +364,7 @@ export default function PlayerInfoModal({
               { color: activeTab === 'results' ? C.text : C.ink, fontWeight: activeTab === 'results' ? '800' : '700' },
             ]}
           >
-            Results
+            {t('playerInfo.results')}
           </Text>
           {activeTab === 'results' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
         </TouchableOpacity>
@@ -381,7 +383,7 @@ export default function PlayerInfoModal({
               { color: activeTab === 'fixtures' ? C.text : C.ink, fontWeight: activeTab === 'fixtures' ? '800' : '700' },
             ]}
           >
-            Fixtures
+            {t('playerInfo.fixtures')}
           </Text>
           {activeTab === 'fixtures' && <View style={[styles.tabIndicator, { backgroundColor: C.primary }]} />}
         </TouchableOpacity>
@@ -399,7 +401,7 @@ export default function PlayerInfoModal({
           >
             <MaterialCommunityIcons name="chart-line" size={S(14)} color={showXG ? C.text : C.ink} />
             <Text style={{ marginLeft: S(6), color: showXG ? C.text : C.ink, fontWeight: '700', fontSize: S(12) }}>
-              {showXG ? 'xG on' : 'xG off'}
+              {showXG ? t('playerInfo.xgOn') : t('playerInfo.xgOff')}
             </Text>
           </TouchableOpacity>
         ) : null}
@@ -427,7 +429,7 @@ export default function PlayerInfoModal({
                   </Text>
                 </View>
               </View>
-              <TouchableOpacity onPress={onClose} hitSlop={{ top:10, left:10, right:10, bottom:10 }} accessibilityLabel="Close">
+              <TouchableOpacity onPress={onClose} hitSlop={{ top:10, left:10, right:10, bottom:10 }} accessibilityLabel={t('common.close')}>
                 <MaterialCommunityIcons name="close" size={S(22)} color={C.text} />
               </TouchableOpacity>
             </View>
@@ -435,12 +437,12 @@ export default function PlayerInfoModal({
             {status === 'loading' ? (
               <View style={styles.center}>
                 <ActivityIndicator color={C.text} />
-                <Text style={{ color:C.ink, marginTop:S(6), fontSize:S(12) }}>Loading…</Text>
+                <Text style={{ color:C.ink, marginTop:S(6), fontSize:S(12) }}>{t('playerInfo.loading')}</Text>
               </View>
             ) : status === 'error' ? (
               <View style={styles.center}>
                 <MaterialCommunityIcons name="cloud-alert" size={S(30)} color={C.ink} />
-                <Text style={{ color:C.ink, marginTop:S(6), fontSize:S(12) }}>Couldn’t load latest. Showing cache if available.</Text>
+                <Text style={{ color:C.ink, marginTop:S(6), fontSize:S(12) }}>{t('playerInfo.couldntLoad')}</Text>
                 {!!error && <Text style={{ color:C.ink, marginTop:S(4), fontSize:S(11) }}>{String(error)}</Text>}
               </View>
             ) : (
@@ -449,7 +451,7 @@ export default function PlayerInfoModal({
 
                 {activeTab === 'results' ? (
                   <View>
-                    <TableHeader C={C} cols={['GW','Opponent','Result','Points','More']} />
+                    <TableHeader C={C} cols={[t('playerInfo.gw'), t('playerInfo.opponent'), t('playerInfo.result'), t('playerInfo.points'), t('playerInfo.more')]} />
                     <ScrollView style={{ maxHeight:listMaxH }} nestedScrollEnabled showsVerticalScrollIndicator>
                       {historyAll.map((h, idx) => {
                         const oppId = h.opponent_team;
@@ -494,7 +496,7 @@ export default function PlayerInfoModal({
 
                             {isOpen ? (
                               <View style={{ paddingHorizontal:S(10), paddingBottom:S(10), gap:S(6) }}>
-                                <EventsPills h={h} C={C} position={position} />
+                                <EventsPills h={h} C={C} position={position} t={t} />
                                 {showXG ? <ExpectedPills h={h} C={C} /> : null}
                               </View>
                             ) : null}
@@ -505,7 +507,7 @@ export default function PlayerInfoModal({
                   </View>
                 ) : (
                   <View>
-                    <TableHeader C={C} cols={['GW','Opponent','Kickoff']} />
+                    <TableHeader C={C} cols={[t('playerInfo.gw'), t('playerInfo.opponent'), t('playerInfo.kickoff')]} />
                     <ScrollView style={{ maxHeight:listMaxH }} nestedScrollEnabled showsVerticalScrollIndicator>
                       {fixturesAll.map((f, idx) => {
                         const home = !!f.is_home;

@@ -11,6 +11,7 @@
 // - AsyncStorage cache (fast + offline) with TTL
 
 import { useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { Linking } from 'react-native';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ThemedTextInput from './ThemedTextInput';
@@ -28,6 +29,7 @@ import {
   Image,
   Keyboard,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import FontAwesome from 'react-native-vector-icons/FontAwesome';
@@ -44,8 +46,10 @@ Text.defaultProps.allowFontScaling = false;
 const BOTTOM_INSET = 40;
 
 const WATCHLIST_KEY = 'pricesWatchlist';
+const PLANNER_SNAPSHOT_URL = (id) => `https://livefpl-api-489391001748.europe-west4.run.app/LH_api2/planner/snapshot?id=${id}`;
 const EO_CUTOFF = 0.1; // percent ownership threshold
 const MAYBE_THRESHOLD = 0.95;
+const PROGRESS_FALL_THRESHOLD = 0; // predictor: show sell hint if progress < this (i.e. any negative = toward a fall)
 
 const EO_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -214,6 +218,24 @@ function usePricesData() {
   const [eoMap, setEoMap] = useState(new Map());
   const [watchlist, setWatchlist] = useState(new Set());
   const [myTeamIds, setMyTeamIds] = useState(new Set());
+  const [boughtValuesMap, setBoughtValuesMap] = useState({}); // { [elementId]: buyPriceTenths } from planner snapshot
+
+  const loadPlannerSnapshot = useCallback(async () => {
+    try {
+      const fplId = await AsyncStorage.getItem('fplId');
+      if (!fplId) {
+        setBoughtValuesMap({});
+        return;
+      }
+      const res = await fetch(PLANNER_SNAPSHOT_URL(fplId), { headers: { 'cache-control': 'no-cache' } });
+      if (!res.ok) throw new Error('Snapshot failed');
+      const snap = await res.json();
+      const bought = snap?.data?.bought_values || snap?.bought_values || {};
+      setBoughtValuesMap(typeof bought === 'object' ? bought : {});
+    } catch {
+      setBoughtValuesMap({});
+    }
+  }, []);
 
   useEffect(() => {
     const id = setInterval(() => setCountdown(computeCountdownToNext0130UTC()), 1000);
@@ -337,19 +359,22 @@ function usePricesData() {
       try {
         await loadNearEOMap();
       } catch {}
+      try {
+        await loadPlannerSnapshot();
+      } catch {}
     })();
-  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache, loadNearEOMap]);
+  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache, loadNearEOMap, loadPlannerSnapshot]);
 
   const handleRefresh = useCallback(async () => {
     try {
       setRefreshing(true);
-      await Promise.all([fetchPrices(), loadWatchlist(), loadMyTeamFromRankCache(), loadNearEOMap()]);
+      await Promise.all([fetchPrices(), loadWatchlist(), loadMyTeamFromRankCache(), loadNearEOMap(), loadPlannerSnapshot()]);
     } finally {
       setRefreshing(false);
     }
-  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache, loadNearEOMap]);
+  }, [fetchPrices, loadWatchlist, loadMyTeamFromRankCache, loadNearEOMap, loadPlannerSnapshot]);
 
-  return { players, refreshing, handleRefresh, countdown, onlyAbove1Pct, setOnlyAbove1Pct, eoMap, watchlist, toggleWatch, myTeamIds };
+  return { players, refreshing, handleRefresh, countdown, onlyAbove1Pct, setOnlyAbove1Pct, eoMap, watchlist, toggleWatch, myTeamIds, boughtValuesMap };
 }
 
 /* ───────── UI building blocks ───────── */
@@ -413,12 +438,13 @@ const makeCardStyles = (C, isDark) =>
   });
 
 const StatusPill = ({ bucket, styles, isDark }) => {
+  const { t } = useTranslation('translation');
   const label =
     bucket === 'tonight_up' || bucket === 'tonight_down'
-      ? 'Tonight'
+      ? t('prices.tonight')
       : bucket === 'tomorrow_up' || bucket === 'tomorrow_down'
-        ? 'Tomorrow'
-        : '>2d';
+        ? t('prices.tomorrow')
+        : t('prices.moreThan2d');
 
   const pillStyle =
     bucket === 'tonight_up'
@@ -521,7 +547,8 @@ const tableRowS = (C, isDark) =>
     starHit: { padding: 4 },
   });
 
-const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
+const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark, myTeamIds, boughtValuesMap }) => {
+  const { t } = useTranslation('translation');
   const s = useMemo(() => tableRowS(C, isDark), [C, isDark]);
 
   const prog = Number(player.progress) || 0;
@@ -530,12 +557,24 @@ const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
   const barColor = isUp ? 'lightgreen' : '#ff325a';
   const pctColor = isUp ? (isDark ? '#86efac' : '#166534') : (isDark ? '#fecaca' : '#991b1b');
 
+  const isOwned = myTeamIds && myTeamIds.has(Number(player.id));
+  const buyTenths = boughtValuesMap != null ? (boughtValuesMap[player.id] ?? boughtValuesMap[String(player.id)]) : null;
+  const cost = Number(player.cost) ?? 0;
+  const sellHintData = isOwned && prog < PROGRESS_FALL_THRESHOLD && buyTenths != null && cost > 0
+    ? getSellNoteForFaller(cost, cost - 0.1, buyTenths)
+    : null;
+  const sellHint = sellHintData != null
+    ? (sellHintData.affects ? t('prices.dropAffectsSellPrice') : t('prices.dropWontAffectSellPrice'))
+    : null;
+  const affectsColor = isDark ? '#fbbf24' : '#b45309';
+  const noAffectColor = isDark ? '#94a3b8' : '#64748b';
+
   const bucket = getPredictionBucket(player.progress_tonight, player.per_hour);
   const tag = (() => {
-    if (bucket === 'tonight_up') return { label: 'Tonight', style: s.tagTonightUp, arrow: assetImages.up };
-    if (bucket === 'tonight_down') return { label: 'Tonight', style: s.tagTonightDown, arrow: assetImages.down };
-    if (bucket === 'tomorrow_up' || bucket === 'tomorrow_down') return { label: 'Tomorrow', style: s.tagTomorrow, arrow: null };
-    return { label: '>2d', style: s.tagLater, arrow: null };
+    if (bucket === 'tonight_up') return { label: t('prices.tonight'), style: s.tagTonightUp, arrow: assetImages.up };
+    if (bucket === 'tonight_down') return { label: t('prices.tonight'), style: s.tagTonightDown, arrow: assetImages.down };
+    if (bucket === 'tomorrow_up' || bucket === 'tomorrow_down') return { label: t('prices.tomorrow'), style: s.tagTomorrow, arrow: null };
+    return { label: t('prices.moreThan2d'), style: s.tagLater, arrow: null };
   })();
   const tagTextColor = isDark ? '#e6eefc' : '#0f172a';
 
@@ -544,9 +583,29 @@ const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
       <View style={s.cellInfo}>
         <ClubCrest id={player.team_code} style={s.crest} resizeMode="contain" />
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={s.name} numberOfLines={1}>
-            {player.name}
-          </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, minWidth: 0 }}>
+            <Text style={[s.name, { flexShrink: 1 }]} numberOfLines={1}>
+              {player.name}
+            </Text>
+            {sellHint != null && (
+              <TouchableOpacity
+                onPress={(e) => {
+                  e?.stopPropagation?.();
+                  Alert.alert(t('prices.sellingPrice'), sellHint);
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                style={{ padding: 2, flexShrink: 0 }}
+                accessibilityRole="button"
+                accessibilityLabel={sellHint}
+              >
+                <FontAwesome
+                  name="info-circle"
+                  size={14}
+                  color={sellHintData?.affects ? affectsColor : noAffectColor}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
           <Text style={s.meta} numberOfLines={1}>
             {player.type} · £{player.cost.toFixed(1)} · {player.team}
           </Text>
@@ -577,7 +636,7 @@ const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
           hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           style={s.starHit}
           accessibilityRole="button"
-          accessibilityLabel={starred ? 'Remove from Watchlist' : 'Add to Watchlist'}
+          accessibilityLabel={starred ? t('prices.removeFromWatchlist') : t('prices.addToWatchlist')}
         >
           <FontAwesome name={starred ? 'star' : 'star-o'} size={18} color={starred ? '#facc15' : isDark ? '#94a3b8' : '#64748b'} />
         </TouchableOpacity>
@@ -587,6 +646,7 @@ const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
 };
 
 const CompactCard = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
+  const { t } = useTranslation('translation');
   const s = useMemo(() => makeCardStyles(C, isDark), [C, isDark]);
   return (
     <TouchableOpacity onPress={onOpen} activeOpacity={0.9} style={s.row}>
@@ -608,7 +668,7 @@ const CompactCard = ({ player, starred, onToggleStar, onOpen, C, isDark }) => {
               hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
               style={s.starBtn}
               accessibilityRole="button"
-              accessibilityLabel={starred ? 'Remove from Watchlist' : 'Add to Watchlist'}
+              accessibilityLabel={starred ? t('prices.removeFromWatchlist') : t('prices.addToWatchlist')}
             >
               <FontAwesome name={starred ? 'star' : 'star-o'} size={16} color={starred ? '#facc15' : isDark ? '#94a3b8' : '#64748b'} />
             </TouchableOpacity>
@@ -707,12 +767,14 @@ const FilterPill = ({ label, active, onPress, C, isDark }) => (
 );
 
 /* Search with suggestions — half width */
-const SearchBarWithSuggestions = ({ query, onChange, suggestions, onPick, C, isDark }) => (
+const SearchBarWithSuggestions = ({ query, onChange, suggestions, onPick, C, isDark }) => {
+  const { t } = useTranslation('translation');
+  return (
   <View style={{ width: '40%' }}>
     <ThemedTextInput
       value={query}
       onChangeText={onChange}
-      placeholder="Search players"
+      placeholder={t('prices.searchPlayers')}
       placeholderTextColor={C.placeholder || (isDark ? '#93a4bf' : '#94a3b8')}
       style={{
         height: 40,
@@ -764,7 +826,8 @@ const SearchBarWithSuggestions = ({ query, onChange, suggestions, onPick, C, isD
       </View>
     )}
   </View>
-);
+  );
+};
 
 /* ───────── Clean Details Modal (unchanged) ───────── */
 const sheetS = StyleSheet.create({
@@ -868,18 +931,19 @@ const sheetS = StyleSheet.create({
 
 const pct = (n) => `${(Number(n || 0) * 100).toFixed(2)}%`;
 
-const bucketMeta = (bucket) => {
-  if (bucket === 'tonight_up') return { title: 'Likely Rise', sub: 'Tonight', icon: assetImages.up };
-  if (bucket === 'tonight_down') return { title: 'Likely Fall', sub: 'Tonight', icon: assetImages.down };
-  if (bucket === 'tomorrow_up') return { title: 'Potential Rise', sub: 'Tomorrow', icon: assetImages.up };
-  if (bucket === 'tomorrow_down') return { title: 'Potential Fall', sub: 'Tomorrow', icon: assetImages.down };
-  return { title: 'Not Imminent', sub: '> 2 days', icon: null };
+const bucketMeta = (bucket, t) => {
+  if (bucket === 'tonight_up') return { title: t('prices.likelyRise'), sub: t('prices.tonight'), icon: assetImages.up };
+  if (bucket === 'tonight_down') return { title: t('prices.likelyFall'), sub: t('prices.tonight'), icon: assetImages.down };
+  if (bucket === 'tomorrow_up') return { title: t('prices.potentialRise'), sub: t('prices.tomorrow'), icon: assetImages.up };
+  if (bucket === 'tomorrow_down') return { title: t('prices.potentialFall'), sub: t('prices.tomorrow'), icon: assetImages.down };
+  return { title: t('prices.notImminent'), sub: t('prices.moreThan2d'), icon: null };
 };
 
 const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C, isDark }) => {
+  const { t } = useTranslation('translation');
   if (!player) return null;
   const bucket = getPredictionBucket(player.progress_tonight, player.per_hour);
-  const meta = bucketMeta(bucket);
+  const meta = bucketMeta(bucket, t);
 
   const bg = isDark ? '#0b1224' : '#ffffff';
   const br = isDark ? '#1e2638' : '#e2e8f0';
@@ -932,10 +996,10 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
                 style={[sheetS.actionBtn, { borderColor: br, backgroundColor: isDark ? '#0b1224' : '#ffffff' }]}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
-                accessibilityLabel={starred ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                accessibilityLabel={starred ? t('prices.removeFromWatchlist') : t('prices.addToWatchlist')}
               >
                 <FontAwesome name={starred ? 'star' : 'star-o'} size={16} color={starred ? '#facc15' : isDark ? '#94a3b8' : '#64748b'} />
-                <Text style={[sheetS.actionTxt, { color: ink }]}>{starred ? 'Watching' : 'Watch'}</Text>
+                <Text style={[sheetS.actionTxt, { color: ink }]}>{starred ? t('prices.watching') : t('prices.watch')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity onPress={onClose} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -954,14 +1018,14 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
             </View>
 
             <View style={chipStyle(isDark ? '#0b1224' : '#ffffff', br)}>
-              <Text style={[sheetS.chipTxt, { color: muted }]}>Trend</Text>
+              <Text style={[sheetS.chipTxt, { color: muted }]}>{t('prices.trend')}</Text>
               <Text style={[sheetS.chipTxt, { color: ink }]}>{pct(perHr)}/h</Text>
             </View>
           </View>
 
           <View style={sheetS.section}>
             <View style={sheetS.sectionHead}>
-              <Text style={[sheetS.headTxt, { color: ink }]}>Progress (Now)</Text>
+              <Text style={[sheetS.headTxt, { color: ink }]}>{t('prices.progressNow')}</Text>
               <Text style={[sheetS.headSub, { color: valueNowCol }]}>{pct(progNow)}</Text>
             </View>
             <View style={[sheetS.track, { backgroundColor: barBg, borderColor: barBr }]}>
@@ -971,11 +1035,11 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
 
             <View style={sheetS.statRow}>
               <View style={[sheetS.statBox, { borderColor: br, backgroundColor: isDark ? '#0f172a' : '#f8fafc' }]}>
-                <Text style={[sheetS.statLabel, { color: muted }]}>Direction</Text>
-                <Text style={[sheetS.statValue, { color: ink }]}>{trendIsUp ? 'Upwards' : 'Downwards'}</Text>
+                <Text style={[sheetS.statLabel, { color: muted }]}>{t('prices.direction')}</Text>
+                <Text style={[sheetS.statValue, { color: ink }]}>{trendIsUp ? t('prices.upwards') : t('prices.downwards')}</Text>
               </View>
               <View style={[sheetS.statBox, { borderColor: br, backgroundColor: isDark ? '#0f172a' : '#f8fafc' }]}>
-                <Text style={[sheetS.statLabel, { color: muted }]}>Distance to Threshold</Text>
+                <Text style={[sheetS.statLabel, { color: muted }]}>{t('prices.distanceToThreshold')}</Text>
                 <Text style={[sheetS.statValue, { color: ink }]}>{`${(100 - nowFill).toFixed(0)}%`}</Text>
               </View>
             </View>
@@ -983,7 +1047,7 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
 
           <View style={[sheetS.section, { paddingTop: 2 }]}>
             <View style={sheetS.sectionHead}>
-              <Text style={[sheetS.headTxt, { color: ink }]}>Projection (at 01:30 UTC)</Text>
+              <Text style={[sheetS.headTxt, { color: ink }]}>{t('prices.projectionAt0130')}</Text>
               <Text style={[sheetS.headSub, { color: valueTonightCol }]}>{pct(progTonight)}</Text>
             </View>
             <View style={[sheetS.track, { backgroundColor: barBg, borderColor: barBr }]}>
@@ -993,7 +1057,7 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
           </View>
 
           <View style={[sheetS.footerRow, { borderTopWidth: 1, borderColor: br }]}>
-            <Text style={{ color: muted, fontSize: 11 }}>100% ≈ price change threshold. Green = likely rise, red = likely fall.</Text>
+            <Text style={{ color: muted, fontSize: 11 }}>{t('prices.priceChangeThresholdHint')}</Text>
           </View>
         </View>
       </View>
@@ -1002,7 +1066,9 @@ const PriceDetailsModal = ({ visible, onClose, player, starred, onToggleStar, C,
 };
 
 /* ───────── Help Modal ───────── */
-const HelpModal = ({ visible, onClose, C, isDark }) => (
+const HelpModal = ({ visible, onClose, C, isDark }) => {
+  const { t } = useTranslation('translation');
+  return (
   <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
     <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
       <View
@@ -1015,25 +1081,27 @@ const HelpModal = ({ visible, onClose, C, isDark }) => (
           borderColor: isDark ? '#1e2638' : '#e2e8f0',
         }}
       >
-        <Text style={{ color: isDark ? '#e6eefc' : '#0f172a', fontWeight: '900', fontSize: 16, marginBottom: 8 }}>How it works</Text>
+        <Text style={{ color: isDark ? '#e6eefc' : '#0f172a', fontWeight: '900', fontSize: 16, marginBottom: 8 }}>{t('prices.howItWorks')}</Text>
         <Text style={{ color: isDark ? '#cbd5e1' : '#334155', marginBottom: 8 }}>
-          • Predictions are based on transfer trends. Moves usually process around <Text style={{ fontWeight: '800' }}>01:30 UTC</Text>.
+          • {t('prices.helpBullet1')}
         </Text>
-        <Text style={{ color: isDark ? '#cbd5e1' : '#334155', marginBottom: 8 }}>• 100% ≈ very close to a price change. Watchlist to track players.</Text>
-        <Text style={{ color: isDark ? '#cbd5e1' : '#334155' }}>• Use My Team (synced from Rank) to focus on your squad.</Text>
+        <Text style={{ color: isDark ? '#cbd5e1' : '#334155', marginBottom: 8 }}>• {t('prices.helpBullet2')}</Text>
+        <Text style={{ color: isDark ? '#cbd5e1' : '#334155' }}>• {t('prices.helpBullet3')}</Text>
 
         <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 16 }}>
           <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <Text style={{ color: C.accent || '#6366f1', fontWeight: '800' }}>Got it</Text>
+            <Text style={{ color: C.accent || '#6366f1', fontWeight: '800' }}>{t('prices.gotIt')}</Text>
           </TouchableOpacity>
         </View>
       </View>
     </View>
   </Modal>
-);
+  );
+};
 
 /* ───────── Predictions tabs (All / Watchlist / My Team) ───────── */
 const Tabs = ({ value, onChange, C, isDark }) => {
+  const { t } = useTranslation('translation');
   const Tab = ({ id, label }) => {
     const active = value === id;
     return (
@@ -1064,15 +1132,16 @@ const Tabs = ({ value, onChange, C, isDark }) => {
         overflow: 'hidden',
       }}
     >
-      <Tab id="overview" label="All Players" />
-      <Tab id="watchlist" label="Watchlist" />
-      <Tab id="myteam" label="My Team" />
+      <Tab id="overview" label={t('prices.allPlayers')} />
+      <Tab id="watchlist" label={t('prices.watchlist')} />
+      <Tab id="myteam" label={t('prices.myTeam')} />
     </View>
   );
 };
 
 /* ───────── New: Predictions vs Actual toggle ───────── */
 const TopModeToggle = ({ mode, onChange, C, isDark }) => {
+  const { t } = useTranslation('translation');
   const Btn = ({ id, label }) => {
     const active = mode === id;
     return (
@@ -1095,16 +1164,31 @@ const TopModeToggle = ({ mode, onChange, C, isDark }) => {
   };
   return (
     <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-      <Btn id="pred" label="Predictions" />
-      <Btn id="actual" label="Actual" />
+      <Btn id="pred" label={t('prices.predictions')} />
+      <Btn id="actual" label={t('prices.actual')} />
     </View>
   );
 };
 
 /* ───────── Summary Table (unchanged) ───────── */
-const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff = EO_CUTOFF }) => {
+const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff = EO_CUTOFF, myTeamIds, boughtValuesMap }) => {
+  const { t } = useTranslation('translation');
   const Row = ({ p, dir }) => {
     const d = dir || p._dir || 'up';
+    const progress = Number(p.progress) ?? 0;
+    const isOwned = myTeamIds && myTeamIds.has(Number(p.id));
+    const buyTenths = boughtValuesMap != null ? (boughtValuesMap[p.id] ?? boughtValuesMap[String(p.id)]) : null;
+    const cost = Number(p.cost) ?? 0;
+    const below50Fall = d === 'down' && progress < PROGRESS_FALL_THRESHOLD;
+    const sellHintData = isOwned && below50Fall && buyTenths != null && cost > 0
+      ? getSellNoteForFaller(cost, cost - 0.1, buyTenths)
+      : null;
+    const sellHint = sellHintData != null
+      ? (sellHintData.affects ? t('prices.dropAffectsSellPrice') : t('prices.dropWontAffectSellPrice'))
+      : null;
+    const affectsColor = isDark ? '#fbbf24' : '#b45309';
+    const noAffectColor = isDark ? '#94a3b8' : '#64748b';
+
     return (
       <TouchableOpacity
         onPress={() => onOpen(p)}
@@ -1119,10 +1203,30 @@ const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff
         }}
       >
         <ClubCrest id={p.team_code} style={{ width: 18, height: 18, marginRight: 8 }} resizeMode="contain" />
-        <Text style={{ flex: 1, color: isDark ? C.ink : '#0f172a' }} numberOfLines={1}>
-          {p.name}
-        </Text>
-        <Text style={{ marginRight: 8, color: isDark ? C.muted : '#64748b' }}>£{p.cost.toFixed(1)}</Text>
+        <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 0 }}>
+          <Text style={{ flex: 1, minWidth: 0, color: isDark ? C.ink : '#0f172a' }} numberOfLines={1}>
+            {p.name}
+          </Text>
+          {sellHint != null && (
+            <TouchableOpacity
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                Alert.alert(t('prices.sellingPrice'), sellHint);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={{ marginLeft: 2, marginRight: 6, flexShrink: 0 }}
+              accessibilityRole="button"
+              accessibilityLabel={sellHint}
+            >
+              <FontAwesome
+                name="info-circle"
+                size={14}
+                color={sellHintData?.affects ? affectsColor : noAffectColor}
+              />
+            </TouchableOpacity>
+          )}
+        </View>
+        <Text style={{ marginRight: 8, color: isDark ? C.muted : '#64748b', flexShrink: 0 }}>£{p.cost.toFixed(1)}</Text>
         <Image source={d === 'down' ? assetImages.down : assetImages.up} style={{ width: 12, height: 12 }} />
       </TouchableOpacity>
     );
@@ -1157,7 +1261,7 @@ const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff
     count > 0 ? (
       <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
         <View style={{ paddingVertical: 8, alignItems: 'center' }}>
-          <Text style={{ color: isDark ? C.ink : '#0f172a' }}>{open ? 'Hide low owned' : `Show low owned (${count})`}</Text>
+          <Text style={{ color: isDark ? C.ink : '#0f172a' }}>{open ? t('prices.hideLowOwned') : t('prices.showLowOwned', { count })}</Text>
         </View>
       </TouchableOpacity>
     ) : null;
@@ -1190,10 +1294,10 @@ const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff
 
   return (
     <View style={{ flexDirection: 'row', gap: 10 }}>
-      <Card title={`Predicted Rises tonight (${upSorted.length})`}>
+      <Card title={t('prices.predictedRisesTonight', { count: upSorted.length })}>
         {upSorted.length === 0 ? (
           <View style={{ padding: 10 }}>
-            <Text style={{ color: isDark ? C.muted : '#64748b' }}>None</Text>
+            <Text style={{ color: isDark ? C.muted : '#64748b' }}>{t('prices.none')}</Text>
           </View>
         ) : (
           upSorted.map((p) => <Row key={`up-${p._el}`} p={p} dir="up" />)
@@ -1203,23 +1307,23 @@ const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff
 
         <View style={{ paddingVertical: 6, paddingHorizontal: 10 }}>
           <Text style={{ fontWeight: '800', color: isDark ? C.ink : '#0f172a' }}>
-            Maybe (≥95%){maybeUp.length ? ` (${maybeUp.length})` : ''}
+            {t('prices.maybe95')}{maybeUp.length ? ` (${maybeUp.length})` : ''}
           </Text>
         </View>
 
         {maybeUp.length === 0 ? (
           <View style={{ padding: 10, paddingTop: 0 }}>
-            <Text style={{ color: isDark ? C.muted : '#64748b' }}>None</Text>
+            <Text style={{ color: isDark ? C.muted : '#64748b' }}>{t('prices.none')}</Text>
           </View>
         ) : (
           maybeUp.map((p) => <Row key={`maybe-up-${p._el}`} p={p} dir="up" />)
         )}
       </Card>
 
-      <Card title={`Predicted Falls tonight (${down.length})`}>
+      <Card title={t('prices.predictedFallsTonight', { count: down.length })}>
         {downShownMain.length === 0 ? (
           <View style={{ padding: 10 }}>
-            <Text style={{ color: isDark ? C.muted : '#64748b' }}>None Highly Owned</Text>
+            <Text style={{ color: isDark ? C.muted : '#64748b' }}>{t('prices.noneHighlyOwned')}</Text>
           </View>
         ) : (
           downShownMain.map((p) => <Row key={`down-s-${p._el}`} p={p} dir="down" />)
@@ -1233,13 +1337,13 @@ const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff
 
         <View style={{ paddingVertical: 6, paddingHorizontal: 10 }}>
           <Text style={{ fontWeight: '800', color: isDark ? C.ink : '#0f172a' }}>
-            Maybe (≥95%){maybeDown.length ? ` (${maybeDown.length})` : ''}
+            {t('prices.maybe95')}{maybeDown.length ? ` (${maybeDown.length})` : ''}
           </Text>
         </View>
 
         {maybeShownDown.length === 0 ? (
           <View style={{ padding: 10, paddingTop: 0 }}>
-            <Text style={{ color: isDark ? C.muted : '#64748b' }}>None Highly Owned</Text>
+            <Text style={{ color: isDark ? C.muted : '#64748b' }}>{t('prices.noneHighlyOwned')}</Text>
           </View>
         ) : (
           maybeShownDown.map((p) => <Row key={`maybe-down-s-${p._el}`} p={p} dir="down" />)
@@ -1278,10 +1382,11 @@ const ViewModeToggle = ({ mode, onChange, disabled, C, isDark, compact = false }
     );
   };
 
+  const { t } = useTranslation('translation');
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: compact ? 0 : 8, marginBottom: compact ? 0 : 4 }}>
-      <Base id="list" label="List view" />
-      <Base id="summary" label="Summary" />
+      <Base id="list" label={t('prices.listView')} />
+      <Base id="summary" label={t('prices.summary')} />
     </View>
   );
 };
@@ -1321,11 +1426,11 @@ function OverviewTab({
   sortDir,
   setSortDir,
 }) {
+  const { t } = useTranslation('translation');
   const { C, isDark } = ui;
   const { players, eoMap } = data;
   const { toggleWatch } = actions;
   const [open, setOpen] = useState(null);
-  const [showSort, setShowSort] = useState(false);
 
   const [posFilter, setPosFilter] = useState(null);
   const [teamFilter, setTeamFilter] = useState(null);
@@ -1338,19 +1443,8 @@ function OverviewTab({
     return players.filter((p) => p._nameFold.includes(q) || p._teamFold.includes(q) || p._typeFold.includes(q)).slice(0, 20);
   }, [players, searchQuery]);
 
-  const sortOptions = useMemo(
-    () => [
-      { label: 'Time (Tonight first)', value: { mode: 'time', dir: 'desc' } },
-      { label: 'Target — Rises first', value: { mode: 'target', dir: 'desc' } },
-      { label: 'Target — Falls first', value: { mode: 'target', dir: 'asc' } },
-    ],
-    []
-  );
-
-  const currentSortLabel = useMemo(() => {
-    if (sortMode === 'time') return 'Sort: Time';
-    return `Sort: ${sortDir === 'desc' ? 'Rises' : 'Falls'}`;
-  }, [sortMode, sortDir]);
+  const currentSortLabel = sortDir === 'desc' ? t('prices.risers') : t('prices.fallers');
+  const toggleSort = () => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'));
 
   const handleViewModeChange = (id) => {
     if (id === 'summary') {
@@ -1369,16 +1463,16 @@ function OverviewTab({
     withBuckets.forEach((p) => {
       if (p.type) set.add(String(p.type));
     });
-    return [{ label: 'All Positions', value: null }, ...Array.from(set).sort(posSort).map((t) => ({ label: t, value: t }))];
-  }, [withBuckets]);
+    return [{ label: t('prices.allPositions'), value: null }, ...Array.from(set).sort(posSort).map((pos) => ({ label: pos, value: pos }))];
+  }, [withBuckets, t]);
 
   const teamOptions = useMemo(() => {
     const set = new Set();
     withBuckets.forEach((p) => {
       if (p.team) set.add(String(p.team));
     });
-    return [{ label: 'All Clubs', value: null }, ...Array.from(set).sort().map((t) => ({ label: t, value: t }))];
-  }, [withBuckets]);
+    return [{ label: t('prices.allClubs'), value: null }, ...Array.from(set).sort().map((team) => ({ label: team, value: team }))];
+  }, [withBuckets, t]);
 
   const tonightUpAll = useMemo(() => withBuckets.filter((p) => p.bucket === 'tonight_up'), [withBuckets]);
   const tonightDownAll = useMemo(() => withBuckets.filter((p) => p.bucket === 'tonight_down'), [withBuckets]);
@@ -1467,7 +1561,7 @@ function OverviewTab({
         return (
           <>
             {viewMode === 'list' && (
-              <Btn onPress={() => setShowSort(true)}>
+              <Btn onPress={toggleSort}>
                 <Text style={{ fontWeight: '800', fontSize: 12, color: isDark ? C.ink : '#0f172a' }}>{currentSortLabel}</Text>
               </Btn>
             )}
@@ -1481,7 +1575,7 @@ function OverviewTab({
                     color: !!data.onlyAbove1Pct ? (C.accentOn || '#fff') : isDark ? C.ink : '#0f172a',
                   }}
                 >
-                  EO &gt;1%
+                  {t('prices.eoAbove1Pct')}
                 </Text>
               </Btn>
             )}
@@ -1489,7 +1583,7 @@ function OverviewTab({
             {viewMode !== 'list' && (
               <Btn onPress={() => setShowHelp(true)}>
                 <FontAwesome name="question-circle" size={14} color={isDark ? C.ink : '#0f172a'} />
-                <Text style={{ fontWeight: '800', fontSize: 12, color: isDark ? C.ink : '#0f172a' }}>Help</Text>
+                <Text style={{ fontWeight: '800', fontSize: 12, color: isDark ? C.ink : '#0f172a' }}>{t('prices.help')}</Text>
               </Btn>
             )}
           </>
@@ -1514,8 +1608,8 @@ function OverviewTab({
         isDark={isDark}
       />
       <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-start' }}>
-        <FilterPill label={posFilter ? String(posFilter) : 'All Positions'} active={!!posFilter} onPress={openPosPicker} C={C} isDark={isDark} />
-        <FilterPill label={teamFilter ? String(teamFilter) : 'All Clubs'} active={!!teamFilter} onPress={openTeamPicker} C={C} isDark={isDark} />
+        <FilterPill label={posFilter ? String(posFilter) : t('prices.allPositions')} active={!!posFilter} onPress={openPosPicker} C={C} isDark={isDark} />
+        <FilterPill label={teamFilter ? String(teamFilter) : t('prices.allClubs')} active={!!teamFilter} onPress={openTeamPicker} C={C} isDark={isDark} />
       </View>
     </View>
   );
@@ -1537,7 +1631,7 @@ function OverviewTab({
           refreshControl={<RefreshControl refreshing={data.refreshing} onRefresh={data.handleRefresh} />}
           alwaysBounceVertical
         >
-          <SummaryTable up={tonightUpAll} down={tonightDownAll} maybe={maybeTonightAll} onOpen={(p) => setOpen(p)} C={C} isDark={isDark} eoMap={eoMap} eoCutoff={EO_CUTOFF} />
+          <SummaryTable up={tonightUpAll} down={tonightDownAll} maybe={maybeTonightAll} onOpen={(p) => setOpen(p)} C={C} isDark={isDark} eoMap={eoMap} eoCutoff={EO_CUTOFF} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
         </ScrollView>
       ) : (
         <FlatList
@@ -1552,6 +1646,8 @@ function OverviewTab({
               onOpen={() => setOpen(item)}
               C={C}
               isDark={isDark}
+              myTeamIds={data.myTeamIds}
+              boughtValuesMap={data.boughtValuesMap}
             />
           )}
           contentContainerStyle={{ paddingBottom: BOTTOM_INSET }}
@@ -1570,30 +1666,18 @@ function OverviewTab({
         isDark={isDark}
       />
 
-      <MiniSelectModal visible={showPos} title="Filter by position" options={posOptions} selected={posFilter} onSelect={onSelectPos} onClose={() => setShowPos(false)} C={C} isDark={isDark} />
-      <MiniSelectModal visible={showTeam} title="Filter by team" options={teamOptions} selected={teamFilter} onSelect={onSelectTeam} onClose={() => setShowTeam(false)} C={C} isDark={isDark} />
+      <MiniSelectModal visible={showPos} title={t('prices.filterByPosition')} options={posOptions} selected={posFilter} onSelect={onSelectPos} onClose={() => setShowPos(false)} C={C} isDark={isDark} />
+      <MiniSelectModal visible={showTeam} title={t('prices.filterByTeam')} options={teamOptions} selected={teamFilter} onSelect={onSelectTeam} onClose={() => setShowTeam(false)} C={C} isDark={isDark} />
 
       <HelpModal visible={showHelp} onClose={() => setShowHelp(false)} C={C} isDark={isDark} />
 
-      <MiniSelectModal
-        visible={showSort}
-        title="Sort by"
-        options={sortOptions}
-        selected={`${sortMode}:${sortDir}`}
-        onSelect={(v) => {
-          if (v?.mode) setSortMode(v.mode);
-          if (v?.dir) setSortDir(v.dir);
-        }}
-        onClose={() => setShowSort(false)}
-        C={C}
-        isDark={isDark}
-      />
     </View>
   );
 }
 
 /* ───────── Watchlist tab (unchanged from your message) ───────── */
 function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchChange, goOverviewClearFilters, sortMode, sortDir }) {
+  const { t } = useTranslation('translation');
   const { C, isDark } = ui;
   const { players, watchlist } = data;
   const { toggleWatch } = actions;
@@ -1604,8 +1688,8 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
   const [showPos, setShowPos] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
 
-  const onChange = (t) => {
-    onSearchChange(t);
+  const onChange = (text) => {
+    onSearchChange(text);
   };
 
   const watched = useMemo(
@@ -1618,16 +1702,16 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
     watched.forEach((p) => {
       if (p.type) set.add(String(p.type));
     });
-    return [{ label: 'All Positions', value: null }, ...Array.from(set).sort(posSort).map((t) => ({ label: t, value: t }))];
-  }, [watched]);
+    return [{ label: t('prices.allPositions'), value: null }, ...Array.from(set).sort(posSort).map((pos) => ({ label: pos, value: pos }))];
+  }, [watched, t]);
 
   const teamOptions = useMemo(() => {
     const set = new Set();
     watched.forEach((p) => {
       if (p.team) set.add(String(p.team));
     });
-    return [{ label: 'All Clubs', value: null }, ...Array.from(set).sort().map((t) => ({ label: t, value: t }))];
-  }, [watched]);
+    return [{ label: t('prices.allClubs'), value: null }, ...Array.from(set).sort().map((team) => ({ label: team, value: team }))];
+  }, [watched, t]);
 
   const list = useMemo(() => {
     const q = fold(searchQuery.trim());
@@ -1653,14 +1737,14 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
         <SearchBarWithSuggestions query={searchQuery} onChange={onChange} suggestions={watched} onPick={handlePickSuggestion} C={C} isDark={isDark} />
         <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-start' }}>
-          <FilterPill label={posFilter ? String(posFilter) : 'All Positions'} active={!!posFilter} onPress={() => setShowPos(true)} C={C} isDark={isDark} />
-          <FilterPill label={teamFilter ? String(teamFilter) : 'All Clubs'} active={!!teamFilter} onPress={() => setShowTeam(true)} C={C} isDark={isDark} />
+          <FilterPill label={posFilter ? String(posFilter) : t('prices.allPositions')} active={!!posFilter} onPress={() => setShowPos(true)} C={C} isDark={isDark} />
+          <FilterPill label={teamFilter ? String(teamFilter) : t('prices.allClubs')} active={!!teamFilter} onPress={() => setShowTeam(true)} C={C} isDark={isDark} />
         </View>
       </View>
 
       {watched.length === 0 ? (
         <View style={{ alignItems: 'center', paddingVertical: 24 }}>
-          <Text style={{ color: isDark ? '#93a4bf' : '#64748b' }}>Star players to follow price moves.</Text>
+          <Text style={{ color: isDark ? '#93a4bf' : '#64748b' }}>{t('prices.starPlayersHint')}</Text>
         </View>
       ) : (
         <FlatList
@@ -1668,7 +1752,7 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
           data={list}
           keyExtractor={(item) => String(item._el)}
           renderItem={({ item }) => (
-            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} C={C} isDark={isDark} />
+            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} C={C} isDark={isDark} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
           )}
           contentContainerStyle={{ paddingBottom: BOTTOM_INSET }}
           keyboardShouldPersistTaps="handled"
@@ -1677,14 +1761,15 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
 
       <PriceDetailsModal visible={!!open} onClose={() => setOpen(null)} player={open} starred={open ? watchlist.has(open._pid) : false} onToggleStar={toggleWatch} C={C} isDark={isDark} />
 
-      <MiniSelectModal visible={showPos} title="Filter by position" options={posOptions} selected={posFilter} onSelect={setPosFilter} onClose={() => setShowPos(false)} C={C} isDark={isDark} />
-      <MiniSelectModal visible={showTeam} title="Filter by team" options={teamOptions} selected={teamFilter} onSelect={setTeamFilter} onClose={() => setShowTeam(false)} C={C} isDark={isDark} />
+      <MiniSelectModal visible={showPos} title={t('prices.filterByPosition')} options={posOptions} selected={posFilter} onSelect={setPosFilter} onClose={() => setShowPos(false)} C={C} isDark={isDark} />
+      <MiniSelectModal visible={showTeam} title={t('prices.filterByTeam')} options={teamOptions} selected={teamFilter} onSelect={setTeamFilter} onClose={() => setShowTeam(false)} C={C} isDark={isDark} />
     </View>
   );
 }
 
 /* ───────── My Team tab (unchanged from your message) ───────── */
 function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchChange, goOverviewClearFilters, sortMode, sortDir }) {
+  const { t } = useTranslation('translation');
   const { C, isDark } = ui;
   const { players, myTeamIds, watchlist } = data;
   const { toggleWatch } = actions;
@@ -1695,8 +1780,8 @@ function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchCha
   const [showPos, setShowPos] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
 
-  const onChange = (t) => {
-    onSearchChange(t);
+  const onChange = (text) => {
+    onSearchChange(text);
   };
 
   const mine = useMemo(
@@ -1709,16 +1794,16 @@ function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchCha
     mine.forEach((p) => {
       if (p.type) set.add(String(p.type));
     });
-    return [{ label: 'All Positions', value: null }, ...Array.from(set).sort(posSort).map((t) => ({ label: t, value: t }))];
-  }, [mine]);
+    return [{ label: t('prices.allPositions'), value: null }, ...Array.from(set).sort(posSort).map((pos) => ({ label: pos, value: pos }))];
+  }, [mine, t]);
 
   const teamOptions = useMemo(() => {
     const set = new Set();
     mine.forEach((p) => {
       if (p.team) set.add(String(p.team));
     });
-    return [{ label: 'All Clubs', value: null }, ...Array.from(set).sort().map((t) => ({ label: t, value: t }))];
-  }, [mine]);
+    return [{ label: t('prices.allClubs'), value: null }, ...Array.from(set).sort().map((team) => ({ label: team, value: team }))];
+  }, [mine, t]);
 
   const list = useMemo(() => {
     const q = fold(searchQuery.trim());
@@ -1744,8 +1829,8 @@ function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchCha
       <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
         <SearchBarWithSuggestions query={searchQuery} onChange={onChange} suggestions={mine} onPick={handlePickSuggestion} C={C} isDark={isDark} />
         <View style={{ flex: 1, flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'flex-start' }}>
-          <FilterPill label={posFilter ? String(posFilter) : 'All Positions'} active={!!posFilter} onPress={() => setShowPos(true)} C={C} isDark={isDark} />
-          <FilterPill label={teamFilter ? String(teamFilter) : 'All Clubs'} active={!!teamFilter} onPress={() => setShowTeam(true)} C={C} isDark={isDark} />
+          <FilterPill label={posFilter ? String(posFilter) : t('prices.allPositions')} active={!!posFilter} onPress={() => setShowPos(true)} C={C} isDark={isDark} />
+          <FilterPill label={teamFilter ? String(teamFilter) : t('prices.allClubs')} active={!!teamFilter} onPress={() => setShowTeam(true)} C={C} isDark={isDark} />
         </View>
       </View>
 
@@ -1759,7 +1844,7 @@ function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchCha
           data={list}
           keyExtractor={(item) => String(item._el)}
           renderItem={({ item }) => (
-            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} C={C} isDark={isDark} />
+            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} C={C} isDark={isDark} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
           )}
           contentContainerStyle={{ paddingBottom: BOTTOM_INSET }}
           keyboardShouldPersistTaps="handled"
@@ -1768,8 +1853,8 @@ function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchCha
 
       <PriceDetailsModal visible={!!open} onClose={() => setOpen(null)} player={open} starred={open ? watchlist.has(open._pid) : false} onToggleStar={toggleWatch} C={C} isDark={isDark} />
 
-      <MiniSelectModal visible={showPos} title="Filter by position" options={posOptions} selected={posFilter} onSelect={setPosFilter} onClose={() => setShowPos(false)} C={C} isDark={isDark} />
-      <MiniSelectModal visible={showTeam} title="Filter by team" options={teamOptions} selected={teamFilter} onSelect={setTeamFilter} onClose={() => setShowTeam(false)} C={C} isDark={isDark} />
+      <MiniSelectModal visible={showPos} title={t('prices.filterByPosition')} options={posOptions} selected={posFilter} onSelect={setPosFilter} onClose={() => setShowPos(false)} C={C} isDark={isDark} />
+      <MiniSelectModal visible={showTeam} title={t('prices.filterByTeam')} options={teamOptions} selected={teamFilter} onSelect={setTeamFilter} onClose={() => setShowTeam(false)} C={C} isDark={isDark} />
     </View>
   );
 }
@@ -1780,6 +1865,23 @@ const ACTUAL_CACHE_KEY = 'prices.actual.cache.v1';
 const ACTUAL_TTL_MS = 10 * 60 * 1000;
 
 const money = (x) => `£${Number(x ?? 0).toFixed(1)}`;
+
+// FPL rule: cost <= buy → drop affects. cost > buy and (cost−buy) even in tenths → affects. Odd → won't affect.
+const dropAffectsSellPrice = (cost, buyPriceTenths) => {
+  const buyT = Number(buyPriceTenths);
+  if (!buyT) return false;
+  const costT = Math.round(Number(cost) * 10);
+  const diffT = costT - buyT;
+  if (diffT <= 0) return true;
+  return diffT % 2 === 0;
+};
+
+// Returns { affects } for caller to translate and style (affects = drop affects selling price).
+const getSellNoteForFaller = (oldPrice, _newPrice, buyPriceTenths) => {
+  if (buyPriceTenths == null) return null;
+  const affects = dropAffectsSellPrice(oldPrice, buyPriceTenths);
+  return { affects };
+};
 
 const sortActualRows = (rows) => {
   return [...rows].sort((a, b) => {
@@ -1857,8 +1959,11 @@ const ActualRow = ({ item, C, isDark }) => {
   );
 };
 
-function ActualTab({ ui }) {
+function ActualTab({ ui, data }) {
+  const { t } = useTranslation('translation');
   const { C, isDark } = ui;
+  const myTeamIds = data?.myTeamIds ?? new Set();
+  const boughtValuesMap = data?.boughtValuesMap ?? {};
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1943,7 +2048,7 @@ function ActualTab({ ui }) {
     return (
       <View style={{ paddingVertical: 30, alignItems: 'center' }}>
         <ActivityIndicator />
-        <Text style={{ marginTop: 10, color: isDark ? C.whiteMd : '#64748b', fontWeight: '800' }}>Loading actual changes…</Text>
+        <Text style={{ marginTop: 10, color: isDark ? C.whiteMd : '#64748b', fontWeight: '800' }}>{t('prices.loadingActualChanges')}</Text>
       </View>
     );
   }
@@ -1956,7 +2061,7 @@ function ActualTab({ ui }) {
           <ThemedTextInput
             value={q}
             onChangeText={setQ}
-            placeholder="Search players or team"
+            placeholder={t('prices.searchPlayersOrTeam')}
             placeholderTextColor={C.placeholder || (isDark ? '#93a4bf' : '#94a3b8')}
             style={{
               height: 40,
@@ -1996,20 +2101,20 @@ function ActualTab({ ui }) {
 
       {/* Filters */}
       <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-        <SegBtn id="all" label="All" />
-        <SegBtn id="up" label="Risers" />
-        <SegBtn id="down" label="Fallers" />
+        <SegBtn id="all" label={t('prices.all')} />
+        <SegBtn id="up" label={t('prices.risers')} />
+        <SegBtn id="down" label={t('prices.fallers')} />
         <View style={{ flex: 1 }} />
         {!!payload?.generated_at && (
           <Text style={{ color: isDark ? C.muted : '#64748b', fontWeight: '700', fontSize: 11 }} numberOfLines={1}>
-            updated {String(payload.generated_at).slice(11, 16)}
+            {t('prices.updatedAt', { time: String(payload.generated_at).slice(11, 16) })}
           </Text>
         )}
       </View>
 
       {!!err && (
         <View style={{ padding: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(239,68,68,0.45)', backgroundColor: 'rgba(239,68,68,0.10)', marginBottom: 10 }}>
-          <Text style={{ color: isDark ? C.ink : '#0f172a', fontWeight: '900' }}>Couldn’t load actual changes</Text>
+          <Text style={{ color: isDark ? C.ink : '#0f172a', fontWeight: '900' }}>{t('prices.couldntLoadActual')}</Text>
           <Text style={{ color: isDark ? C.whiteMd : '#64748b', marginTop: 4 }}>{err}</Text>
         </View>
       )}
@@ -2019,9 +2124,9 @@ function ActualTab({ ui }) {
         {latest ? (
           <View style={{ marginBottom: 14 }}>
             <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
-              <Text style={{ color: isDark ? C.ink : '#0f172a', fontWeight: '900', fontSize: 15 }}>Latest: {latest.date}</Text>
+              <Text style={{ color: isDark ? C.ink : '#0f172a', fontWeight: '900', fontSize: 15 }}>{t('prices.latest', { date: latest.date })}</Text>
               <Text style={{ color: isDark ? C.muted : '#64748b', fontWeight: '800', fontSize: 11 }}>
-                {latest.rows.length} change{latest.rows.length === 1 ? '' : 's'}
+                {latest.rows.length === 1 ? t('prices.changeCountOne') : t('prices.changesCount', { count: latest.rows.length })}
               </Text>
             </View>
 
@@ -2031,12 +2136,12 @@ function ActualTab({ ui }) {
 
             {latest.rows.length > 10 && (
               <Text style={{ color: isDark ? C.muted : '#64748b', fontWeight: '800', marginTop: 4 }}>
-                +{latest.rows.length - 10} more in latest day
+                {t('prices.moreInLatestDay', { count: latest.rows.length - 10 })}
               </Text>
             )}
           </View>
         ) : (
-          <Text style={{ color: isDark ? C.whiteMd : '#64748b', fontWeight: '800' }}>No results.</Text>
+          <Text style={{ color: isDark ? C.whiteMd : '#64748b', fontWeight: '800' }}>{t('prices.noResults')}</Text>
         )}
 
         {/* History */}
@@ -2045,7 +2150,7 @@ function ActualTab({ ui }) {
             <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 8 }}>
               <Text style={{ color: isDark ? C.whiteHi : '#0f172a', fontWeight: '900' }}>{day.date}</Text>
               <Text style={{ color: isDark ? C.muted : '#64748b', fontWeight: '800', fontSize: 11 }}>
-  {day.rows.length} change{day.rows.length === 1 ? '' : 's'}
+  {day.rows.length === 1 ? t('prices.changeCountOne') : t('prices.changesCount', { count: day.rows.length })}
 </Text>
 
             </View>
@@ -2062,6 +2167,7 @@ function ActualTab({ ui }) {
 
 /* ───────── Main Screen ───────── */
 export default function PricesV2() {
+  const { t } = useTranslation('translation');
   const [sortMode, setSortMode] = useState('target'); // 'time' | 'target'
   const [sortDir, setSortDir] = useState('desc'); // 'desc' | 'asc'
 
@@ -2155,9 +2261,9 @@ export default function PricesV2() {
             }}
           >
             <Text style={{ color: isDark ? '#cbd5e1' : '#334155', fontSize: 12, textAlign: 'center' }}>
-              Prices tend to move at{' '}
-              <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>01:30 UTC</Text>. Next window in{' '}
-              <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>{data.countdown}</Text>. Transfer trends at{' '}
+              {t('prices.moveAt')}{' '}
+              <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>01:30 UTC</Text>. {t('prices.nextWindowIn')}{' '}
+              <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>{data.countdown}</Text>. {t('prices.transferTrendsAt')}{' '}
               <Text onPress={() => Linking.openURL('https://www.livefpl.net/prices')}>www.livefpl.net/prices</Text>
             </Text>
           </View>
@@ -2230,7 +2336,7 @@ export default function PricesV2() {
             </>
           ) : (
             <View style={{ flex: 1, paddingTop: 8 }}>
-              <ActualTab ui={{ C, isDark }} />
+              <ActualTab ui={{ C, isDark }} data={data} />
             </View>
           )}
         </View>

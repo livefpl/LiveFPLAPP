@@ -15,6 +15,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, CommonActions } from '@react-navigation/native';
 import { useFplId } from './FplIdContext';
+import { useTranslation } from 'react-i18next';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors, useTheme } from './theme';
 import ThemedTextInput from './ThemedTextInput';
@@ -53,12 +54,12 @@ const openUrl = (url) => {
 };
 
 /* -------------------- Compact Value/Hero -------------------- */
-function ValueProps({ C, styles }) {
+function ValueProps({ C, styles, t }) {
   return (
     <View style={styles.valueCard} accessibilityRole="summary">
       <View style={styles.valueHeaderRow}>
         <Text style={styles.valueHeading}>
-          The original, most-trusted FPL rank tool since 2018 ❤️
+          {t('changeId.valueHeading')}
         </Text>
       </View>
 
@@ -67,9 +68,9 @@ function ValueProps({ C, styles }) {
         activeOpacity={0.8}
         style={styles.learnMoreLink}
         accessibilityRole="link"
-        accessibilityLabel="Open the LiveFPL website"
+        accessibilityLabel={t('paywall.openLiveFPLWebsite')}
       >
-        <Text style={styles.learnMoreText}>Get the full experience on the website</Text>
+        <Text style={styles.learnMoreText}>{t('changeId.getFullExperience')}</Text>
         <MaterialCommunityIcons name="open-in-new" size={13} color={C.muted} />
       </TouchableOpacity>
     </View>
@@ -78,6 +79,7 @@ function ValueProps({ C, styles }) {
 
 /* -------------------- Screen -------------------- */
 export default function ChangeID() {
+  const { t } = useTranslation();
   const navigation = useNavigation();
   const { fplId, updateFplId } = useFplId();
   const { mode, setMode } = useTheme();   // global theme sync
@@ -134,11 +136,11 @@ export default function ChangeID() {
     }
 
     if (!trimmed) {
-      setError('Please enter your FPL ID.');
+      setError(t('changeId.pleaseEnterFplId'));
       return;
     }
     if (!/^\d+$/.test(trimmed)) {
-      setError('FPL ID must be numbers only (you can paste a full FPL link).');
+      setError(t('changeId.fplIdNumbersOnly'));
       return;
     }
 
@@ -153,7 +155,7 @@ export default function ChangeID() {
         })
       );
     } catch (e) {
-      setError('Failed to save your ID. Please try again.');
+      setError(t('changeId.failedToSaveId'));
     } finally {
       setSaving(false);
     }
@@ -164,7 +166,7 @@ export default function ChangeID() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
           <ActivityIndicator color={C.accent} />
-          <Text style={styles.muted}>Loading…</Text>
+          <Text style={styles.muted}>{t('changeId.loading')}</Text>
         </View>
       </SafeAreaView>
     );
@@ -185,7 +187,7 @@ export default function ChangeID() {
           keyboardShouldPersistTaps="handled"
         >
           {/* Value / Hero */}
-          <ValueProps C={C} styles={styles} />
+          <ValueProps C={C} styles={styles} t={t} />
 
           {/* Input Card */}
           <View style={styles.card}>

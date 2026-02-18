@@ -39,6 +39,7 @@ import SettingsModal from './SettingsModal';
 import { clubCrestUri, assetImages } from './clubs';
 import { smartFetch } from './signedFetch';
 import { useColors } from './theme';
+import { useTranslation } from 'react-i18next';
 import { captureRef } from 'react-native-view-shot';
 Text.defaultProps = Text.defaultProps || {};
 Text.defaultProps.allowFontScaling = false;
@@ -284,20 +285,20 @@ const Crest = ({ team, size = 28 }) => (
 );
 
 const EOMicro = ({ top10k = 0, local = 0, C }) => {
-  // raw values (unclamped) for display; clamped only for the bar width
+  const { t: tI18n } = useTranslation();
   const norm = (v) => {
     const raw = Number(v ?? 0);
-    const bar = Math.max(0, Math.min(100, raw));      // for width only
-    const txt = Number.isFinite(raw) ? raw : 0;        // for label
+    const bar = Math.max(0, Math.min(100, raw));
+    const txt = Number.isFinite(raw) ? raw : 0;
     return { bar, txt };
   };
 
-  const t = norm(top10k);
-  const l = norm(local);
+  const tVal = norm(top10k);
+  const lVal = norm(local);
 
   const rows = [
-    { label: 'Top10k', val: t },
-    { label: 'Near You', val: l },
+    { label: tI18n('rank.top10k'), val: tVal },
+    { label: tI18n('rank.nearYou'), val: lVal },
   ];
 
   return (
@@ -335,20 +336,17 @@ const EOMicro = ({ top10k = 0, local = 0, C }) => {
   );
 };
 
-// Map backend emoji codes to a friendly label
-const EMOJI_LABELS = {
-  d:  'Differential',
-  t:  'Template Pick',
-  s:  'Spy',
-  ds: 'Differential',
-  f:  'In form',
-  sub:'Autosubbed',
-  '': '',
-};
-
-// Given a code like 'ds' and the rendered icon, return label (fallback to code)
-const emojiInfo = (code = '') => {
-  const label = EMOJI_LABELS[String(code).toLowerCase()] || String(code).toUpperCase();
+const emojiInfo = (code = '', tFn) => {
+  const labels = tFn ? {
+    d: tFn('rank.differential'),
+    t: tFn('rank.templatePick'),
+    s: tFn('rank.spy'),
+    ds: tFn('rank.differential'),
+    f: tFn('rank.inForm'),
+    sub: tFn('rank.autosubbed'),
+    '': '',
+  } : { d: 'Differential', t: 'Template Pick', s: 'Spy', ds: 'Differential', f: 'In form', sub: 'Autosubbed', '': '' };
+  const label = labels[String(code).toLowerCase()] || String(code).toUpperCase();
   return { label };
 };
 
@@ -407,6 +405,12 @@ const SCALE_KEY = 'ui.rank.pitchScale';
 
 
 // ---------- Helpers that don't need styles ----------
+// DGW: "minutes Game 2" etc. → treat as same stat as "minutes" (sum across games)
+function normalizeExplainKey(key) {
+  const k = String(key ?? '').trim();
+  return k.replace(/\s+Game\s+\d+$/i, '').trim() || k;
+}
+
 function getEventCounts(pl) {
   const counts = {
     goals_scored: 0,
@@ -420,10 +424,14 @@ function getEventCounts(pl) {
     bonus: 0,
     defensive_contribution: 0,
     minutes: 0,
+    minutesGame2: 0, // DGW: only "minutes Game 2" for live display
   };
   (pl.stats || []).forEach(([raw, c]) => {
-    const key = String(raw).toLowerCase();
-    if (key in counts) counts[key] += Number(c) || 0;
+    const rawStr = String(raw ?? '');
+    const key = normalizeExplainKey(rawStr).toLowerCase();
+    const val = Number(c) || 0;
+    if (key in counts) counts[key] += val;
+    if (key === 'minutes' && rawStr.includes(' Game 2')) counts.minutesGame2 += val;
   });
   return counts;
 }
@@ -639,8 +647,9 @@ const atMax = pitchScale >= MAX_SCALE - EPS;
 
   const viewFplId = route?.params?.viewFplId;
   const { fplId, triggerRefetch } = useFplId();
- // Rank.js (inside component)
-const C = useColors();
+  const { t } = useTranslation();
+  // Rank.js (inside component)
+  const C = useColors();
 
 const [infoOpen, setInfoOpen] = useState(false);
 const [infoPlayer, setInfoPlayer] = useState({
@@ -669,8 +678,7 @@ const openPlayerInfo = (pOrId) => {
     p?.data?.web_name ??
     (id ? `Player #${id}` : '');
 
-  // Map your numeric positions to short labels (same logic you use in the header)
-  const posMap = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD', Bench: 'Bench' };
+  const posMap = { 1: t('rank.gk'), 2: t('rank.def'), 3: t('rank.mid'), 4: t('rank.fwd'), Bench: t('rank.bench') };
   const position =
     posMap[p?.position] ??
     p?.position_short ??
@@ -716,10 +724,10 @@ const openPlayerInfo = (pOrId) => {
         }}
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         accessibilityRole="button"
-        accessibilityLabel="Show pre-subs rank"
+        accessibilityLabel={t('rank.showPreSubsRank')}
       >
         <Text style={{ fontSize: 10, fontWeight: '700', color: !value ? 'white' : C.muted }}>
-          Pre
+          {t('rank.pre')}
         </Text>
       </TouchableOpacity>
 
@@ -733,10 +741,10 @@ const openPlayerInfo = (pOrId) => {
         }}
         hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
         accessibilityRole="button"
-        accessibilityLabel="Show post-subs rank"
+        accessibilityLabel={t('rank.showPostSubsRank')}
       >
         <Text style={{ fontSize: 10, fontWeight: '700', color: value ? 'white' : C.muted }}>
-          Post
+          {t('rank.post')}
         </Text>
       </TouchableOpacity>
     </View>
@@ -785,9 +793,9 @@ const PitchFeedToggle = ({ value, onChange }) => {
         backgroundColor: C.card,
       }}
     >
-      <Btn active={isPitch} label="Pitch" onPress={() => onChange('pitch')} />
-      <Btn active={isFeed} label="Feed" onPress={() => onChange('feed')} />
-      <Btn active={isHistory} label="History" onPress={() => onChange('history')} />
+      <Btn active={isPitch} label={t('rank.pitch')} onPress={() => onChange('pitch')} />
+      <Btn active={isFeed} label={t('rank.feed')} onPress={() => onChange('feed')} />
+      <Btn active={isHistory} label={t('rank.history')} onPress={() => onChange('history')} />
     </View>
   );
 };
@@ -1441,17 +1449,17 @@ case 'penalties_saved':
 
   // put near EventIcon / helpers
   const EONumbers = ({ top10k = 0, local = 0 }) => {
-    const t = Number(top10k) || 0;
-    const l = Number(local) || 0;
+    const topVal = Number(top10k) || 0;
+    const locVal = Number(local) || 0;
     return (
       <View style={styles.eoSection}>
         <View style={styles.eoLabelRow}>
-          <Text style={styles.eoLabel}>Top10k EO</Text>
-          <Text style={styles.eoValue}>{l.toFixed(2)}%</Text>
+          <Text style={styles.eoLabel}>{t('rank.top10kEo')}</Text>
+          <Text style={styles.eoValue}>{locVal.toFixed(2)}%</Text>
         </View>
         <View style={styles.eoLabelRow}>
-          <Text style={styles.eoLabel}>Local EO   </Text>
-          <Text style={styles.eoValue}>{t.toFixed(2)}%</Text>
+          <Text style={styles.eoLabel}>{t('rank.localEo')}</Text>
+          <Text style={styles.eoValue}>{topVal.toFixed(2)}%</Text>
         </View>
       </View>
     );
@@ -1469,7 +1477,7 @@ case 'penalties_saved':
   counts.penalties_missed +  
       counts.bonus +
      counts.defensive_contribution +
-    (isLive ? counts.minutes : 0);
+    (isLive ? (counts.minutesGame2 > 0 ? counts.minutesGame2 : counts.minutes) : 0);
 
     if (!sum) return null;
 
@@ -1479,7 +1487,9 @@ case 'penalties_saved':
         {isLive && (
   <>
     <View style={[styles.statusPill, styles.statusLive]}>
-      <Text style={styles.statusPillText}>{counts.minutes}'</Text>
+      <Text style={styles.statusPillText}>
+        {(counts.minutesGame2 > 0 ? counts.minutesGame2 : counts.minutes)}'
+      </Text>
     </View>
    
   </>
@@ -1545,6 +1555,9 @@ useEffect(() => {
     diffpercent: '',
     diffpercentsubs: '',
     diffpercentnosubs: '',
+    oldRank: 0,
+    diffPctSubsStr: '',
+    diffPctNosubsStr: '',
     arrowsubs: 'same',
     arrownosubs: 'same',
     gw: '',
@@ -1827,28 +1840,28 @@ const QuickActionsBar = () => (
         {
           key: 'share',
           icon: 'share-variant',
-          label: 'Share',
+          label: t('rank.share'),
           onPress: handleShare,
           disabled: false,
         },
         {
           key: 'out',
           icon: 'magnify-minus',
-          label: 'Zoom -',
+          label: t('rank.zoomMinus'),
           onPress: () => bumpScale(-STEP),
           disabled: atMin,
         },
         {
           key: 'in',
           icon: 'magnify-plus',
-          label: 'Zoom +',
+          label: t('rank.zoomPlus'),
           onPress: () => bumpScale(+STEP),
           disabled: atMax,
         },
         {
           key: 'trophies',
           icon: 'trophy-outline',
-          label: 'Trophies',
+          label: t('rank.trophies'),
           onPress: () => navigation.navigate('Trophies'),
           disabled: false,
         },
@@ -1965,9 +1978,9 @@ const Cell = ({ w, flexGrow, children, align = 'left', color = C.ink, bold = fal
           borderColor: C.border,
         }}
       >
-        <Text style={{ color: C.ink, fontWeight: '900' }}>History</Text>
+        <Text style={{ color: C.ink, fontWeight: '900' }}>{t('rank.history')}</Text>
         <Text style={{ color: C.muted, marginTop: 2, fontSize: 11 }}>
-          Overall Rank, GW Rank, change vs previous GW
+          {t('rank.historySubtitle')}
         </Text>
       </View>
 
@@ -1986,8 +1999,8 @@ const Cell = ({ w, flexGrow, children, align = 'left', color = C.ink, bold = fal
 <HeaderCell w={fixed.chip} align="center">Chip</HeaderCell>
 <HeaderCell w={fixed.arr} align="center"> </HeaderCell>
 
-<HeaderCell flexGrow={flex.or}  minW={78}>OR</HeaderCell>
-<HeaderCell flexGrow={flex.gwr} minW={92} align="right">GW Rank</HeaderCell>
+<HeaderCell flexGrow={flex.or}  minW={78}>{t('rank.or')}</HeaderCell>
+<HeaderCell flexGrow={flex.gwr} minW={92} align="right">{t('rank.gwRank')}</HeaderCell>
 <HeaderCell flexGrow={flex.chg} minW={74} align="right">Δ%</HeaderCell>
 
       </View>
@@ -2109,9 +2122,9 @@ const renderStatsListCompact = (stats = [], C) => {
     return (
       <View style={{ width: '100%' }}>
         <View style={styles.statsHeader}>
-          <Text style={[styles.headerText, { color: C.ink, flex: 3, textAlign: 'left' }]}>Event</Text>
-          <Text style={[styles.headerText, { color: C.ink, flex: 1, textAlign: 'center' }]}>Count</Text>
-          <Text style={[styles.headerText, { color: C.ink, flex: 1, textAlign: 'center' }]}>Points</Text>
+          <Text style={[styles.headerText, { color: C.ink, flex: 3, textAlign: 'left' }]}>{t('rank.event')}</Text>
+          <Text style={[styles.headerText, { color: C.ink, flex: 1, textAlign: 'center' }]}>{t('rank.count')}</Text>
+          <Text style={[styles.headerText, { color: C.ink, flex: 1, textAlign: 'center' }]}>{t('rank.points')}</Text>
         </View>
 
         {stats.map((item, index) => {
@@ -2403,21 +2416,21 @@ setOnePt(payload?.one_pt ?? payload?.onePt ?? payload?.one_pt_est ?? null);
       const safetyVal = Number(payload?.safety ?? 0);
 const difference = pointsfinal - safetyVal;
 const fmtDelta = (n) => (n > 0 ? `+${n}` : n < 0 ? `${n}` : '0');
-const subText = `Safety: ${safetyVal}  Δ:${fmtDelta(difference)}`;
+const subText = t('rank.safetyDelta', { safety: safetyVal, delta: fmtDelta(difference) });
 
 
       const safeDiv = (n, d) => (d ? (n * 100) / d : 0);
       const diffrank = -(displayRank ?? 0) + (payload?.old_rank ?? 0);
       const diffpercent = safeDiv(diffrank, payload?.old_rank ?? 0).toFixed(2);
-      const diffpercentText = `Old: ${(payload?.old_rank ?? 0).toLocaleString()} (${Number(diffpercent) > 0 ? '+' : ''}${diffpercent}%)`;
+      const diffpercentText = t('rank.oldRankPct', { rank: (payload?.old_rank ?? 0).toLocaleString(), pct: `${Number(diffpercent) > 0 ? '+' : ''}${diffpercent}` });
 
       const diffranksubs = -(payload?.post_rank ?? 0) + (payload?.old_rank ?? 0);
       const diffpercentsubs = safeDiv(diffranksubs, payload?.old_rank ?? 0).toFixed(2);
-      const diffpercentsubsText = `Old: ${(payload?.old_rank ?? 0).toLocaleString()} (${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}%)`;
+      const diffpercentsubsText = t('rank.oldRankPct', { rank: (payload?.old_rank ?? 0).toLocaleString(), pct: `${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}` });
 
       const diffranknosubs = -(payload?.pre_rank ?? 0) + (payload?.old_rank ?? 0);
       const diffpercentnosubs = safeDiv(diffranknosubs, payload?.old_rank ?? 0).toFixed(2);
-      const diffpercentnosubsText = `Old: ${(payload?.old_rank ?? 0).toLocaleString()} (${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}%)`;
+      const diffpercentnosubsText = t('rank.oldRankPct', { rank: (payload?.old_rank ?? 0).toLocaleString(), pct: `${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}` });
 
       const arrowsubs =
         (payload?.post_rank ?? 0) > (payload?.old_rank ?? 0)
@@ -2483,6 +2496,9 @@ const subText = `Safety: ${safetyVal}  Δ:${fmtDelta(difference)}`;
         Ranknosubs: payload?.pre_rank,
         diffpercentsubs: diffpercentsubsText,
         diffpercentnosubs: diffpercentnosubsText,
+        oldRank: payload?.old_rank ?? 0,
+        diffPctSubsStr: `${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}`,
+        diffPctNosubsStr: `${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}`,
         arrowsubs,
         arrownosubs,
         GWrank: payload?.GWrank,
@@ -2683,7 +2699,7 @@ const handleShare = useCallback(async () => {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: C.bg }} edges={['left', 'right']}>
-      <AppHeader title="Rank" />
+      <AppHeader title={t('rank.title')} />
 
       <ScrollView
         minimumZoomScale={1}
@@ -2706,17 +2722,17 @@ const handleShare = useCallback(async () => {
                   style={styles.modalClose}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   accessibilityRole="button"
-                  accessibilityLabel="Close rename"
+                  accessibilityLabel={t('rank.closeRename')}
                 >
                   <MaterialCommunityIcons name="close" size={20} color={C.ink} />
                 </TouchableOpacity>
 
-                <Text style={[styles.modalTitle, { color: C.ink }]}>Edit manager name</Text>
+                <Text style={[styles.modalTitle, { color: C.ink }]}>{t('rank.editManagerName')}</Text>
 
                 <ThemedTextInput
                   value={editNameText}
                   onChangeText={setEditNameText}
-                  placeholder="Manager name"
+                  placeholder={t('rank.managerNamePlaceholder')}
                   placeholderTextColor={C.placeholder || (isDark ? '#93a4bf' : '#94a3b8')}
                   style={styles.input}
                   autoFocus
@@ -2822,27 +2838,27 @@ const handleShare = useCallback(async () => {
               {
                 key: 'share',
                 icon: 'share-variant',
-                label: 'Share',
+                label: t('rank.share'),
                 onPress: () => { setQuickOpen(false); handleShare(); },
               },
               {
                 key: 'out',
                 icon: 'magnify-minus',
-                label: 'Zoom -',
+                label: t('rank.zoomMinus'),
                 disabled: atMin,
                 onPress: () => bumpScale(-STEP),
               },
               {
                 key: 'in',
                 icon: 'magnify-plus',
-                label: 'Zoom +',
+                label: t('rank.zoomPlus'),
                 disabled: atMax,
                 onPress: () => bumpScale(+STEP),
               },
               {
                 key: 'trophies',
                 icon: 'trophy-outline',
-                label: 'Trophies',
+                label: t('rank.trophies'),
                 onPress: () => { setQuickOpen(false); navigation.navigate('Trophies'); },
               },
             ].map((b) => (
@@ -2905,37 +2921,36 @@ const handleShare = useCallback(async () => {
             showsVerticalScrollIndicator={false}
           >
             <View style={{ gap: 10 }}>
-              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800' }}>Safety</Text>
+              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800' }}>{t('rank.safetyHelpTitle')}</Text>
               <Text style={{ color: C.ink }}>
-                <Text style={{ fontWeight: '700' }}>Safety</Text> is the points needed to get a green arrow at your rank.
+                {t('rank.safetyHelpBody')}
                 
               </Text>
 
-              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>Pre vs Post</Text>
+              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>{t('rank.preVsPost')}</Text>
               <Text style={{ color: C.ink }}>
-                <Text style={{ fontWeight: '700' }}>Pre</Text> shows your live rank <Text style={{ fontWeight:'700' }}>excluding</Text> autosubs.{"\n"}
-                <Text style={{ fontWeight: '700' }}>Post</Text> shows your live rank <Text style={{ fontWeight:'700' }}>including</Text> autosubs.
+                {t('rank.preHelpBody')}{'\n'}
+                {t('rank.postHelpBody')}
               </Text>
 
-              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>EO (Effective Ownership)</Text>
+              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>{t('rank.eoHelpTitle')}</Text>
               <Text style={{ color: C.ink }}>
-                EO is the percentage of managers (in a group like Top10k or Near You) who effectively own the player, accounting for captaincy and triple captaincy. Higher EO means less potential gain from that player’s points.
+                {t('rank.eoHelpBody')}
               </Text>
 
-              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>Player details</Text>
+              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>{t('rank.playerDetailsHelpTitle')}</Text>
               <Text style={{ color: C.ink }}>
-                Tap a player to see their points breakdown and how much they impacted your rank. From there, use{" "}
-                <Text style={{ fontWeight:'700' }}>Compare</Text> to open their season stats.
+                {t('rank.playerDetailsHelpBody')}
               </Text>
 
-              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>Trophies</Text>
+              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>{t('rank.trophiesHelpTitle')}</Text>
               <Text style={{ color: C.ink }}>
-                Tap the trophy to see how many achievements you unlocked this gameweek.
+                {t('rank.trophiesHelpBody')}
               </Text>
 
-              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>More insights</Text>
+              <Text style={{ color: C.ink, fontSize: 14, fontWeight: '800', marginTop: 6 }}>{t('rank.moreInsightsTitle')}</Text>
 <Text style={{ color: C.ink }}>
-  Full details—per-player rank change, your template vs differential spread, team ratings, and clone counts—are available at{' '}
+  {t('rank.moreInsightsBody')}{' '}
   <Text
     style={{ color: C.accent, textDecorationLine: 'underline', fontWeight: '800' }}
     accessibilityRole="link"
@@ -2980,7 +2995,7 @@ const handleShare = useCallback(async () => {
                 </Text>
                 <Text numberOfLines={1} style={styles.modalSub}>
                   {(() => {
-                    const posMap = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD', Bench: 'Bench' };
+                    const posMap = { 1: t('rank.gk'), 2: t('rank.def'), 3: t('rank.mid'), 4: t('rank.fwd'), Bench: t('rank.bench') };
                     const pos = posMap[selectedPlayer?.position] || '—';
                     return `${pos}`;
                   })()}
@@ -2997,10 +3012,10 @@ const handleShare = useCallback(async () => {
       }}
       style={styles.ghostBtn}
       accessibilityRole="button"
-      accessibilityLabel="Compare this player in Planner"
+      accessibilityLabel={t('rank.compareInPlanner')}
     >
       <MaterialCommunityIcons name="scale-balance" size={18} color={C.ink} />
-      <Text style={styles.ghostBtnText}>Compare</Text>
+      <Text style={styles.ghostBtnText}>{t('rank.compare')}</Text>
     </TouchableOpacity>
   )}
   <TouchableOpacity
@@ -3011,10 +3026,10 @@ const handleShare = useCallback(async () => {
     style={[styles.ghostBtn, { marginLeft: 4 }]}
     hitSlop={{ top: 8, left: 8, right: 8, bottom: 8 }}
     accessibilityRole="button"
-    accessibilityLabel="Open player info"
+    accessibilityLabel={t('rank.openPlayerInfo')}
   >
     <MaterialCommunityIcons name="information-outline" size={18} color={C.ink} />
-    <Text style={styles.ghostBtnText}>Info</Text>
+    <Text style={styles.ghostBtnText}>{t('playerInfo.info')}</Text>
   </TouchableOpacity>
 
   <TouchableOpacity
@@ -3022,7 +3037,7 @@ const handleShare = useCallback(async () => {
     style={styles.iconBtn}
     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
     accessibilityRole="button"
-    accessibilityLabel="Close player stats"
+    accessibilityLabel={t('rank.closePlayerStats')}
   >
     <MaterialCommunityIcons name="close" size={20} color={C.ink} />
   </TouchableOpacity>
@@ -3059,7 +3074,7 @@ const handleShare = useCallback(async () => {
             {gain > 0 ? '+' : ''}{gain.toFixed(1)}%
           </Text>
           <Text style={{ color: tone === 'neutral' ? C.muted : 'white', fontSize:12 }}>
-            Gain %
+            {t('playerInfo.gainPct')}
           </Text>
         </Chip>
       );
@@ -3067,7 +3082,7 @@ const handleShare = useCallback(async () => {
 
     {/* Emoji meaning (if any) */}
     {selectedPlayer.Emoji ? (() => {
-      const { label } = emojiInfo(selectedPlayer.emojiCode);
+      const { label } = emojiInfo(selectedPlayer.emojiCode, t);
       return (
         <Chip C={C} tone="neutral">
           <Text style={{ fontSize:16 }}>{selectedPlayer.Emoji}</Text>
@@ -3100,19 +3115,19 @@ const handleShare = useCallback(async () => {
 
           <View style={styles.container}>
             <InfoBanner
-              text="Full extended info available at"
+              text={t('rank.fullExtendedInfoAt')}
               link={`www.livefpl.net/${effectiveIdForLink ? effectiveIdForLink : ''}`}
             />
             <View style={{ width: '100%', paddingHorizontal: 12, marginBottom: 6, position: 'relative' }}>
 
               <StatsStrip
                 items={[
-                  { title: `GW${info.gw} Rank`, value: info.GWrank },
+                  { title: t('rank.gwRankTitle', { gw: info.gw }), value: info.GWrank },
                   {
                     title: (
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
                         <Text style={{ fontSize: 10, fontWeight: '700', color: C.muted, marginRight: 6 }}>
-                          Live Rank
+                          {t('rank.liveRank')}
                         </Text>
                         <SubsToggle
    value={displaySettings.includeSubs}
@@ -3122,7 +3137,7 @@ const handleShare = useCallback(async () => {
                     ),
                     value: displaySettings.includeSubs ? info.Ranksubs : info.Ranknosubs,
                     icon: assetImages[displaySettings.includeSubs ? info.arrowsubs : info.arrownosubs],
-                    sub: displaySettings.includeSubs ? info.diffpercentsubs : info.diffpercentnosubs,
+                    sub: t('rank.oldRankPct', { rank: (info.oldRank ?? 0).toLocaleString(), pct: displaySettings.includeSubs ? (info.diffPctSubsStr ?? '') : (info.diffPctNosubsStr ?? '') }),
                     flex: 1.3,
                   },
                   
@@ -3130,12 +3145,12 @@ const handleShare = useCallback(async () => {
    title: (
      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
        <Text style={{ fontSize: 10, fontWeight: '700', color: C.muted, marginRight: 6 }}>
-         Points
+         {t('rank.points')}
        </Text>
        <TouchableOpacity
          onPress={() => setHelpVisible(true)}
          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-         accessibilityLabel="Open help about points and safety"
+         accessibilityLabel={t('rank.openHelpPoints')}
        >
          <MaterialCommunityIcons name="help-circle-outline" size={16} color={C.ink} />
        </TouchableOpacity>
@@ -3147,7 +3162,7 @@ const handleShare = useCallback(async () => {
   .replace(/(\d)\s*\(\s*([+-]?\d+)\s*\)\s*$/, '$1 ($2)'), // normalize: "54(-4)" -> "54 (-4)"
 
 
-   sub: info.subsafety,
+   sub: t('rank.safetyDelta', { safety: info.Safety, delta: (info.Pointsfinal - info.Safety) > 0 ? '+' + (info.Pointsfinal - info.Safety) : (info.Pointsfinal - info.Safety) < 0 ? String(info.Pointsfinal - info.Safety) : '0' }),
  },
 
                 ]}
@@ -3184,7 +3199,7 @@ const handleShare = useCallback(async () => {
       onPress={() => { setEditNameText(displayManagerName || ''); setEditNameVisible(true); }}
       style={styles.shareTiny}
       hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-      accessibilityLabel="Edit manager name"
+      accessibilityLabel={t('rank.editManagerName')}
     >
       <MaterialCommunityIcons name="pencil" size={18} color={C.ink} />
     </TouchableOpacity>
@@ -3197,7 +3212,7 @@ const handleShare = useCallback(async () => {
   onPress={() => setsettingsModalVisible(true)}
   style={styles.shareTiny}
   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-  accessibilityLabel="Open settings"
+  accessibilityLabel={t('rank.openSettings')}
 >
   <MaterialCommunityIcons name="cog" size={18} color={C.ink} />
 </TouchableOpacity>
@@ -3206,7 +3221,7 @@ const handleShare = useCallback(async () => {
   disabled={refreshing || loading}
   style={[styles.shareTiny, (refreshing || loading) && { opacity: 0.35 }]}
   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-  accessibilityLabel="Refresh rank data"
+  accessibilityLabel={t('rank.refreshRankData')}
 >
   <MaterialCommunityIcons name="refresh" size={18} color={C.ink} />
 </TouchableOpacity>
@@ -3215,7 +3230,7 @@ const handleShare = useCallback(async () => {
   onPress={() => setQuickBarOpen((v) => !v)}
   style={styles.shareTiny}
   hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-  accessibilityLabel="Open quick actions"
+  accessibilityLabel={t('rank.openQuickActions')}
 >
   <MaterialCommunityIcons name={quickBarOpen ? 'minus' : 'plus'} size={18} color={C.ink} />
 </TouchableOpacity>
@@ -3309,11 +3324,11 @@ const handleShare = useCallback(async () => {
     activeOpacity={0.85}
     style={[styles.trophyPill, { borderColor: C.border, backgroundColor: C.card2, display:'none'}]}
     accessibilityRole="button"
-    accessibilityLabel="Open Trophies"
+    accessibilityLabel={t('rank.openTrophies')}
   >
     <MaterialCommunityIcons name="trophy-outline" size={16} color={C.ink} />
     <Text style={{ fontSize: 8, fontWeight: '600', color: C.ink }}>
-      {achCounts ? `${achCounts.earned}/${achCounts.total}` : 'Trophies'}
+      {achCounts ? `${achCounts.earned}/${achCounts.total}` : t('rank.trophies')}
     </Text>
   </TouchableOpacity>
 
@@ -3330,10 +3345,10 @@ const handleShare = useCallback(async () => {
         ]}
       >
         <Text numberOfLines={1} allowFontScaling={false} style={[styles.EO1, styles.eoLegendCell]}>
-          Top10k
+          {t('rank.top10k')}
         </Text>
         <Text numberOfLines={1} allowFontScaling={false} style={[styles.EO2, styles.eoLegendCell]}>
-          Near U
+          {t('rank.nearYou')}
         </Text>
       </View>
     </View>
@@ -3458,15 +3473,15 @@ const handleShare = useCallback(async () => {
               <View style={{ width: '100%', paddingHorizontal: 12, marginBottom: 6 }}>
                 <StatsStrip
                   items={[
-                    { title: `GW${info.gw} Rank`, value: info.GWrank },
+                    { title: t('rank.gwRankTitle', { gw: info.gw }), value: info.GWrank },
                     {
-                      title: 'Live Rank',
+                      title: t('rank.liveRank'),
                       value: displaySettings.includeSubs ? info.Ranksubs : info.Ranknosubs,
                       icon: assetImages[displaySettings.includeSubs ? info.arrowsubs : info.arrownosubs],
-                      sub: displaySettings.includeSubs ? info.diffpercentsubs : info.diffpercentnosubs,
+                      sub: t('rank.oldRankPct', { rank: (info.oldRank ?? 0).toLocaleString(), pct: displaySettings.includeSubs ? (info.diffPctSubsStr ?? '') : (info.diffPctNosubsStr ?? '') }),
                       flex: 1.3,
                     },
-                    { title: 'Points', value: info.Points, sub: info.subsafety },
+                    { title: t('rank.points'), value: info.Points, sub: t('rank.safetyDelta', { safety: info.Safety, delta: (info.Pointsfinal - info.Safety) > 0 ? '+' + (info.Pointsfinal - info.Safety) : (info.Pointsfinal - info.Safety) < 0 ? String(info.Pointsfinal - info.Safety) : '0' }) },
                   ]}
                 />
               </View>
@@ -3475,7 +3490,7 @@ const handleShare = useCallback(async () => {
                 <View style={{ width: '100%', paddingHorizontal: 12, marginBottom: 2 }}>
                   <View style={styles.managerRow}>
                     <MaterialCommunityIcons name="account-circle-outline" size={18} color={C.muted} />
-                    <Text style={styles.managerLabel}>Manager</Text>
+                    <Text style={styles.managerLabel}>{t('rank.manager')}</Text>
                     <Text style={styles.managerNameStrong} numberOfLines={1}>{displayManagerName}</Text>
 
                     {/* (No share icon here, so it won't appear in the image) */}

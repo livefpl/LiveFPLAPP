@@ -28,6 +28,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AppHeader from './AppHeader';
 import { smartFetch } from './signedFetch';
+import { useTranslation } from 'react-i18next';
 import { useColors } from './theme';
 import { assetImages } from './clubs'; // expects { rankUp, rankDown, rankSame }
 Text.defaultProps = Text.defaultProps || {};
@@ -168,6 +169,7 @@ function buildCounterRanker(counterObj) {
 
 /* -------------------------------- Component -------------------------------- */
 export default function WhatIf() {
+  const { t } = useTranslation();
   const C = useColors();
   const S = useMemo(() => makeStyles(C), [C]);
 
@@ -341,8 +343,8 @@ const [showDiff, setShowDiff] = useState(false);
   const game = games[gIdx] || null;
   const tableH = game?.[12] || [];
   const tableA = game?.[13] || [];
-  const homeName = String(game?.[0] || 'Home');
-  const awayName = String(game?.[1] || 'Away');
+  const homeName = String(game?.[0] || t('whatif.home'));
+  const awayName = String(game?.[1] || t('whatif.away'));
 
   const baseScoreH = Number(game?.[2] || 0);
   const baseScoreA = Number(game?.[3] || 0);
@@ -370,7 +372,10 @@ const give90 = !isEnded && ((isYet || isLive) && (force90 || hasEdits));
         const exp = {};
         (explained || []).forEach(t => {
           if (!Array.isArray(t) || t.length < 3) return;
-          exp[String(t[0])] = { times: Number(t[1])||0, pts: Number(t[2])||0 };
+          const baseKey = String(t[0]).replace(/\s+Game\s+\d+$/i, '').trim() || String(t[0]);
+          if (!exp[baseKey]) exp[baseKey] = { times: 0, pts: 0 };
+          exp[baseKey].times += Number(t[1]) || 0;
+          exp[baseKey].pts += Number(t[2]) || 0;
         });
         const mins = Number(exp?.minutes?.times || 0);
         list.push({
@@ -418,7 +423,10 @@ const getPlayersForGame = useCallback((g) => {
       const exp = {};
       (explained || []).forEach(t => {
         if (!Array.isArray(t) || t.length < 3) return;
-        exp[String(t[0])] = { times: Number(t[1])||0, pts: Number(t[2])||0 };
+        const baseKey = String(t[0]).replace(/\s+Game\s+\d+$/i, '').trim() || String(t[0]);
+        if (!exp[baseKey]) exp[baseKey] = { times: 0, pts: 0 };
+        exp[baseKey].times += Number(t[1]) || 0;
+        exp[baseKey].pts += Number(t[2]) || 0;
       });
       const mins = Number(exp?.minutes?.times || 0);
       list.push({
@@ -449,13 +457,13 @@ const getPlayersForGame = useCallback((g) => {
   // Global-first name resolver (elements → current match → id) + special "-1" → "none"
   const nameForId = useCallback((pid) => {
     const idNum = Number(pid);
-    if (idNum === -1) return 'none';
+    if (idNum === -1) return t('whatif.none');
     const pElem = globalNameMap.get(idNum);
     if (pElem?.name) return pElem.name;
     const pLive = playerById.get(idNum);
     if (pLive?.name) return pLive.name;
     return String(pid);
-  }, [playerById, globalNameMap]);
+  }, [playerById, globalNameMap, t]);
 
   // Roster (names resolved at render time)
   useEffect(() => {
@@ -530,6 +538,7 @@ const getPlayersForGame = useCallback((g) => {
   const [totalManagers, setTotalManagers] = useState(12000000);
   const [oldRank, setOldRank] = useState(null);
   const [liveRank, setLiveRank] = useState(null);
+  const [hitPoints, setHitPoints] = useState(0); // 0 | 4 | 8 | 12 | 16 | 20 (transfer hit)
 
   const loadRanker = useCallback(async () => {
     try {
@@ -675,6 +684,7 @@ const resetAll = useCallback(() => {
   setFake(emptyFake());
   setForce90(false);
   setOverrideMul(new Map());
+  setHitPoints(0);
 
   // optional UX: close editor & any open pickers
   setShowEditor(false);
@@ -968,9 +978,10 @@ const simAggAll = useMemo(() => {
   const fieldTotalDelta = simAggAll.fieldDelta;
   const netTotalDelta   = myTotalDelta - fieldTotalDelta;
   const netSaturated = Math.sign(netTotalDelta) * (SATURATE_K * (1 - Math.exp(-Math.abs(netTotalDelta) / SATURATE_K)));
-  const estRank = estimateRank(netSaturated);
+  const estRank = estimateRank(netSaturated - (hitPoints || 0));
 
  const hasScenario = useMemo(() => {
+  if (hitPoints > 0) return true;
   if (overrideMul.size > 0) return true;
   for (let i = 0; i < games.length; i++) {
     const b = getBundleFor(i);
@@ -983,7 +994,7 @@ const simAggAll = useMemo(() => {
     ) return true;
   }
   return false;
-}, [games, getBundleFor, overrideMul]);
+}, [games, getBundleFor, overrideMul, hitPoints]);
 
   /* --------- Direction arrows (vs OLD when available) --------- */
   const dirVs = (base, now) => {
@@ -1228,8 +1239,8 @@ const changesSummaryAll = useMemo(() => {
       f.yc.size || f.rc.size || f.bonus.size || f.defcon.size || bundle.force90;
     if (!anyEdits) continue;
 
-    const homeNameG = String(g?.[0] || 'Home');
-    const awayNameG = String(g?.[1] || 'Away');
+    const homeNameG = String(g?.[0] || t('whatif.home'));
+    const awayNameG = String(g?.[1] || t('whatif.away'));
     const baseH = Number(g?.[2] || 0);
     const baseA = Number(g?.[3] || 0);
 
@@ -1248,25 +1259,26 @@ const changesSummaryAll = useMemo(() => {
     // section header per edited game (shows base → sim score if changed)
     const header = (dH !== 0 || dA !== 0)
       ? `${homeNameG} vs ${awayNameG}: ${baseH}–${baseA} → ${simH}–${simA}`
-      : `${homeNameG} vs ${awayNameG}: edits with no score change`;
+      : `${homeNameG} vs ${awayNameG}: ${t('whatif.editsNoScoreChange')}`;
     out.push(header);
 
     // ---- Direct edits
-    const act = (d) => (d > 0 ? 'Added' : 'Removed');
+    const act = (d) => (d > 0 ? t('whatif.added') : t('whatif.removed'));
     const qty = (d) => { const n = Math.abs(Number(d) || 0); return n > 1 ? ` ×${n}` : ''; };
-    const pushMap = (mapObj, noun) => {
+    const nounKey = (key) => t(`whatif.${key}`);
+    const pushMap = (mapObj, key) => {
       for (const [pid, d] of mapObj.entries()) {
         if (!d) continue;
-        out.push(`• ${act(d)} ${noun}: ${nameForId(pid)}${qty(d)}`);
+        out.push(`• ${act(d)} ${nounKey(key)}: ${nameForId(pid)}${qty(d)}`);
       }
     };
     pushMap(f.goals, 'goal');
     pushMap(f.goalAssists, 'assist');
     pushMap(f.assists, 'assist');
-    pushMap(f.yc, 'yellow card');
-    pushMap(f.rc, 'red card');
-    pushMap(f.bonus, 'bonus point');
-    pushMap(f.defcon, 'defensive bonus (+2)');
+    pushMap(f.yc, 'yellowCard');
+    pushMap(f.rc, 'redCard');
+    pushMap(f.bonus, 'bonusPoint');
+    pushMap(f.defcon, 'defensiveBonus');
 
     // ---- Cascades (CS / GC buckets)
     const status   = String(g?.[4] || '');
@@ -1284,18 +1296,18 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
     // Clean sheets
     const baseCS = { H: baseA === 0, A: baseH === 0 };
     const simCS  = { H: simA === 0,  A: simH === 0  };
-    if (baseCS.H !== simCS.H) out.push(`• ${simCS.H ? 'Clean sheet gained' : 'Clean sheet lost'}: ${homeNameG}`);
-    if (baseCS.A !== simCS.A) out.push(`• ${simCS.A ? 'Clean sheet gained' : 'Clean sheet lost'}: ${awayNameG}`);
+    if (baseCS.H !== simCS.H) out.push(`• ${simCS.H ? t('whatif.cleanSheetGained') : t('whatif.cleanSheetLost')}: ${homeNameG}`);
+    if (baseCS.A !== simCS.A) out.push(`• ${simCS.A ? t('whatif.cleanSheetGained') : t('whatif.cleanSheetLost')}: ${awayNameG}`);
 
     // Goals-conceded penalties bucket changes
     const bH = bucket(baseA), sH = bucket(simA);
     if (bH !== sH) {
-      const dir = sH > bH ? 'More goals conceded' : 'Fewer goals conceded';
+      const dir = sH > bH ? t('whatif.moreGoalsConceded') : t('whatif.fewerGoalsConceded');
       out.push(`• ${dir}: ${homeNameG} ×${Math.abs(sH - bH)}`);
     }
     const bA = bucket(baseH), sA = bucket(simH);
     if (bA !== sA) {
-      const dir = sA > bA ? 'More goals conceded' : 'Fewer goals conceded';
+      const dir = sA > bA ? t('whatif.moreGoalsConceded') : t('whatif.fewerGoalsConceded');
       out.push(`• ${dir}: ${awayNameG} ×${Math.abs(sA - bA)}`);
     }
 
@@ -1303,11 +1315,11 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
     if (give90G) {
       let upgraded = 0;
       for (const p of list) if (p.baseMinPts < 2) upgraded++;
-      if (upgraded > 0) out.push(`• Minutes credited as 90′: ${upgraded} players`);
+      if (upgraded > 0) out.push(`• ${t('whatif.minutesCredited90', { count: upgraded })}`);
     }
   }
   return out;
-}, [games, getBundleFor, emptyFake, getPlayersForGame, nameForId]);
+}, [games, getBundleFor, emptyFake, getPlayersForGame, nameForId, t]);
 
 
 
@@ -1316,7 +1328,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
     return (
       <SafeAreaView style={S.safe} edges={['left', 'right']}>
         <AppHeader  />
-        <View style={S.center}><ActivityIndicator color={C.accent} /><Text style={S.muted}>Loading…</Text></View>
+        <View style={S.center}><ActivityIndicator color={C.accent} /><Text style={S.muted}>{t('whatif.loading')}</Text></View>
       </SafeAreaView>
     );
   }
@@ -1343,11 +1355,8 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       >
       {/* Title + brief explanation */}
       <View style={S.card}>
-        <Text style={S.pageTitle}>What-If Simulator</Text>
-        <Text style={S.pageBlurb}>
-          Quickly test fake goals, assists, cards, and bonus to see how your live rank might change.
-          Use the (−) on chips to remove events — they’ll appear struck below so you can tap to restore.
-        </Text>
+        <Text style={S.pageTitle}>{t('whatif.pageTitle')}</Text>
+        <Text style={S.pageBlurb}>{t('whatif.pageBlurb')}</Text>
       </View>
 
       {/* Rank header */}
@@ -1355,7 +1364,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
         {/* LIVE row — always show with clubs arrows (vs OLD when available) */}
         <View style={S.rankLine}>
           <Text style={[S.rankBig, hasScenario && S.strike]}>
-            Live Rank: {liveRank ? liveRank.toLocaleString() : '—'}
+            {t('whatif.liveRank')}: {liveRank ? liveRank.toLocaleString() : '—'}
           </Text>
           <RankArrow dir={liveDir} size={18} />
         </View>
@@ -1365,20 +1374,41 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
           <>
             <View style={[S.rankLine, { marginTop: 4 }]}>
               <Text style={S.rankNew}>
-                Scenario Rank: {estRank ? estRank.toLocaleString() : '—'}
+                {t('whatif.scenarioRank')}: {estRank ? estRank.toLocaleString() : '—'}
               </Text>
               <RankArrow dir={estDir} size={18} />
             </View>
             <Text style={S.deltaTxt}>
-              You {myTotalDelta>=0?'+':''}{myTotalDelta.toFixed(1)} • Field {fieldTotalDelta>=0?'+':''}{fieldTotalDelta.toFixed(1)} • Net {netTotalDelta>=0?'+':''}{netTotalDelta.toFixed(1)}
+              {t('whatif.youLabel')} {myTotalDelta>=0?'+':''}{myTotalDelta.toFixed(1)} • {t('whatif.fieldLabel')} {fieldTotalDelta>=0?'+':''}{fieldTotalDelta.toFixed(1)} • {t('whatif.netLabel')} {netTotalDelta>=0?'+':''}{netTotalDelta.toFixed(1)}
             </Text>
+            {hitPoints > 0 && (
+              <Text style={S.deltaTxt}>{t('whatif.hitLabel')}: {t('whatif.hitPoints', { count: hitPoints })}</Text>
+            )}
           </>
         )}
+
+        {/* Transfer hit selector — always visible */}
+        <View style={S.hitRow}>
+          <Text style={S.hitLabel}>{t('whatif.transferHit')}</Text>
+          <View style={S.hitChips}>
+            {[0, 4, 8, 12, 16, 20].map((pts) => (
+              <TouchableOpacity
+                key={pts}
+                onPress={() => setHitPoints(pts)}
+                style={[S.hitChip, hitPoints === pts && S.hitChipActive]}
+              >
+                <Text style={[S.hitChipTxt, hitPoints === pts && S.hitChipTxtActive]}>
+                  {pts === 0 ? t('whatif.noHit') : t('whatif.hitPoints', { count: pts })}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
 
         {hasScenario && (
           <TouchableOpacity onPress={resetAll} style={S.resetBtn}>
             <MaterialCommunityIcons name="backup-restore" size={16} color={C.ink} />
-            <Text style={S.resetTxt}>Reset</Text>
+            <Text style={S.resetTxt}>{t('whatif.reset')}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -1386,7 +1416,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       {/* Global Summary of changes across all edited games */}
 {changesSummaryAll.length > 0 && (
   <View style={S.card}>
-    <Text style={S.cardTitle}>Summary of Fake Events (All Games)</Text>
+    <Text style={S.cardTitle}>{t('whatif.summaryOfFakeEvents')}</Text>
     <View style={S.summaryList}>
       {changesSummaryAll.map((line, i) => (
         <Text key={`sum-all-${i}`} style={S.summaryItem} numberOfLines={1}>
@@ -1399,7 +1429,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
     {changedPlayersAll.length > 0 && (
       <TouchableOpacity onPress={() => setShowDiff(true)} style={S.resetBtn}>
         <MaterialCommunityIcons name="chart-line-variant" size={16} color={C.ink} />
-        <Text style={S.resetTxt}>Who changed</Text>
+        <Text style={S.resetTxt}>{t('whatif.whoChanged')}</Text>
       </TouchableOpacity>
     )}
   </View>
@@ -1409,26 +1439,23 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
 
       {/* Top Menu */}
       <View style={S.card}>
-        <Text style={S.cardTitle}>Actions</Text>
+        <Text style={S.cardTitle}>{t('whatif.actions')}</Text>
         <View style={S.menuRow}>
           <MenuButton
             icon="plus-circle-outline"
-            label="Add Fake Events"
+            label={t('whatif.addFakeEvents')}
             onPress={() => setPickOpen(true)}
             C={C}
           />
-          
-          
-
           <MenuButton
             icon="account-edit-outline"
-            label="Change Captain"
+            label={t('whatif.changeCaptain')}
             onPress={openCaptainModal}
             C={C}
           />
           <MenuButton
             icon="swap-horizontal"
-            label="Swap XI ↔ Bench"
+            label={t('whatif.swapXiBench')}
             onPress={openSwapModal}
             C={C}
           />
@@ -1438,7 +1465,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
           <View style={S.editorBar}>
             {/* in the editor bar line, show the simulated score (accounts for fake events) */}
             <Text style={S.editorMatch} numberOfLines={1}>
-              {game ? `${homeName} vs ${awayName}  •  ${simScoreH}–${simScoreA}  •  ${String(status||'')}` : 'Pick a match'}
+              {game ? `${homeName} vs ${awayName}  •  ${simScoreH}–${simScoreA}  •  ${String(status||'')}` : t('whatif.pickMatch')}
             </Text>
 
             {isLive && (
@@ -1447,12 +1474,12 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
                 onPress={() => setForce90((v)=>!v)}
               >
                 <MaterialCommunityIcons name="timer-outline" size={14} color={C.muted} />
-                <Text style={S.tinyBtnTxt}>{force90 ? `Ended (90')` : `End game (90')`}</Text>
+                <Text style={S.tinyBtnTxt}>{force90 ? t('whatif.ended90') : t('whatif.endGame90')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity style={S.tinyBtn} onPress={() => setShowEditor(false)}>
               <MaterialCommunityIcons name="eye-off-outline" size={14} color={C.muted} />
-              <Text style={S.tinyBtnTxt}>Hide editor</Text>
+              <Text style={S.tinyBtnTxt}>{t('whatif.hideEditor')}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -1462,7 +1489,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       {showEditor && (
         <View style={{ paddingHorizontal: 10, paddingBottom: 14 }}>
           <View style={S.card}>
-            <Row title="Goals" icon="soccer" C={C} S={S}
+            <Row title={t('whatif.goals')} icon="soccer" C={C} S={S}
                  onAdd={() => setQuickKind('goals')}>
               <ChipsNew
                 kept={makeChips(baseGoalsByPid, fake.goals, nameForId, (n,t,d)=> `${n} ⚽×${t}${d?` (${d>0?'+':''}${d})`:''}`)}
@@ -1472,7 +1499,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
               />
             </Row>
 
-            <Row title="Assists" icon="handshake-outline" C={C} S={S}
+            <Row title={t('whatif.assists')} icon="handshake-outline" C={C} S={S}
                  onAdd={() => setQuickKind('assists')}>
               <ChipsNew
                 kept={makeChips(baseAssistsByPid, mergeAssists(fake.goalAssists, fake.assists), nameForId, (n,t,d)=> `${n} 🅰️×${t}${d?` (${d>0?'+':''}${d})`:''}`)}
@@ -1482,7 +1509,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
               />
             </Row>
 
-            <Row title="Yellow Cards" icon="card-outline" C={C} S={S}
+            <Row title={t('whatif.yellowCards')} icon="card-outline" C={C} S={S}
                  onAdd={() => setQuickKind('yc')}>
               <ChipsNew
                 kept={makeChips(baseYCByPid, fake.yc, nameForId, (n,t,d)=> `${n} 🟨×${t}${d?` (${d>0?'+':''}${d})`:''}`)}
@@ -1492,7 +1519,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
               />
             </Row>
 
-            <Row title="Red Cards" icon="card-outline" C={C} S={S}
+            <Row title={t('whatif.redCards')} icon="card-outline" C={C} S={S}
                  onAdd={() => setQuickKind('rc')}>
               <ChipsNew
                 kept={makeChips(baseRCByPid, fake.rc, nameForId, (n,t,d)=> `${n} 🟥×${t}${d?` (${d>0?'+':''}${d})`:''}`)}
@@ -1502,7 +1529,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
               />
             </Row>
 
-            <Row title="Bonus" icon="medal-outline" C={C} S={S}
+            <Row title={t('whatif.bonus')} icon="medal-outline" C={C} S={S}
                  onAdd={() => setQuickKind('bonus')}>
               <ChipsNew
                 kept={makeChips(baseBonusByPid, fake.bonus, nameForId, (n,t,d)=> `${n} ⭐${t>0?`+${t}`:t}${d?` (${d>0?'+':''}${d})`:''}`)}
@@ -1512,7 +1539,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
               />
             </Row>
 
-            <Row title="DefCon (+2)" icon="shield-check" C={C} S={S}
+            <Row title={t('whatif.defCon')} icon="shield-check" C={C} S={S}
                  onAdd={() => setQuickKind('defcon')}>
               <ChipsNew
                 kept={makeChips(baseDefconByPid, fake.defcon, nameForId, (n,t,d)=> `${n} 🛡️+${t*2}${d?` (${d>0?'+':''}${d*2})`:''}`)}
@@ -1535,14 +1562,14 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
   <View style={S.modalBack}>
     <View style={S.modalCard}>
       <View style={S.rowHeader}>
-        <Text style={S.modalTitle}>Points change (EO ≥ 1%)</Text>
+        <Text style={S.modalTitle}>{t('whatif.pointsChangeEo')}</Text>
         <TouchableOpacity onPress={() => setShowDiff(false)}>
           <MaterialCommunityIcons name="close" size={18} color={C.muted} />
         </TouchableOpacity>
       </View>
 
       {changedPlayersAll.length === 0 ? (
-        <Text style={S.muted}>No affected players with EO ≥ 1%.</Text>
+        <Text style={S.muted}>{t('whatif.noAffectedPlayers')}</Text>
       ) : (
         <ScrollView style={{ maxHeight: 360 }}>
           {changedPlayersAll.map(p => (
@@ -1553,7 +1580,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
                 {` • EO ${Math.round(p.eo)}%`}
               </Text>
               <Text style={[S.pickTxt, { marginTop: 2 }]}>
-                {`Real ${p.real} → Fake ${p.fake} `}
+                {`${t('whatif.real')} ${p.real} → ${t('whatif.fake')} ${p.fake} `}
                 <Text style={{ fontWeight: '700', color: p.delta > 0 ? '#16a34a' : '#dc2626' }}>
                   ({p.delta > 0 ? '+' : ''}{p.delta})
                 </Text>
@@ -1564,7 +1591,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       )}
 
       <View style={S.modalActions}>
-        <PrimaryBtn label="Close" onPress={() => setShowDiff(false)} />
+        <PrimaryBtn label={t('whatif.close')} onPress={() => setShowDiff(false)} />
       </View>
     </View>
   </View>
@@ -1575,7 +1602,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       <Modal transparent visible={capModal} onRequestClose={()=>setCapModal(false)} animationType="fade">
         <View style={S.modalBack}><View style={S.modalCard}>
           <View style={S.rowHeader}>
-            <Text style={S.modalTitle}>Pick new Captain</Text>
+            <Text style={S.modalTitle}>{t('whatif.pickNewCaptain')}</Text>
             <TouchableOpacity onPress={()=>setCapModal(false)}><MaterialCommunityIcons name="close" size={18} color={C.muted} /></TouchableOpacity>
           </View>
           <ScrollView style={{maxHeight:320}}>
@@ -1591,7 +1618,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
           </ScrollView>
           <View style={S.modalActions}>
             <PrimaryBtn
-              label="Set Captain"
+              label={t('whatif.setCaptain')}
               onPress={confirmCaptain}
               disabled={!capTarget}
             />
@@ -1603,11 +1630,11 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       <Modal transparent visible={swapModal} onRequestClose={()=>setSwapModal(false)} animationType="fade">
         <View style={S.modalBack}><View style={S.modalCard}>
           <View style={S.rowHeader}>
-            <Text style={S.modalTitle}>Swap XI ↔ Bench</Text>
+            <Text style={S.modalTitle}>{t('whatif.swapXiBench')}</Text>
             <TouchableOpacity onPress={()=>setSwapModal(false)}><MaterialCommunityIcons name="close" size={18} color={C.muted} /></TouchableOpacity>
           </View>
 
-          <Text style={S.modalLabel}>Bench (pick one)</Text>
+          <Text style={S.modalLabel}>{t('whatif.benchPickOne')}</Text>
           <ScrollView style={{maxHeight:200}}>
             {allPlayers
               .filter(p => getMulFor(p.id) === 0)
@@ -1618,7 +1645,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
             ))}
           </ScrollView>
 
-          <Text style={[S.modalLabel,{marginTop:6}]}>Starter to replace</Text>
+          <Text style={[S.modalLabel,{marginTop:6}]}>{t('whatif.starterToReplace')}</Text>
           <ScrollView style={{maxHeight:250}}>
             {allPlayers
               .filter(p => getMulFor(p.id) > 0)
@@ -1632,7 +1659,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
 
           <View style={S.modalActions}>
             <PrimaryBtn
-              label="Swap"
+              label={t('whatif.swap')}
               onPress={confirmSwap}
               disabled={!swapA || !swapB || !swapKeepsFormation(swapB, swapA)}
             />
@@ -1644,7 +1671,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
       <Modal transparent visible={pickOpen} onRequestClose={()=>setPickOpen(false)} animationType="fade">
         <View style={S.modalBack}><View style={S.modalCard}>
           <View style={S.rowHeader}>
-            <Text style={S.modalTitle}>Pick a Match</Text>
+            <Text style={S.modalTitle}>{t('whatif.pickAMatch')}</Text>
             <TouchableOpacity onPress={()=>setPickOpen(false)}><MaterialCommunityIcons name="close" size={18} color={C.muted} /></TouchableOpacity>
           </View>
           <ScrollView style={{maxHeight:420}}>
@@ -1670,7 +1697,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
                 style={S.pickRow}
               >
                 <Text style={S.pickTxt} numberOfLines={1}>
-                  {String(g?.[0]||'Home')} vs {String(g?.[1]||'Away')} • {(i===gIdx?simScoreH:Number(g?.[2]||0))}–{(i===gIdx?simScoreA:Number(g?.[3]||0))} • {String(g?.[4]||'')}
+                  {String(g?.[0]||t('whatif.home'))} vs {String(g?.[1]||t('whatif.away'))} • {(i===gIdx?simScoreH:Number(g?.[2]||0))}–{(i===gIdx?simScoreA:Number(g?.[3]||0))} • {String(g?.[4]||'')}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -1683,19 +1710,19 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
         <View style={S.modalBack}><View style={S.modalCard}>
           <View style={S.rowHeader}>
             <Text style={S.modalTitle}>
-              {quickKind === 'goals' ? 'Add Goal' :
-               quickKind === 'assists' ? 'Add Assist' :
-               quickKind === 'yc' ? 'Add Yellow Card' :
-               quickKind === 'rc' ? 'Add Red Card' :
-               quickKind === 'bonus' ? 'Add Bonus (+1)' :
-               quickKind === 'defcon' ? 'Add DefCon (+2)' : ''}
+              {quickKind === 'goals' ? t('whatif.addGoal') :
+               quickKind === 'assists' ? t('whatif.addAssist') :
+               quickKind === 'yc' ? t('whatif.addYellowCard') :
+               quickKind === 'rc' ? t('whatif.addRedCard') :
+               quickKind === 'bonus' ? t('whatif.addBonus') :
+               quickKind === 'defcon' ? t('whatif.addDefCon') : ''}
             </Text>
             <TouchableOpacity onPress={()=>setQuickKind(null)}><MaterialCommunityIcons name="close" size={18} color={C.muted} /></TouchableOpacity>
           </View>
 
           {quickKind === 'goals' && (
             <>
-              <Text style={S.modalLabel}>Scorer</Text>
+              <Text style={S.modalLabel}>{t('whatif.scorer')}</Text>
               <PlayerPicker
                 data={sortForPicker(players)}
                 selectedId={selScorer}
@@ -1703,7 +1730,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
                 S={S}
                 nameForId={nameForId}
               />
-              <Text style={[S.modalLabel,{marginTop:8}]}>Assister</Text>
+              <Text style={[S.modalLabel,{marginTop:8}]}>{t('whatif.assister')}</Text>
               <PlayerPicker
                 data={sortForPicker([{id:-1,name:'none',type:0,eo:0}, ...players])}
                 selectedId={selAssister ?? -1}
@@ -1716,7 +1743,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
 
           {quickKind !== 'goals' && (
             <>
-              <Text style={S.modalLabel}>Player</Text>
+              <Text style={S.modalLabel}>{t('whatif.player')}</Text>
               <PlayerPicker
                 data={sortForPicker(players)}
                 selectedId={selPid}
@@ -1729,7 +1756,7 @@ const give90G  = !isEndedG && ((isYetG || isLiveG) && (bundle.force90 || anyEdit
 
           <View style={S.modalActions}>
             <PrimaryBtn
-              label="Add"
+              label={t('whatif.add')}
               onPress={confirmQuickAdd}
               disabled={
                 (quickKind==='goals' && !selScorer) ||
@@ -1977,6 +2004,14 @@ function makeStyles(C) {
     strike:{textDecorationLine:'line-through', color:C.muted},
     rankNew:{fontSize:16, fontWeight:'700', color:C.ink},
     deltaTxt:{marginTop:6, color:C.muted, fontSize:12},
+
+    hitRow:{marginTop:12, gap:6},
+    hitLabel:{fontSize:12, fontWeight:'600', color:C.muted, marginBottom:2},
+    hitChips:{flexDirection:'row', flexWrap:'wrap', gap:6},
+    hitChip:{paddingHorizontal:10, paddingVertical:6, borderRadius:8, backgroundColor:C.cardAccent},
+    hitChipActive:{backgroundColor:'#2563eb'},
+    hitChipTxt:{color:C.ink, fontSize:12, fontWeight:'600'},
+    hitChipTxtActive:{color:'#fff'},
 
     resetBtn:{position:'absolute', right:12, top:12, flexDirection:'row', alignItems:'center', gap:6, backgroundColor:C.cardAccent, paddingHorizontal:10, paddingVertical:6, borderRadius:8},
     resetTxt:{color:C.ink, fontWeight:'600', fontSize:12},

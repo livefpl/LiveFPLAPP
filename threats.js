@@ -21,7 +21,8 @@ import {
   TextInput,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { clubCrestUri } from './clubs';
 import { smartFetch } from './signedFetch';
@@ -235,22 +236,124 @@ async function loadEOOverlay(sample) {
 }
 
 /* ---------------------- Parsing helpers ---------------------- */
+// DGW: "minutes Game 2" etc. → merge into base stat (sum times/pts across games)
+function normalizeExplainKey(key) {
+  const k = String(key ?? '').trim();
+  return k.replace(/\s+Game\s+\d+$/i, '').trim() || k;
+}
+
 function parseExplained(list) {
   const out = {};
   (list || []).forEach((t) => {
     if (!Array.isArray(t) || t.length < 2) return;
-    const key = String(t[0]);
+    const baseKey = normalizeExplainKey(String(t[0]));
     const times = Number(t[1]) || 0;
     const pts = Number(t[2]) || 0;
-    out[key] = { times, pts };
+    if (!out[baseKey]) out[baseKey] = { times: 0, pts: 0 };
+    out[baseKey].times += times;
+    out[baseKey].pts += pts;
   });
   return out;
+}
+
+// DGW: only entries whose key contains " Game 2" (for 2nd fixture)
+function parseExplainedGame2Only(list) {
+  const out = {};
+  (list || []).forEach((t) => {
+    if (!Array.isArray(t) || t.length < 2) return;
+    const rawKey = String(t[0] ?? '').trim();
+    if (!rawKey.includes(' Game 2')) return;
+    const baseKey = normalizeExplainKey(rawKey);
+    const times = Number(t[1]) || 0;
+    const pts = Number(t[2]) || 0;
+    if (!out[baseKey]) out[baseKey] = { times: 0, pts: 0 };
+    out[baseKey].times += times;
+    out[baseKey].pts += pts;
+  });
+  return out;
+}
+
+function ptsFromExplainedGame2(explained) {
+  let sum = 0;
+  (explained || []).forEach((t) => {
+    if (!Array.isArray(t) || t.length < 2) return;
+    if (!String(t[0] ?? '').includes(' Game 2')) return;
+    sum += Number(t[2]) || 0;
+  });
+  return sum;
+}
+
+function getKickoffDate(game) {
+  if (!game) return null;
+  const parseV = (v) => {
+    if (v == null) return null;
+    if (typeof v === 'number') {
+      const n = v < 1e12 ? v * 1000 : v;
+      const d = new Date(n);
+      return isNaN(d) || d.getUTCFullYear() < 2020 ? null : d;
+    }
+    if (typeof v === 'string') {
+      const d = new Date(v.trim());
+      return isNaN(d) ? null : d;
+    }
+    return null;
+  };
+  if (Array.isArray(game)) {
+    for (const c of [game[15], game[14], game[19], game[20]]) {
+      const d = parseV(c);
+      if (d) return d;
+    }
+    return null;
+  }
+  return parseV(game?.kickoff ?? game?.kickoff_time ?? game?.ko ?? game?.start);
 }
 
 function collectPlayersFromGames(json) {
   // id -> { id, name, teamId, type, pts, minutes, statusGuess }
   const byId = new Map();
-  (json || []).forEach((game) => {
+  const gamesList = json || [];
+
+  // DGW: count per team how many fixtures they have and how many are done. Between games, treat as "yet to play".
+  const teamDgwState = new Map(); // teamId -> { total, done }
+  gamesList.forEach((game) => {
+    const status = String(game?.[4] ?? '').toLowerCase();
+    const isDone = /done|official/i.test(status);
+    const teamHId = Number(game?.[16] ?? 0);
+    const teamAId = Number(game?.[17] ?? 0);
+    if (teamHId) {
+      const t = teamDgwState.get(teamHId) || { total: 0, done: 0 };
+      t.total += 1;
+      if (isDone) t.done += 1;
+      teamDgwState.set(teamHId, t);
+    }
+    if (teamAId && teamAId !== teamHId) {
+      const t = teamDgwState.get(teamAId) || { total: 0, done: 0 };
+      t.total += 1;
+      if (isDone) t.done += 1;
+      teamDgwState.set(teamAId, t);
+    }
+  });
+  const teamHasMoreToPlay = (teamId) => {
+    const s = teamDgwState.get(Number(teamId));
+    return s && s.total >= 2 && s.done < s.total;
+  };
+
+  // Sort by kickoff so we can detect "second fixture" per team (DGW)
+  const sortedGames = gamesList.slice().sort((a, b) => {
+    const ka = getKickoffDate(a)?.getTime() ?? 0;
+    const kb = getKickoffDate(b)?.getTime() ?? 0;
+    return ka - kb;
+  });
+
+  const isSecondFixtureForTeam = (game, teamId) => {
+    const ko = getKickoffDate(game)?.getTime() ?? 0;
+    const teamGames = sortedGames.filter((g) => Number(g?.[16]) === teamId || Number(g?.[17]) === teamId);
+    teamGames.sort((a, b) => (getKickoffDate(a)?.getTime() ?? 0) - (getKickoffDate(b)?.getTime() ?? 0));
+    const idx = teamGames.findIndex((g) => (getKickoffDate(g)?.getTime() ?? 0) === ko);
+    return idx === 1;
+  };
+
+  sortedGames.forEach((game) => {
     const status = String(game?.[4] ?? '').toLowerCase();
     const isLive = /live/.test(status);
     const isDone = /done|official/i.test(status);
@@ -258,37 +361,54 @@ function collectPlayersFromGames(json) {
     const teamAId = Number(game?.[17] ?? 0);
     const tableH = game?.[12] || [];
     const tableA = game?.[13] || [];
+    const useGame2Home = isSecondFixtureForTeam(game, teamHId);
+    const useGame2Away = isSecondFixtureForTeam(game, teamAId);
 
-    const pushRows = (rows, teamId) => {
+    const pushRows = (rows, teamId, useGame2Only) => {
       (rows || []).forEach((row) => {
         const [name, _eo, _o, pts, explained, elementId, shortName, type] = row;
         const id = Number(elementId) || null;
         if (!id) return;
-        const e = parseExplained(explained);
+        const e = useGame2Only ? parseExplainedGame2Only(explained) : parseExplained(explained);
         const minutes = Number(e?.minutes?.times || 0);
+        const rowPts = useGame2Only ? ptsFromExplainedGame2(explained) : (Number(pts) || 0);
         let statusClass = 'yet';
         if (minutes > 0 && isLive) statusClass = 'live';
-        else if (minutes > 0 && !isLive) statusClass = 'played';
-        else if (minutes === 0 && isDone) statusClass = 'missed';
+        else if (minutes > 0 && !isLive) {
+          statusClass = teamHasMoreToPlay(teamId) ? 'yet' : 'played';
+        } else if (minutes === 0 && isDone) statusClass = 'missed';
         else statusClass = 'yet';
 
         const prev = byId.get(id) || {};
-        if (prev.minutes != null && prev.minutes > minutes) return;
+        // When this is the 2nd fixture (useGame2Only) and game is live/done, always take this row so Live Battle shows Game-2-only pts
+        const preferThis = useGame2Only && (isLive || isDone);
+        if (!preferThis && prev.minutes != null && prev.minutes > minutes) return;
+
+        // Slot counts for averages: 1 played per finished game they appeared in (accumulate across games)
+        const playedSlots = (prev.playedSlots || 0) + (isDone && minutes > 0 ? 1 : 0);
 
         byId.set(id, {
           id,
           name: shortName || name,
           teamId: Number(teamId) || 0,
           type: Number(type) || 0,
-          pts: Number(pts) || 0,
+          pts: rowPts,
           minutes,
           statusGuess: statusClass,
+          playedSlots,
         });
       });
     };
-    pushRows(tableH, teamHId);
-    pushRows(tableA, teamAId);
+    pushRows(tableH, teamHId, useGame2Home);
+    pushRows(tableA, teamAId, useGame2Away);
   });
+
+  // leftSlots = team's fixtures not yet finished (each = 1 left for that player)
+  byId.forEach((p) => {
+    const s = teamDgwState.get(Number(p.teamId) || 0);
+    p.leftSlots = s ? Math.max(0, s.total - s.done) : 0;
+  });
+
   return byId;
 }
 
@@ -325,8 +445,10 @@ async function fetchLocalsForGW() {
 
 /* ---------------------- Main Screen ---------------------- */
 export default function Threats() {
+  const { t } = useTranslation();
   const C = useColors();
   const navigation = useNavigation();
+  const route = useRoute();
 
   const P = useMemo(
     () => ({
@@ -388,22 +510,28 @@ export default function Threats() {
 
   const cacheRef = useRef(new Map());
 
+  const relShort = useMemo(() => {
+    if (sample === 'top10k') return t('threats.top10k');
+    if (sample === 'elite') return t('threats.elite');
+    if (sample === 'local') return t('threats.nearYou');
+    return 'field';
+  }, [sample, t]);
+
   const labels = useMemo(() => {
-    const relShort = SAMPLE_SHORT[sample] || 'field';
     return {
       liveSub: `Current LIVE players — your edge vs ${relShort} as points arrive`,
-      diffsTitle: `Your Differentials (vs ${relShort})`,
-      diffsSub: `Players you own more than the ${relShort}. +% = your edge`,
+      diffsTitle: `Differentials vs. Threats (vs ${relShort})`,
+      diffsSub: t('threats.diffsSub', { sample: relShort }),
       threatsTitle: `Main Threats (vs ${relShort})`,
-      threatsSub: `Players the ${relShort} own more than you. −% = your risk`,
-      trioTitle: 'Star · Killer · Flop',
-      trioSub: `Highlights this gameweek (relative to ${relShort})`,
-      tableTitle: `Danger Table (vs ${relShort})`,
+      threatsSub: t('threats.threatsSub', { sample: relShort }),
+      trioTitle: t('threats.starKillerFlop'),
+      trioSub: t('threats.trioSub', { sample: relShort }),
+      tableTitle: t('threats.dangerTableVs', { sample: relShort }),
       tableSub: `EO vs You = ${relShort} ownership − yours · Loss = points lost`,
-      avgTitle: `Averages (You vs ${relShort})`,
+      avgTitle: t('threats.averagesYouVs', { sample: relShort }),
       avgSub: `Effective players: start=1×, C=2×, TC=3×. Score includes autosubs and hits (from sample metadata).`,
     };
-  }, [sample]);
+  }, [sample, relShort, t]);
 
   const deriveMul = (role) => {
     const r = String(role || '').toLowerCase();
@@ -413,7 +541,10 @@ export default function Threats() {
     return 1;
   };
 
-  const [activeTab, setActiveTab] = useState('live');
+  const [activeTab, setActiveTab] = useState('diffs');
+  // Unified section for Stats: live | diffs | all | templates | captains | chips | averages
+  const [activeSection, setActiveSection] = useState('diffs');
+  const [sectionPickerOpen, setSectionPickerOpen] = useState(false);
 
   const loadExposureAndStatusForCurrentId = useCallback(async () => {
     try {
@@ -482,7 +613,7 @@ export default function Threats() {
       setDataGames(json);
       cacheRef.current.set(key, { t: Date.now(), data: json });
     } catch (e) {
-      setErr('Failed to load games.');
+      setErr(t('threats.failedToLoadGames'));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -720,9 +851,9 @@ const tableThreatsBase = enriched
       return dir * (av - bv);
     });
 
-    if (starPick) starPick._label = '⭐ Star';
-    if (killerPick) killerPick._label = '💀 Killer';
-    if (flopPick) flopPick._label = '😵 Flop';
+    if (starPick) starPick._label = `⭐ ${t('threats.star')}`;
+    if (killerPick) killerPick._label = `💀 ${t('threats.killer')}`;
+    if (flopPick) flopPick._label = `😵 ${t('threats.flop')}`;
 
     // Live battle
     const liveOnly = enriched.filter((x) => pickStatus(x) === 'live');
@@ -750,7 +881,7 @@ const tableThreatsBase = enriched
     const totalLoss  = losses.reduce((s, r) => s + r.value, 0);
     const netTotal   = totalGain + totalLoss;
 
-    // averages
+    // averages: slot-based — 1 played per finished game they appeared in, 1 left per team fixture not yet done (DGW-friendly)
     let youPlayed = 0, youLive = 0, youLeft = 0, youScore = 0;
     let smpPlayed = 0, smpLive = 0, smpLeft = 0, smpScore = 0;
     for (const x of enriched) {
@@ -758,13 +889,17 @@ const tableThreatsBase = enriched
       const mul = Number(x.mul) || 0;
       const f   = Number(x.eoFrac) || 0;
       const pts = Number(x.pts) || 0;
+      const playedSlots = Number(x.playedSlots) || 0;
+      const leftSlots   = Number(x.leftSlots) || 0;
       youScore += pts * mul;
       youScore += Number(myHit || 0);
 
       smpScore += pts * f;
       if (s === 'live') { youLive += mul; smpLive += f; }
-      else if (s === 'played' || s === 'missed') { youPlayed += mul; smpPlayed += f; }
-      else if (s === 'yet') { youLeft += mul; smpLeft += f; }
+      youPlayed += mul * playedSlots;
+      smpPlayed += f * playedSlots;
+      youLeft   += mul * leftSlots;
+      smpLeft   += f * leftSlots;
     }
 
     smpScore += Number(sampleHits) || 0; // EO meta (points; usually negative)
@@ -784,7 +919,7 @@ const tableThreatsBase = enriched
       liveBattle: { gains, losses, totalGain, totalLoss, netTotal },
       averages
     };
-  }, [dataGames, eoMap, myExposure, ownedStatus, sortKey, sortDir, sampleHits, byId, myHit]);
+  }, [dataGames, eoMap, myExposure, ownedStatus, sortKey, sortDir, sampleHits, byId, myHit, t]);
 
 useEffect(() => {
   if (!tableThreats || !tableThreats.length) return;
@@ -935,16 +1070,21 @@ if (ok && ids.length && gw) {
   // After the useMemo that defines star, killer, flop, ...
   const trioData = useMemo(() => [star, killer, flop].filter(Boolean), [star, killer, flop]);
 
-  // default tab logic
+  // default tab/section: always diffs (user can switch to Live Battle from picker)
   useEffect(() => {
-    const hasLive = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
-    if (!userTabRef.current) setActiveTab(hasLive ? 'live' : 'diffs');
+    if (!userTabRef.current) {
+      setActiveTab('diffs');
+      setActiveSection('diffs');
+    }
   }, [liveBattle]);
 
   useEffect(() => {
-  const hasLiveNow = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
-  if (!hasLiveNow && activeTab === 'live') setActiveTab('diffs');
-}, [liveBattle, activeTab]);
+    const hasLiveNow = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
+    if (!hasLiveNow && activeTab === 'live') {
+      setActiveTab('diffs');
+      setActiveSection('diffs');
+    }
+  }, [liveBattle, activeTab]);
 
 
   /* ---------------------- Styles ---------------------- */
@@ -1378,7 +1518,7 @@ if (ok && ids.length && gw) {
       <View style={styles.toolbarWrapSticky}>
         <View style={styles.toolbar}>
           <View style={styles.toolbarRow}>
-            <Text style={styles.toolbarLabel}>Compare against:</Text>
+            <Text style={styles.toolbarLabel}>{t('threats.compareAgainst')}</Text>
             {SAMPLE_OPTIONS.map((opt) => {
               const active = sample === opt.value;
               return (
@@ -1388,7 +1528,7 @@ if (ok && ids.length && gw) {
                   activeOpacity={0.8}
                   style={[styles.segment, active && styles.segmentActive]}
                 >
-                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{opt.label}</Text>
+                  <Text style={[styles.segmentText, active && styles.segmentTextActive]}>{t(`threats.${opt.value === 'local' ? 'nearYou' : opt.value}`)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -1402,18 +1542,53 @@ if (ok && ids.length && gw) {
     );
   }
 
-  // Tabs header
+  // Section picker (Stats): Live Battle only when there are live games
 const hasLive = !!(liveBattle?.gains?.length || liveBattle?.losses?.length);
 
-const tabs = [
-  ...(hasLive
-    ? [{ key: 'live', label: 'Live Battle' }]
-    : [{ key: 'templates', label: 'Templates' }]
-  ),
-  { key: 'diffs', label: 'Your Differentials' },
-  { key: 'all', label: 'Danger Table' },
+const SECTION_OPTIONS = [
+  ...(hasLive ? [{ key: 'live', labelKey: 'liveBattle' }] : []),
+  { key: 'diffs', labelKey: 'differentialsVsThreats' },
+  { key: 'all', labelKey: 'dangerTable' },
+  { key: 'templates', labelKey: 'templates' },
+  { key: 'captains', labelKey: 'captains' },
+  { key: 'chips', labelKey: 'chipUsage' },
+  { key: 'averages', labelKey: 'averages' },
 ];
+const sectionLabel = (key) => {
+  const opt = SECTION_OPTIONS.find(o => o.key === key);
+  return opt ? t(`threats.${opt.labelKey}`) : key;
+};
 
+// When user picks a section: stay here for live/diffs/all, navigate to Templates for the other four
+const onPickSection = (key) => {
+  setSectionPickerOpen(false);
+  if (key === 'templates' || key === 'captains' || key === 'chips' || key === 'averages') {
+    navigation.navigate('Templates', { initialSection: key });
+    return;
+  }
+  setActiveSection(key);
+  setActiveTab(key);
+  userTabRef.current = true;
+};
+
+// Keep activeSection in sync when we're on live/diffs/all
+useEffect(() => {
+  if (activeTab === 'live' || activeTab === 'diffs' || activeTab === 'all') {
+    setActiveSection(activeTab);
+  }
+}, [activeTab]);
+
+// When Stats gains focus: apply initialSection from params (from Templates). Default remains Differentials (useState('diffs')).
+useFocusEffect(
+  useCallback(() => {
+    const s = route?.params?.initialSection;
+    if (s === 'live' || s === 'diffs' || s === 'all') {
+      setActiveSection(s);
+      setActiveTab(s);
+      userTabRef.current = true;
+    }
+  }, [route?.params?.initialSection])
+);
 
   /* ---------------------- Averages Picker + Tables ---------------------- */
 
@@ -1464,19 +1639,19 @@ const tabs = [
 
   // name to show on the picker button
   const avgPickLabel = useMemo(() => {
-    if (!localsMeta?.locals?.length) return 'Choose sample';
+    if (!localsMeta?.locals?.length) return t('threats.chooseSample');
     if (!avgPickKey) {
-      if (sample === 'elite') return 'Elite';
-      if (sample === 'top10k') return 'Top 10K';
-      if (sample === 'local')  return 'Near You';
-      return 'Choose sample';
+      if (sample === 'elite') return t('threats.elite');
+      if (sample === 'top10k') return t('threats.top10k');
+      if (sample === 'local')  return t('threats.nearYou');
+      return t('threats.chooseSample');
     }
-    if (avgPickKey === 'elite') return 'Elite';
-    if (avgPickKey === 'top10k') return 'Top 10K';
-    if (avgPickKey.startsWith('local:')) return 'Near You';
+    if (avgPickKey === 'elite') return t('threats.elite');
+    if (avgPickKey === 'top10k') return t('threats.top10k');
+    if (avgPickKey.startsWith('local:')) return t('threats.nearYou');
     const chosen = resolveLocalsChoice();
-    return chosen?.name || 'Choose sample';
-  }, [localsMeta, avgPickKey, sample, resolveLocalsChoice]);
+    return chosen?.name || t('threats.chooseSample');
+  }, [localsMeta, avgPickKey, sample, resolveLocalsChoice, t]);
 
   // Should show your-vs-sample averages table? YES for elite/top10k/local ONLY
   const showCompareAverages = useMemo(() => {
@@ -1504,11 +1679,10 @@ const tabs = [
   }, [averages, autosubsInc, hitsMean]);
 
   function AvgPicker() {
-    const relShort = SAMPLE_SHORT[sample] || 'field';
     return (
       <View style={styles.card}>
         <View style={styles.avgHeader}>
-          <Text style={styles.avgTitle}>Averages</Text>
+          <Text style={styles.avgTitle}>{t('threats.averages')}</Text>
           <TouchableOpacity style={styles.changeBtn} onPress={() => setAvgPickerOpen(true)}>
             <MaterialCommunityIcons name="account-switch-outline" size={16} color={P.ink} />
             <Text style={{ marginLeft: 8, color: P.ink, fontWeight: '800' }}>{avgPickLabel}</Text>
@@ -1520,27 +1694,27 @@ const tabs = [
           <View>
             <View style={styles.avgHeadRow}>
               <Text style={[styles.avgTdLabel]}></Text>
-              <Text style={styles.avgTh}>You</Text>
-              <Text style={styles.avgTh}>Sample</Text>
+              <Text style={styles.avgTh}>{t('threats.you')}</Text>
+              <Text style={styles.avgTh}>{t('threats.sample')}</Text>
             </View>
 
             <View style={styles.avgGridRow}>
-              <Text style={styles.avgTdLabel}>Players Played</Text>
+              <Text style={styles.avgTdLabel}>{t('threats.playersPlayed')}</Text>
               <Text style={styles.avgTd}>{averages.you.played.toFixed(0)}</Text>
               <Text style={styles.avgTd}>{averages.sample.played.toFixed(2)}</Text>
             </View>
             <View style={styles.avgGridRow}>
-              <Text style={styles.avgTdLabel}>Players Live</Text>
+              <Text style={styles.avgTdLabel}>{t('threats.playersLive')}</Text>
               <Text style={styles.avgTd}>{averages.you.live.toFixed(0)}</Text>
               <Text style={styles.avgTd}>{averages.sample.live.toFixed(2)}</Text>
             </View>
             <View style={styles.avgGridRow}>
-              <Text style={styles.avgTdLabel}>Players Left (Yet)</Text>
+              <Text style={styles.avgTdLabel}>{t('threats.playersLeft')}</Text>
               <Text style={styles.avgTd}>{averages.you.left.toFixed(0)}</Text>
               <Text style={styles.avgTd}>{averages.sample.left.toFixed(2)}</Text>
             </View>
             <View style={[styles.avgGridRow, { borderBottomWidth: 0 }]}>
-              <Text style={styles.avgTdLabel}>Average Score</Text>
+              <Text style={styles.avgTdLabel}>{t('threats.averageScore')}</Text>
               <Text style={styles.avgTd}>{averages.you.score.toFixed(2)}</Text>
               <Text style={styles.avgTd}>{adjustedSampleScore.toFixed(2)}</Text>
             </View>
@@ -1549,7 +1723,7 @@ const tabs = [
 
         {/* (B) Chips (this GW & overall) */}
         <View style={{ marginTop: 10 }}>
-          <SectionTitle icon="poker-chip" sub="This GW">{`Chip Usage`} [Sample: {relShort}]</SectionTitle>
+          <SectionTitle icon="poker-chip" sub="This GW">{t('threats.chipUsageSample', { sample: relShort })}</SectionTitle>
           {Object.keys(chipWeek).length ? (
             Object.entries(chipWeek).map(([k,v]) => (
               <View key={`wk-${k}`} style={styles.avgGridRow}>
@@ -1562,7 +1736,7 @@ const tabs = [
         </View>
 
         <View style={{ marginTop: 10 }}>
-          <SectionTitle icon="poker-chip" sub="Season to date">{`Chip Usage (Season)`} [Sample: {relShort}]</SectionTitle>
+          <SectionTitle icon="poker-chip" sub="Season to date">{t('threats.chipUsageSeasonSample', { sample: relShort })}</SectionTitle>
           {Object.keys(chipOverall).length ? (
             Object.entries(chipOverall).map(([k,v]) => (
               <View key={`ov-${k}`} style={styles.avgGridRow}>
@@ -1576,7 +1750,7 @@ const tabs = [
 
         {/* (C) Captains & Triple Captains */}
         <View style={{ marginTop: 10 }}>
-          <SectionTitle icon="crown-outline" sub="This GW">Captains [Sample: {relShort}]</SectionTitle>
+          <SectionTitle icon="crown-outline" sub="This GW">{t('threats.captainsSample', { sample: relShort })}</SectionTitle>
           <ScrollView style={{ maxHeight: S(240) }}>
             {capRows.length ? capRows.map((r, i) => (
               <View key={`cap-${r.id}-${i}`} style={styles.avgGridRow}>
@@ -1589,7 +1763,7 @@ const tabs = [
         </View>
 
         <View style={{ marginTop: 10 }}>
-          <SectionTitle icon="alpha-t-box-outline" sub="This GW">Triple Captains [Sample: {relShort}]</SectionTitle>
+          <SectionTitle icon="alpha-t-box-outline" sub="This GW">{t('threats.tripleCaptainsSample', { sample: relShort })}</SectionTitle>
           <ScrollView style={{ maxHeight: S(200) }}>
             {tcRows.length ? tcRows.map((r, i) => (
               <View key={`tc-${r.id}-${i}`} style={styles.avgGridRow}>
@@ -1605,20 +1779,20 @@ const tabs = [
         <Modal visible={avgPickerOpen} transparent animationType="fade" onRequestClose={() => setAvgPickerOpen(false)}>
           <View style={styles.modalBackdrop}>
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>Choose a sample</Text>
+              <Text style={styles.modalTitle}>{t('threats.chooseSample')}</Text>
 
               <TouchableOpacity
                 style={styles.pickRow}
                 onPress={() => { setAvgPickKey('elite'); setAvgPickerOpen(false); }}
               >
-                <Text style={{ color: P.ink, fontWeight: '800' }}>Elite</Text>
+                <Text style={{ color: P.ink, fontWeight: '800' }}>{t('threats.elite')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.pickRow}
                 onPress={() => { setAvgPickKey('top10k'); setAvgPickerOpen(false); }}
               >
-                <Text style={{ color: P.ink, fontWeight: '800' }}>Top 10K</Text>
+                <Text style={{ color: P.ink, fontWeight: '800' }}>{t('threats.top10k')}</Text>
               </TouchableOpacity>
 
               {localGroupNum != null && (
@@ -1626,7 +1800,7 @@ const tabs = [
                   style={styles.pickRow}
                   onPress={() => { setAvgPickKey(`local:${localGroupNum}`); setAvgPickerOpen(false); }}
                 >
-                  <Text style={{ color: P.ink, fontWeight: '800' }}>Near You</Text>
+                  <Text style={{ color: P.ink, fontWeight: '800' }}>{t('threats.nearYou')}</Text>
                 </TouchableOpacity>
               )}
 
@@ -1643,7 +1817,7 @@ const tabs = [
               </ScrollView>
 
               <TouchableOpacity style={styles.closeBtn} onPress={() => setAvgPickerOpen(false)}>
-                <Text style={styles.closeBtnText}>Close</Text>
+                <Text style={styles.closeBtnText}>{t('common.close')}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1652,14 +1826,14 @@ const tabs = [
     );
   }
 
-  // Chip label canonicalization
+  // Chip label canonicalization (translated)
   function chipLabel(k) {
     const m = String(k).toLowerCase();
-    if (m === 'bboost') return 'Bench Boost';
-    if (m === '3xc') return 'Triple Captain';
-    if (m === 'freehit') return 'Free Hit';
-    if (m === 'wildcard') return 'Wildcard';
-    if (m === 'none') return 'None';
+    if (m === 'bboost') return t('threats.benchBoost');
+    if (m === '3xc') return t('threats.tripleCaptain');
+    if (m === 'freehit') return t('threats.freeHit');
+    if (m === 'wildcard') return t('threats.wildcard');
+    if (m === 'none') return t('threats.none');
     return k;
   }
 
@@ -1734,8 +1908,8 @@ const tabs = [
     const relShort = SAMPLE_SHORT[sample] || 'field';
     return (
       <View style={styles.xiCard}>
-        <SectionTitle icon="soccer-field">Highest EO Players in the {relShort} sample</SectionTitle>
-        <Text style={styles.sectionSub}>Gain/loss % shown at bottom. Players you own are highlighted.</Text>
+        <SectionTitle icon="soccer-field">{t('threats.highestEoInSample', { sample: relShort })}</SectionTitle>
+        <Text style={styles.sectionSub}>{t('threats.gainLossShownSub')}</Text>
         <View style={styles.xiRow}>
           {xi.gk.map(p => <XiTile key={`gk-${p.id}`} r={p} />)}
           {xi.gk.length < 2 ? <View style={[styles.xiTile, { opacity: 0.4 }]} /> : null}
@@ -1760,15 +1934,15 @@ const tabs = [
 
   function LiveBattleCard() {
     if (!(liveBattle?.gains?.length || liveBattle?.losses?.length)) {
-      return <Text style={[styles.muted, { marginTop: 10 }]}>No live players right now.</Text>;
+      return <Text style={[styles.muted, { marginTop: 10 }]}>{t('threats.noLivePlayers')}</Text>;
     }
     return (
       <View style={styles.card}>
-        <SectionTitle icon="sword-cross" sub={labels.liveSub}>Live Battle</SectionTitle>
+        <SectionTitle icon="sword-cross" sub={labels.liveSub}>{t('threats.liveBattle')}</SectionTitle>
 
         {/* Net total */}
         <View style={{flexDirection:'row', justifyContent:'space-between', paddingVertical:6, borderBottomWidth:StyleSheet.hairlineWidth, borderBottomColor:P.border2}}>
-          <Text style={{ color:P.muted, fontWeight:'800' }}>Net (Gains + Losses)</Text>
+          <Text style={{ color:P.muted, fontWeight:'800' }}>{t('threats.netGainsLosses')}</Text>
           <Text style={[{ fontWeight:'900' }, (liveBattle.netTotal >= 0) ? { color:P.ok } : { color:P.red }]}>
             {liveBattle.netTotal >= 0 ? '+' : ''}{liveBattle.netTotal.toFixed(2)}
           </Text>
@@ -1776,8 +1950,8 @@ const tabs = [
 
         {/* Header */}
         <View style={[styles.lbHeader, { marginTop: 8 }]}>
-          <View style={[styles.lbCol, styles.lbColRightBorder]}><Text style={styles.lbColTitle}>Gains</Text></View>
-          <View style={styles.lbCol}><Text style={styles.lbColTitle}>Losses</Text></View>
+          <View style={[styles.lbCol, styles.lbColRightBorder]}><Text style={styles.lbColTitle}>{t('threats.gains')}</Text></View>
+          <View style={styles.lbCol}><Text style={styles.lbColTitle}>{t('threats.losses')}</Text></View>
         </View>
 
         <View style={styles.lbRowWrap}>
@@ -1827,14 +2001,14 @@ const tabs = [
         {/* Totals footer */}
         <View style={styles.lbFooter}>
           <View style={[styles.lbCol, styles.lbColRightBorder]}>
-            <Text style={styles.lbTotalLabel}>Total Gain</Text>
+            <Text style={styles.lbTotalLabel}>{t('threats.totalGain')}</Text>
             <Text style={[styles.lbValGain, { textAlign: 'right', marginTop: 4 }]}>
               {liveBattle.totalGain >= 0 ? '+' : ''}{liveBattle.totalGain.toFixed(2)}
             </Text>
           </View>
 
           <View style={styles.lbCol}>
-            <Text style={styles.lbTotalLabel}>Total Loss</Text>
+            <Text style={styles.lbTotalLabel}>{t('threats.totalLoss')}</Text>
             <Text style={[styles.lbValLoss, { textAlign: 'right', marginTop: 4 }]}>
               {liveBattle.totalLoss.toFixed(2)}
             </Text>
@@ -1854,7 +2028,7 @@ const tabs = [
               activeOpacity={0.8}
             >
               <Text style={{ color: P.ink, fontWeight: '800', fontSize: 12 }}>
-                {lbExpanded ? 'Show fewer' : 'Show all'}
+                {lbExpanded ? t('threats.showFewer') : t('threats.showAll')}
               </Text>
             </TouchableOpacity>
           </View>
@@ -2029,7 +2203,7 @@ const DangerTableCard = memo(function DangerTableCardInner({
           onPress={() => handleSort('name')}
           activeOpacity={0.7}
         >
-          <Text style={styles.th}>Player</Text>
+          <Text style={styles.th}>{t('threats.player')}</Text>
           {sortKey === 'name' && (
             <MaterialCommunityIcons
               name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
@@ -2051,7 +2225,7 @@ const DangerTableCard = memo(function DangerTableCardInner({
         </TouchableOpacity>
 
         <TouchableOpacity style={[styles.thCell, { flex: COL.pts }]} onPress={() => handleSort('pts')} activeOpacity={0.7}>
-          <Text style={styles.th}>Pts</Text>
+          <Text style={styles.th}>{t('threats.pts')}</Text>
           {sortKey === 'pts' && (
             <MaterialCommunityIcons
               name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
@@ -2062,7 +2236,7 @@ const DangerTableCard = memo(function DangerTableCardInner({
         </TouchableOpacity>
 
         <TouchableOpacity style={[styles.thCell, { flex: COL.loss }]} onPress={() => handleSort('ptsVsYou')} activeOpacity={0.7}>
-          <Text style={styles.th}>Loss</Text>
+          <Text style={styles.th}>{t('threats.loss')}</Text>
           {sortKey === 'ptsVsYou' && (
             <MaterialCommunityIcons
               name={sortDir === 'asc' ? 'chevron-up' : 'chevron-down'}
@@ -2125,7 +2299,7 @@ const lossTxt = `${loss.toFixed(1)}`;
         <TextInput
           value={tableSearch}
           onChangeText={setTableSearch}
-          placeholder="Search player…"
+          placeholder={t('threats.searchPlayer')}
           placeholderTextColor={isDark ? '#8a95a6' : '#9aa3af'}
           style={styles.searchInput}
           returnKeyType="search"
@@ -2139,10 +2313,10 @@ const lossTxt = `${loss.toFixed(1)}`;
             {/* Status filter */}
       <View style={styles.legendRow}>
         {[
-          { key: 'all', label: 'All', dot: null },
-          { key: 'live', label: 'Live', dot: 'live' },
-          { key: 'played', label: 'Played', dot: 'played' },
-          { key: 'yet', label: 'Yet', dot: 'yet' },
+          { key: 'all', label: t('threats.all'), dot: null },
+          { key: 'live', label: t('threats.live'), dot: 'live' },
+          { key: 'played', label: t('threats.played'), dot: 'played' },
+          { key: 'yet', label: t('threats.yet'), dot: 'yet' },
         ].map((it) => {
           const active = statusFilter === it.key;
           return (
@@ -2188,10 +2362,10 @@ const lossTxt = `${loss.toFixed(1)}`;
   const inlineHint = useMemo(() => {
     const base = '';
     if (sample === 'local' && /^missing:local/.test(eoErr)) {
-      return SAMPLE_COPY.local.needsSetup;
+      return t('threats.sampleNearYouNeedsSetup');
     }
     return base;
-  }, [sample, eoErr]);
+  }, [sample, eoErr, t]);
 
   if (loading) {
     return (
@@ -2217,26 +2391,26 @@ const lossTxt = `${loss.toFixed(1)}`;
       <Modal visible={infoOpen} transparent animationType="fade" onRequestClose={() => setInfoOpen(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Comparison Samples</Text>
+            <Text style={styles.modalTitle}>{t('threats.comparisonSamples')}</Text>
             <View style={{ gap: 6 }}>
-              <Text style={{ color: P.ink, fontWeight: '800' }}>• {SAMPLE_COPY.top10k.title}</Text>
-              <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18 }}>{SAMPLE_COPY.top10k.long}</Text>
+              <Text style={{ color: P.ink, fontWeight: '800' }}>• {t('threats.top10k')}</Text>
+              <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18 }}>{t('threats.sampleTop10kLong')}</Text>
 
-              <Text style={{ color: P.ink, fontWeight: '800', marginTop: 10 }}>• {SAMPLE_COPY.elite.title}</Text>
+              <Text style={{ color: P.ink, fontWeight: '800', marginTop: 10 }}>• {t('threats.elite')}</Text>
               <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18 }}>
-                {SAMPLE_COPY.elite.long}{' '}
+                {t('threats.sampleEliteLong')}{' '}
                 <Text style={styles.link} onPress={() => Linking.openURL('https://www.livefpl.net/elite')}>
-                  Here is a list of the elite managers and links to their teams →
+                  {t('threats.eliteListLink')}
                 </Text>
               </Text>
 
-              <Text style={{ color: P.ink, fontWeight: '800', marginTop: 10 }}>• {SAMPLE_COPY.local.title}</Text>
-              <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18 }}>{SAMPLE_COPY.local.long}</Text>
-              <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18, opacity: 0.85 }}>{SAMPLE_COPY.local.needsSetup}</Text>
+              <Text style={{ color: P.ink, fontWeight: '800', marginTop: 10 }}>• {t('threats.nearYou')}</Text>
+              <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18 }}>{t('threats.sampleNearYouLong')}</Text>
+              <Text style={{ color: P.muted, fontSize: 13, lineHeight: 18, opacity: 0.85 }}>{t('threats.sampleNearYouNeedsSetup')}</Text>
             </View>
 
             <TouchableOpacity style={styles.closeBtn} onPress={() => setInfoOpen(false)} activeOpacity={0.8}>
-              <Text style={styles.closeBtnText}>Got it</Text>
+              <Text style={styles.closeBtnText}>{t('games.gotIt')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2246,12 +2420,12 @@ const lossTxt = `${loss.toFixed(1)}`;
       <Modal visible={introOpen} transparent animationType="fade" onRequestClose={dismissIntro}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>How to read this page</Text>
+            <Text style={styles.modalTitle}>{t('threats.howToReadPage')}</Text>
             <Text style={{ color:P.muted, marginBottom: 10 }}>
-              Compare vs Top 10K / Elite / Near You. Danger Table lists who can hurt your rank most.
+              {t('threats.compareVsExplainer')}
             </Text>
             <TouchableOpacity style={styles.closeBtn} onPress={dismissIntro} activeOpacity={0.8}>
-              <Text style={styles.closeBtnText}>Got it</Text>
+              <Text style={styles.closeBtnText}>{t('games.gotIt')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2274,61 +2448,50 @@ const lossTxt = `${loss.toFixed(1)}`;
           inlineHint={inlineHint}
         />
 
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabsRow}
-        >
-          {tabs.map(t => {
-            const active = activeTab === t.key;
-            return (
-              <TouchableOpacity
-                key={t.key}
-                onPress={() => {
-  if (t.key === 'templates') {
-    navigation.navigate('Templates'); // must match your App.js route name
-    return;
-  }
-  userTabRef.current = true;
-  setActiveTab(t.key);
-}}
+        {/* Section picker: one dropdown to choose what to show */}
+        <View style={[styles.tabsRow, { flexDirection: 'column', gap: 6 }]}>
+          <Text style={[styles.sectionSub, { marginBottom: 0 }]}>{t('threats.selectStatHint')}</Text>
+          <TouchableOpacity
+            onPress={() => setSectionPickerOpen(true)}
+            activeOpacity={0.85}
+            style={[
+              styles.tabBtn,
+              { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 12 },
+            ]}
+          >
+            <Text style={styles.tabText}>{sectionLabel(activeSection)}</Text>
+            <MaterialCommunityIcons name="chevron-down" size={20} color={P.muted} />
+          </TouchableOpacity>
+        </View>
 
-                style={[styles.tabBtn, active && styles.tabBtnActive]}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.tabText, active && styles.tabTextActive]}>{t.label}</Text>
+        <Modal visible={sectionPickerOpen} transparent animationType="fade">
+          <TouchableOpacity
+            style={styles.modalBackdrop}
+            activeOpacity={1}
+            onPress={() => setSectionPickerOpen(false)}
+          >
+            <View style={styles.modalCard} onStartShouldSetResponder={() => true}>
+              <Text style={styles.modalTitle}>Show stat</Text>
+              {SECTION_OPTIONS.map((opt) => (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[
+                    styles.pickRow,
+                    activeSection === opt.key && { borderLeftWidth: 3, borderLeftColor: P.accent, paddingLeft: 13 },
+                  ]}
+                  onPress={() => onPickSection(opt.key)}
+                >
+                  <Text style={{ color: P.ink, fontWeight: activeSection === opt.key ? '900' : '600' }}>
+                    {sectionLabel(opt.key)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity style={styles.closeBtn} onPress={() => setSectionPickerOpen(false)}>
+                <Text style={styles.closeBtnText}>Cancel</Text>
               </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-        {hasLive && (
-  <View style={{ paddingHorizontal: 12, paddingBottom: 6 }}>
-    <TouchableOpacity
-      onPress={() => navigation.navigate('Templates')}
-      activeOpacity={0.85}
-      style={{
-        paddingVertical: 8,
-        borderRadius: 10,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: P.border,
-        backgroundColor: isDark
-          ? 'rgba(255,255,255,0.05)'
-          : 'rgba(0,0,0,0.04)',
-        alignItems: 'center',
-      }}
-    >
-      <Text
-        style={{
-          fontWeight: '800',
-          fontSize: 12,
-          color: P.ink,
-        }}
-      >
-        Templates / Averages / Chips
-      </Text>
-    </TouchableOpacity>
-  </View>
-)}
+            </View>
+          </TouchableOpacity>
+        </Modal>
 
 
         {/* Live */}
@@ -2336,7 +2499,7 @@ const lossTxt = `${loss.toFixed(1)}`;
 
         {activeTab === 'diffs' && (
           <>
-            {/* Your Differentials — merged group */}
+            {/* Differentials vs. Threats — merged group */}
             <GroupedGridSection
               title={labels.diffsTitle}
               sub={labels.diffsSub}
@@ -2374,13 +2537,6 @@ const lossTxt = `${loss.toFixed(1)}`;
           />
         )}
 
-        {/* Averages tab — XI first, then picker */}
-        {activeTab === 'avgs' && (
-          <>
-            {renderXIBlock()}
-            <AvgPicker />
-          </>
-        )}
       </ScrollView>
     </SafeAreaView>
   );

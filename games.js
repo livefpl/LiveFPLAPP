@@ -24,6 +24,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import { useTranslation } from 'react-i18next';
 import { clubCrestUri, assetImages } from './clubs';
 import { smartFetch } from './signedFetch';
 import { useColors,useTheme  } from './theme';
@@ -35,12 +36,7 @@ const rem = Dimensions.get('window').width / 380;
 const SCREEN_W = Dimensions.get('window').width;
 const SCREEN_H = Dimensions.get('window').height;
 const LIVEFPL_LOGO = assetImages?.livefplLogo ?? assetImages?.logo;
-const SORT_OPTIONS = [
-  { label: 'Chronological',     value: 'chrono' },
-  { label: 'Live Games First',  value: 'live' },
-  { label: 'Biggest Gain/Loss', value: 'net' },
-  { label: 'Highest EO',        value: 'eo' },
-];
+const SORT_VALUES = ['chrono', 'live', 'net', 'eo'];
 const SORT_KEY = 'games.sortBy';
 
 // Safe kickoff getter (accepts object or array payloads)
@@ -197,7 +193,7 @@ function forceLive(game, minute = 56) {
       const r = [...row];
       const explained = Array.isArray(r[4]) ? [...r[4]] : [];
       const filtered = explained.filter(
-        (t) => !(Array.isArray(t) && String(t[0]) === 'minutes')
+        (t) => !(Array.isArray(t) && normalizeExplainKey(String(t[0])) === 'minutes')
       );
       filtered.push(['minutes', minute, 0]);
       r[4] = filtered;
@@ -228,13 +224,13 @@ function forceNilNilNotLive(game) {
   g[4] = 'Scheduled'; // status
   g[5] = '';          // bonus_status
 
-  // remove any injected 'minutes' so maxMinutes = 0
+  // remove any injected 'minutes' (and "minutes Game 2" etc.) so maxMinutes = 0
   const stripMinutes = (table = []) =>
     table.map((row = []) => {
       const r = [...row];
       const explained = Array.isArray(r[4]) ? [...r[4]] : [];
       r[4] = explained.filter(
-        (t) => !(Array.isArray(t) && String(t[0]) === 'minutes')
+        (t) => !(Array.isArray(t) && normalizeExplainKey(String(t[0])) === 'minutes')
       );
       return r;
     });
@@ -272,10 +268,10 @@ const TABLE_MAX_H = XS
   : Math.min(SCREEN_H * 0.7, 620);
 
 /* ---------------------- Options & API ---------------------- */
-const SAMPLE_OPTIONS = [
-  { label: 'Top 10k', value: 'top10k' },
-  { label: 'Elite',   value: 'elite' },
-  { label: 'Near You',   value: 'local' },
+const SAMPLE_VALUES = [
+  { value: 'top10k', key: 'top10k' },
+  { value: 'elite', key: 'elite' },
+  { value: 'local', key: 'nearYou' },
 ];
 
 const CACHE_TTL_MS = 30000; // reuse cached response for 30s
@@ -337,13 +333,14 @@ function maxMinutesFromTables(tableH = [], tableA = []) {
     for (const row of table) {
       const explained = row?.[4];
       if (!Array.isArray(explained)) continue;
+      let rowTotal = 0;
       for (const t of explained) {
         if (!Array.isArray(t) || t.length < 2) continue;
-        if (String(t[0]) === 'minutes') {
-          const mins = Number(t[1]) || 0;
-          if (mins > maxM) maxM = mins;
+        if (normalizeExplainKey(String(t[0])) === 'minutes') {
+          rowTotal += Number(t[1]) || 0;
         }
       }
+      if (rowTotal > maxM) maxM = rowTotal;
     }
   };
   scan(tableH);
@@ -512,28 +509,110 @@ const thresholdForType = (t) => (Number(t) === 2 ? 10 : 12);
 
 // row format (from sample):
 // [name, EO, O, score, explained, elementId, shortName, type]
+// DGW: "minutes Game 2" etc. → merge into base stat (sum times/pts across games)
+function normalizeExplainKey(key) {
+  const k = String(key ?? '').trim();
+  return k.replace(/\s+Game\s+\d+$/i, '').trim() || k;
+}
+
 function parseExplained(list) {
   const out = {};
   (list || []).forEach((t) => {
     if (!Array.isArray(t) || t.length < 2) return;
-    const key = String(t[0]);
+    const baseKey = normalizeExplainKey(String(t[0]));
     const times = Number(t[1]) || 0;
     const pts = Number(t[2]) || 0;
-    out[key] = { times, pts };
+    if (!out[baseKey]) out[baseKey] = { times: 0, pts: 0 };
+    out[baseKey].times += times;
+    out[baseKey].pts += pts;
   });
   return out;
 }
 
-function tableToPlayers(table) {
+// DGW: only entries whose key contains " Game 2" (for 2nd fixture view)
+function parseExplainedGame2Only(list) {
+  const out = {};
+  (list || []).forEach((t) => {
+    if (!Array.isArray(t) || t.length < 2) return;
+    const rawKey = String(t[0] ?? '').trim();
+    if (!rawKey.includes(' Game 2')) return;
+    const baseKey = normalizeExplainKey(rawKey);
+    const times = Number(t[1]) || 0;
+    const pts = Number(t[2]) || 0;
+    if (!out[baseKey]) out[baseKey] = { times: 0, pts: 0 };
+    out[baseKey].times += times;
+    out[baseKey].pts += pts;
+  });
+  return out;
+}
+
+function ptsFromExplainedGame2(explained) {
+  let sum = 0;
+  (explained || []).forEach((t) => {
+    if (!Array.isArray(t) || t.length < 2) return;
+    if (!String(t[0] ?? '').includes(' Game 2')) return;
+    sum += Number(t[2]) || 0;
+  });
+  return sum;
+}
+
+// For 2nd fixture: tables with row[3] replaced by Game-2-only pts (for net agg / display)
+function tablesWithGame2PtsOnly(tableH, tableA) {
+  const mapRow = (row) => {
+    if (!Array.isArray(row) || row.length < 5) return row;
+    const ptsGame2 = ptsFromExplainedGame2(row[4]);
+    return [...row.slice(0, 3), ptsGame2, ...row.slice(4)];
+  };
+  return [
+    (tableH || []).map(mapRow),
+    (tableA || []).map(mapRow),
+  ];
+}
+
+function maxMinutesFromTablesGame2Only(tableH = [], tableA = []) {
+  let maxM = 0;
+  const scan = (table) => {
+    for (const row of table) {
+      const explained = row?.[4];
+      if (!Array.isArray(explained)) continue;
+      let rowTotal = 0;
+      for (const t of explained) {
+        if (!Array.isArray(t) || t.length < 2) continue;
+        const key = String(t[0] ?? '');
+        if (key.includes(' Game 2') && normalizeExplainKey(key) === 'minutes') rowTotal += Number(t[1]) || 0;
+      }
+      if (rowTotal > maxM) maxM = rowTotal;
+    }
+  };
+  scan(tableH);
+  scan(tableA);
+  return maxM;
+}
+
+// True when this game is the second fixture (by kickoff) for the home team in the list (DGW)
+function isSecondFixtureInDgw(game, allGames) {
+  if (!game || !Array.isArray(allGames) || allGames.length < 2) return false;
+  const teamHId = game[16];
+  const teamAId = game[17];
+  const ko = getKickoffDate(game);
+  const koTime = ko?.getTime?.() ?? 0;
+  const gamesForTeam = allGames.filter((g) => g[16] === teamHId || g[17] === teamHId);
+  gamesForTeam.sort((a, b) => (getKickoffDate(a)?.getTime() ?? 0) - (getKickoffDate(b)?.getTime() ?? 0));
+  const idx = gamesForTeam.findIndex((g) => (getKickoffDate(g)?.getTime() ?? 0) === koTime);
+  return idx === 1;
+}
+
+function tableToPlayers(table, game2Only = false) {
   return (table || []).map((row) => {
     const [name, EO, _O, score, explained, elementId, shortName, type] = row;
-    const e = parseExplained(explained);
+    const e = game2Only ? parseExplainedGame2Only(explained) : parseExplained(explained);
+    const pts = game2Only ? ptsFromExplainedGame2(explained) : (Number(score) || 0);
     return {
       id: Number(elementId) || null,
       name: shortName || name,
       rawName: name,
       EO: Number(EO) || 0,
-      pts: Number(score) || 0,
+      pts,
       type: Number(type) || 0,
       explainedMap: e,
       explainedRaw: explained || [],
@@ -616,7 +695,7 @@ function CollapsibleSection({ icon, title, open, onToggle, children, hint, right
           {hint ? <Text style={styles.hintText} numberOfLines={1} ellipsizeMode="tail">{hint}</Text> : null}
         </View>
 
-        {/* RIGHT: don’t shrink + clamp pill width */}
+        {/* RIGHT: don't shrink + clamp pill width */}
         <View style={styles.collapseRight}>
           {rightExtra ? <View style={styles.rightClamp}>{rightExtra}</View> : null}
           <MaterialCommunityIcons
@@ -792,12 +871,13 @@ function BonusRow({ home, away, styles, colors }) {
 /* ---------- EO sample help ---------- */
 /* ---------- EO sample help (expanded) ---------- */
 function SampleInfoHelp({ visible, onClose, styles, colors }) {
+  const { t } = useTranslation();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.helpBackdrop}>
         <View style={styles.helpCard}>
           <View style={styles.helpHeader}>
-            <Text style={styles.helpTitle}>What’s this page doing?</Text>
+            <Text style={styles.helpTitle}>{t('games.whatsThisPageDoing')}</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
               <MaterialCommunityIcons name="close" size={20} color={colors.ink} />
             </TouchableOpacity>
@@ -807,54 +887,50 @@ function SampleInfoHelp({ visible, onClose, styles, colors }) {
           {/* What the page does */}
           <View style={{ gap: 8, marginBottom: 10 }}>
             <Text style={styles.helpLine}>
-              • This page tracks each live/finished match and summarizes goals, assists, bonus and key races
-              (Bonus Race & Defensive Contributions). It also shows <Text style={styles.bold}>Team EO</Text> and
-              computes your <Text style={styles.bold}>Net Gain</Text> vs the field for the game based on your saved team exposure.
+              • {t('games.pageTracksExplainer')}
             </Text>
             <Text style={styles.helpLine}>
-              • <Text style={styles.bold}>Rank Movers</Text> highlights players who are threats (high field ownership you don’t match)
-              and opportunities (you own/captain more than the field).
+              • {t('games.rankMoversHelpExplainer')}
             </Text>
           </View>
 
-          <Text style={[styles.helpTitle, { marginTop: 2, marginBottom: 6 }]}>What do these samples mean?</Text>
+          <Text style={[styles.helpTitle, { marginTop: 2, marginBottom: 6 }]}>{t('games.whatDoSamplesMean')}</Text>
 
           {/* What the samples are */}
           <View style={{ gap: 8 }}>
             <Text style={styles.helpLine}>
-              <Text style={styles.bold}>Top 10k: </Text>
-              Effective ownership based on managers around rank ~10,000.
+              <Text style={styles.bold}>{t('games.top10k')}: </Text>
+              {t('games.top10kSample')}
             </Text>
             <Text style={styles.helpLine}>
-              <Text style={styles.bold}>Elite: </Text>
-              Curated long-term high performers tracked by LiveFPL (smaller but sharper sample).
+              <Text style={styles.bold}>{t('games.elite')}: </Text>
+              {t('games.eliteSample')}
             </Text>
             <Text style={styles.helpLine}>
-              <Text style={styles.bold}>Near You: </Text>
-              Managers close to your rank (local group). We detect your group from the Rank page; if your FPL ID isn’t saved yet, this may be unavailable.
+              <Text style={styles.bold}>{t('games.nearYou')}: </Text>
+              {t('games.nearYouSample')}
             </Text>
           </View>
 
-          <Text style={[styles.helpTitle, { marginTop: 12, marginBottom: 6 }]}>How are samples used?</Text>
+          <Text style={[styles.helpTitle, { marginTop: 12, marginBottom: 6 }]}>{t('games.howSamplesUsed')}</Text>
 
           {/* How the overlay changes numbers */}
           <View style={{ gap: 8 }}>
             
             <Text style={styles.helpLine}>
-              • <Text style={styles.bold}>Team EO</Text> is the sum of the displayed EO% values for that team (after the overlay).
+              • {t('games.teamEoExplainer')}
             </Text>
             <Text style={styles.helpLine}>
-              • <Text style={styles.bold}>Threats / Opportunities</Text> use the EO% of the chosen sample to compare the field’s ownership
-              to yours (including captaincy multipliers), then rank the biggest deltas for this game.
+              • {t('games.threatsOpportunitiesExplainer')}
             </Text>
             <Text style={styles.helpLine}>
-              • <Text style={styles.bold}>Net Gain</Text> = (your exposure × player points) − (sample EO × player points), aggregated over all players in the match.
+              • {t('games.netGainExplainer')}
             </Text>
             
           </View>
 
           <TouchableOpacity onPress={onClose} style={styles.helpOkay}>
-            <Text style={styles.helpOkayText}>Got it</Text>
+            <Text style={styles.helpOkayText}>{t('games.gotIt')}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -862,13 +938,9 @@ function SampleInfoHelp({ visible, onClose, styles, colors }) {
   );
 }
 
-function getSortLabel(value) {
-  const hit = SORT_OPTIONS.find(o => o.value === value);
-  return hit ? hit.label : value;
-}
-
-function SortDropdown({ value, onChange, options, styles, colors }) {
+function SortDropdown({ value, onChange, options, styles, colors, accessibilityLabel }) {
   const [open, setOpen] = useState(false);
+  const label = options?.find(o => o.value === value)?.label ?? value;
 
   return (
     <>
@@ -877,10 +949,10 @@ function SortDropdown({ value, onChange, options, styles, colors }) {
         activeOpacity={0.8}
         style={styles.ddButton}
         accessibilityRole="button"
-        accessibilityLabel="Change sort order"
+        accessibilityLabel={accessibilityLabel}
       >
         <Text style={styles.ddButtonText} numberOfLines={1}>
-          {getSortLabel(value)}
+          {label}
         </Text>
         <MaterialCommunityIcons
           name={open ? 'chevron-up' : 'chevron-down'}
@@ -933,7 +1005,8 @@ function SortDropdown({ value, onChange, options, styles, colors }) {
 // --- New compact, Flashscore-style row ---
 // --- Compact, Flashscore-style row with EO under each team ---
 // --- Compact, Flashscore-style row with EO under each team & fixed right column ---
-function CompactGameRow({ game, eoMap, myExposure, styles, colors, onPress, expanded }) {
+function CompactGameRow({ game, eoMap, myExposure, styles, colors, onPress, expanded, isSecondFixture }) {
+  const { t } = useTranslation();
   const hName = game[0], aName = game[1];
   const hScore = game[2], aScore = game[3];
   const status = game[4], bonusStatus = game[5];
@@ -963,11 +1036,18 @@ function CompactGameRow({ game, eoMap, myExposure, styles, colors, onPress, expa
   const teamEO_H = rowsH.reduce((s, r) => s + (r.eo || 0), 0);
   const teamEO_A = rowsA.reduce((s, r) => s + (r.eo || 0), 0);
 
-  // minute + net gain
-  const minute = React.useMemo(() => maxMinutesFromTables(tableH, tableA), [tableH, tableA]);
+  // minute + net gain (for 2nd DGW fixture use Game-2-only pts/minutes)
+  const [tblH, tblA] = React.useMemo(
+    () => isSecondFixture ? tablesWithGame2PtsOnly(tableH, tableA) : [tableH, tableA],
+    [isSecondFixture, tableH, tableA]
+  );
+  const minute = React.useMemo(
+    () => isSecondFixture ? maxMinutesFromTablesGame2Only(tableH, tableA) : maxMinutesFromTables(tableH, tableA),
+    [tableH, tableA, isSecondFixture]
+  );
   const netAgg = React.useMemo(
-    () => computeNetAggFromTables(tableH, tableA, eoMap, myExposure),
-    [tableH, tableA, eoMap, myExposure]
+    () => computeNetAggFromTables(tblH, tblA, eoMap, myExposure),
+    [tblH, tblA, eoMap, myExposure]
   );
 
   const gainStyle =
@@ -992,7 +1072,7 @@ const ko = getKickoffDate(game);
       ]}
       accessibilityRole="button"
       accessibilityLabel={`${hName} ${hScore}, ${aName} ${aScore}, ${phaseText}`}
-      accessibilityHint={expanded ? 'Collapse match details' : 'Expand match details'}
+      accessibilityHint={expanded ? t('games.collapseMatchDetails') : t('games.expandMatchDetails')}
     >
       {/* LEFT: slim status rail */}
       <View style={styles.fxLeft}>
@@ -1065,7 +1145,8 @@ const ko = getKickoffDate(game);
 
 
 /* ------------------------- Game Card -------------------------- */
-function GameCard({ game, eoMap, myExposure, styles, colors,onCollapse  }) {
+function GameCard({ game, eoMap, myExposure, styles, colors, onCollapse, isSecondFixture }) {
+  const { t } = useTranslation();
   const hName = game[0];
   const aName = game[1];
   const hScore = game[2];
@@ -1087,8 +1168,9 @@ function GameCard({ game, eoMap, myExposure, styles, colors,onCollapse  }) {
   const crestH = clubCrestUri ? { uri: clubCrestUri(teamHId) } : null;
   const crestA = clubCrestUri ? { uri: clubCrestUri(teamAId) } : null;
 
-  const playersH = useMemo(() => tableToPlayers(tableH), [tableH]);
-  const playersA = useMemo(() => tableToPlayers(tableA), [tableA]);
+  const game2Only = Boolean(isSecondFixture);
+  const playersH = useMemo(() => tableToPlayers(tableH, game2Only), [tableH, game2Only]);
+  const playersA = useMemo(() => tableToPlayers(tableA, game2Only), [tableA, game2Only]);
 
   const scorersHome = useMemo(() => tallyFromCompact(goalsH).filter(x => x.count > 0), [goalsH]);
   const scorersAway = useMemo(() => tallyFromCompact(goalsA).filter(x => x.count > 0), [goalsA]);
@@ -1144,9 +1226,11 @@ const goalsAwayDisplay = useMemo(
 
   const bpsMap = useMemo(() => extractStatMap(statsList, 'bps'), [statsList]);
   const defMap = useMemo(() => extractStatMap(statsList, 'defensive_contribution'), [statsList]);
+  const savesMap = useMemo(() => extractStatMap(statsList, 'saves'), [statsList]);
 
   const bpsJoined = useMemo(() => joinStatWithNames(bpsMap, idIndex, 'bps'), [bpsMap, idIndex]);
   const defJoined = useMemo(() => joinStatWithNames(defMap, idIndex, 'def'), [defMap, idIndex]);
+  const savesJoined = useMemo(() => joinStatWithNames(savesMap, idIndex, 'saves'), [savesMap, idIndex]);
 // --- Correct, tie-aware (competition ranking) bonus from BPS ---
 // Sort by BPS desc; assign ranks 1,2,3 with competition ranking (1,1,3,4...).
 // Then map rank→bonus: 1→+3, 2→+2, 3→+1.
@@ -1183,6 +1267,15 @@ function deriveBonusMapFromBps(bpsArr) {
 const homeIdSet = useMemo(() => new Set(playersH.map(p => p.id).filter(Boolean)), [playersH]);
 const awayIdSet = useMemo(() => new Set(playersA.map(p => p.id).filter(Boolean)), [playersA]);
 
+const savesHome = useMemo(
+  () => savesJoined.filter((p) => homeIdSet.has(p.id)).map((p) => ({ name: p.name, count: p.saves || 0 })),
+  [savesJoined, homeIdSet]
+);
+const savesAway = useMemo(
+  () => savesJoined.filter((p) => awayIdSet.has(p.id)).map((p) => ({ name: p.name, count: p.saves || 0 })),
+  [savesJoined, awayIdSet]
+);
+
 // Derived awards map
 const bonusMap = useMemo(() => deriveBonusMapFromBps(bpsJoined), [bpsJoined]);
 
@@ -1208,12 +1301,9 @@ const bonusAwayDerived = useMemo(() => {
 }, [bpsJoined, bonusMap, awayIdSet]);
 
 
-  // Collapsibles (hidden by default)
-  const [bpsOpen, setBpsOpen] = useState(false);
-  const [defOpen, setDefOpen] = useState(false);
-  
-
-  // Threats/opportunities collapsibles (hidden by default as requested)
+  // Key Races: default open so users see Rank Movers, Defcon and Bonus
+  const [bpsOpen, setBpsOpen] = useState(true);
+  const [defOpen, setDefOpen] = useState(true);
   const [rankMoversOpen, setRankMoversOpen] = useState(false);
 
   // Top-8 vs all toggle when open
@@ -1259,8 +1349,13 @@ const bonusAwayDerived = useMemo(() => {
     return rows.map(r => (r.id && eoMap.has(r.id)) ? { ...r, eo: Number(eoMap.get(r.id)) || 0 } : r);
   }, [eoMap]);
 
-  const rowsH = useMemo(() => applyOverlay(normalizeRows(tableH)).sort(sortByTypeThenPts), [tableH, applyOverlay]);
-  const rowsA = useMemo(() => applyOverlay(normalizeRows(tableA)).sort(sortByTypeThenPts), [tableA, applyOverlay]);
+  // Rank Movers / net agg: use Game-2-only pts when this is the 2nd DGW fixture
+  const [tableHForRows, tableAForRows] = useMemo(
+    () => isSecondFixture ? tablesWithGame2PtsOnly(tableH, tableA) : [tableH, tableA],
+    [isSecondFixture, tableH, tableA]
+  );
+  const rowsH = useMemo(() => applyOverlay(normalizeRows(tableHForRows)).sort(sortByTypeThenPts), [tableHForRows, applyOverlay]);
+  const rowsA = useMemo(() => applyOverlay(normalizeRows(tableAForRows)).sort(sortByTypeThenPts), [tableAForRows, applyOverlay]);
 
   const teamEO_H = useMemo(() => rowsH.reduce((s, r) => s + (Number(r.eo) || 0), 0), [rowsH]);
   const teamEO_A = useMemo(() => rowsA.reduce((s, r) => s + (Number(r.eo) || 0), 0), [rowsA]);
@@ -1322,8 +1417,8 @@ const bonusAwayDerived = useMemo(() => {
        <TouchableOpacity
          onPress={onCollapse}
          accessibilityRole="button"
-         accessibilityLabel="Collapse match details"
-         accessibilityHint="Return to compact row"
+         accessibilityLabel={t('games.collapseMatchDetails')}
+         accessibilityHint={t('games.returnToCompactRow')}
          style={styles.cardChevronBtn}
          activeOpacity={0.8}
       >
@@ -1336,7 +1431,7 @@ const bonusAwayDerived = useMemo(() => {
         <View style={[styles.teamBlock, styles.teamBlockCenter]}>
           {!!crestH && <Image source={crestH} style={styles.crestBig} />}
           <Text style={styles.teamName} numberOfLines={1}>{hName}</Text>
-          <Text style={styles.teamMeta}>Team EO: {teamEO_H.toFixed(1)}%</Text>
+          <Text style={styles.teamMeta}>{t('games.teamEo')} {teamEO_H.toFixed(1)}%</Text>
         </View>
 
         {/* score + status */}
@@ -1352,7 +1447,7 @@ const bonusAwayDerived = useMemo(() => {
             
             <TouchableOpacity style={styles.playersBtn} onPress={() => setShowTeamsModal(true)}>
               <MaterialCommunityIcons name="account-group-outline" size={14} color={'white'} />
-              <Text style={styles.playersBtnText}>Expand All Players</Text>
+              <Text style={styles.playersBtnText}>{t('games.expandAllPlayers')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1361,7 +1456,7 @@ const bonusAwayDerived = useMemo(() => {
         <View style={[styles.teamBlock, styles.teamBlockCenter]}>
           {!!crestA && <Image source={crestA} style={styles.crestBig} />}
           <Text style={[styles.teamName]} numberOfLines={1}>{aName}</Text>
-          <Text style={styles.teamMeta}>Team EO: {teamEO_A.toFixed(1)}%</Text>
+          <Text style={styles.teamMeta}>{t('games.teamEo')} {teamEO_A.toFixed(1)}%</Text>
         </View>
       </View>
       
@@ -1369,7 +1464,8 @@ const bonusAwayDerived = useMemo(() => {
 {(() => {
   const hasGoals = (scorersHome.length + scorersAway.length) > 0;
   const hasAssists = (assistsHome.length + assistsAway.length) > 0;
-  if (!hasGoals && !hasAssists) return null;
+  const hasSaves = savesHome.length > 0 || savesAway.length > 0;
+  if (!hasGoals && !hasAssists && !hasSaves) return null;
   return (
     <View style={styles.eventsStrip}>
       {hasGoals && (
@@ -1390,134 +1486,25 @@ const bonusAwayDerived = useMemo(() => {
           colors={colors}
         />
       )}
+      {hasSaves && (
+        <TwoColumnList
+          home={savesHome}
+          away={savesAway}
+          bullet="🧤"
+          styles={styles}
+          colors={colors}
+        />
+      )}
     </View>
   );
 })()}
 
-<CollapsibleSection
-  icon="swap-vertical"
-  title="Rank Movers"
-  open={rankMoversOpen}
-  onToggle={() => setRankMoversOpen(o => !o)}
-  
-  styles={styles}
-  colors={colors}
-  rightExtra={
-    netAgg ? (
-      <Chip styles={styles}>
-        <Text
-          numberOfLines={1}
-          style={[
-            styles.statusText,
-            netAgg.net > 0
-              ? { color: colors.ok }
-              : netAgg.net < 0
-              ? { color: colors.red }
-              : { color: colors.muted },
-          ]}
-        >
-          Net Gain: {netAgg.net > 0 ? '+' : ''}{netAgg.net.toFixed(1)} pts
-        </Text>
-      </Chip>
-    ) : null
-  }
->
-  {(() => {
-    const { opp, thr } = buildOppThreatTables(threats, opportunities);
-
-    const Table = ({ title, rows, kind }) => (
-      <View style={{ marginTop: 6 }}>
-        <View style={styles.subHeaderRow}>
-          <MaterialCommunityIcons
-            name={kind === 'opp' ? 'star-outline' : 'alert-outline'}
-            size={16}
-            color={colors.muted}
-          />
-          <Text style={styles.subHeaderText}>{title}</Text>
-        </View>
-
-        <View style={styles.tableWrap}>
-          <View style={styles.tableHead}>
-            <Text style={[styles.th, styles.colPlayer]}>Player</Text>
-            <Text style={[styles.th, styles.colNum, styles.cellRight]}>
-              {kind === 'opp' ? 'Gain %' : 'Loss %'}
-            </Text>
-            <Text style={[styles.th, styles.colNum, styles.cellRight]}>Pts</Text>
-            <Text style={[styles.th, styles.colNum, styles.cellRight]}>
-              {kind === 'opp' ? 'Gained Pts' : 'Lost Pts'}
-            </Text>
-            <Text style={[styles.th, styles.colRisk]}> </Text>
-          </View>
-
-          {rows.length === 0 ? (
-            <View style={{ padding: 8 }}>
-              <Text style={styles.mutedSmall}>
-                {kind === 'opp' ? 'No players for you in this game.' : 'No major threats detected.'}
-              </Text>
-            </View>
-          ) : (
-            <View style={styles.tableBody}>
-              {rows.map((r, i) => (
-                <TouchableOpacity
-                  key={`${r.id || r.name}-${i}`}
-                  style={[styles.tr, i % 2 === 1 && styles.trAlt]}
-                  activeOpacity={0.7}
-                  onPress={() => onRowPress({
-                    id: r.id, name: r.name, pts: r.pts, type: undefined,
-                    explainedMap: {}, explainedRaw: []
-                  })}
-                >
-                  <Text style={[styles.td, styles.colPlayer]} numberOfLines={1} ellipsizeMode="tail">{r.name}</Text>
-
-                  {kind === 'opp' ? (
-                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.ok }]}>
-                      {toPct(r.gainPct)}
-                    </Text>
-                  ) : (
-                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.red }]}>
-                      {toPct(r.lossPct)}
-                    </Text>
-                  )}
-
-                  <Text style={[styles.td, styles.colNum, styles.cellRight]}>{r.pts}</Text>
-
-                  {kind === 'opp' ? (
-                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.ok }]}>
-                      {toSignedPts(r.gainedPts)}
-                    </Text>
-                  ) : (
-                    <Text style={[styles.td, styles.colNum, styles.cellRight, { color: colors.red }]}>
-                      {toSignedPts(r.lostPts)}
-                    </Text>
-                  )}
-
-                  <Text style={[styles.td, styles.colRisk]}>
-                    {kind === 'opp' ? oppEmoji(r.gainedPts) : r.emoji}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-        </View>
-      </View>
-    );
-
-    return (
-      <>
-        <Table title="Opportunities" rows={opp} kind="opp" />
-        <Table title="Threats" rows={thr} kind="thr" />
-      </>
-    );
-  })()}
-</CollapsibleSection>
-
-
       <CollapsibleSection
         icon="shield-outline"
-        title="Defensive Contributions"
+        title={t('games.defensiveContributions')}
         open={defOpen}
         onToggle={() => setDefOpen((o) => !o)}
-        hint={!defOpen ? 'Tap to expand' : undefined}
+        hint={!defOpen ? t('games.playersTapToExpand', { count: defSorted.length }) : undefined}
         styles={styles}
         colors={colors}
       >
@@ -1546,18 +1533,17 @@ const bonusAwayDerived = useMemo(() => {
         </View>
         {defSorted.length > 8 && (
           <TouchableOpacity style={styles.toggleBtn} onPress={() => setDefExpanded((s) => !s)}>
-            <Text style={styles.toggleText}>{defExpanded ? 'Show top 8' : `Show all ${defSorted.length}`}</Text>
+            <Text style={styles.toggleText}>{defExpanded ? t('games.showTop8') : t('games.showAllCount', { count: defSorted.length })}</Text>
           </TouchableOpacity>
         )}
       </CollapsibleSection>
 
-      {/* --- Collapsible analytics BEFORE Goals/Assists --- */}
       <CollapsibleSection
         icon="chart-bar"
-        title="Bonus Race"
+        title={t('games.bonusRace')}
         open={bpsOpen}
         onToggle={() => setBpsOpen((o) => !o)}
-        hint={!bpsOpen ? 'Tap to expand' : undefined}
+        hint={!bpsOpen ? t('games.bpsRaceTapToExpand') : undefined}
         styles={styles}
         colors={colors}
       >
@@ -1565,43 +1551,111 @@ const bonusAwayDerived = useMemo(() => {
           {bpsShow.length === 0 ? (
             <Text style={styles.mutedSmall}>—</Text>
           ) : (
-           bpsShow.map((p) => {
-    const award = bonusMap.get(p.id) || 0;
-    return (
-      <BarRow
-        key={`bps-${p.id}`}
-        name={p.name}
-        value={p.bps}
-        max={bpsMax}
-        styles={styles}
-        colors={colors}
-        // NEW: medal-style inline badge
-        badgeText={award > 0 ? `+${award}` : undefined}
-        badgeColor={award > 0 ? colors.accent : undefined}
-      />
-    );
-  })
+            bpsShow.map((p) => {
+              const award = bonusMap.get(p.id) || 0;
+              return (
+                <BarRow
+                  key={`bps-${p.id}`}
+                  name={p.name}
+                  value={p.bps}
+                  max={bpsMax}
+                  styles={styles}
+                  colors={colors}
+                  badgeText={award > 0 ? `+${award}` : undefined}
+                  badgeColor={award > 0 ? colors.accent : undefined}
+                />
+              );
+            })
           )}
         </View>
         {bpsJoined.length > 8 && (
           <TouchableOpacity style={styles.toggleBtn} onPress={() => setBpsExpanded((s) => !s)}>
-            <Text style={styles.toggleText}>{bpsExpanded ? 'Show top 8' : `Show all ${bpsJoined.length}`}</Text>
+            <Text style={styles.toggleText}>{bpsExpanded ? t('games.showTop8') : t('games.showAllCount', { count: bpsJoined.length })}</Text>
           </TouchableOpacity>
         )}
       </CollapsibleSection>
 
-      
-
-      
+      <CollapsibleSection
+        icon="swap-vertical"
+        title={t('games.rankMovers')}
+        open={rankMoversOpen}
+        onToggle={() => setRankMoversOpen((o) => !o)}
+        hint={!rankMoversOpen ? t('games.expand') : undefined}
+        styles={styles}
+        colors={colors}
+        rightExtra={
+          netAgg ? (
+            <Chip styles={styles}>
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.statusText,
+                  netAgg.net > 0 ? { color: colors.ok } : netAgg.net < 0 ? { color: colors.red } : { color: colors.muted },
+                ]}
+              >
+                Net: {netAgg.net > 0 ? '+' : ''}{netAgg.net.toFixed(1)} pts
+              </Text>
+            </Chip>
+          ) : null
+        }
+      >
+        {(() => {
+          const { opp, thr } = buildOppThreatTables(threats, opportunities);
+          const oppMax = opp.length ? Math.max(...opp.map((r) => r.gainedPts || 0), 1) : 1;
+          const thrMax = thr.length ? Math.max(...thr.map((r) => r.lostPts || 0), 1) : 1;
+          return (
+            <>
+              <Text style={[styles.sectionTitleText, { marginBottom: 4 }]}>{t('games.opportunities')}</Text>
+              <View style={styles.barsBox}>
+                {opp.length === 0 ? (
+                  <Text style={styles.mutedSmall}>{t('games.noPlayersInGame')}</Text>
+                ) : (
+                  opp.map((r, i) => (
+                    <BarRow
+                      key={`opp-${r.id || i}`}
+                      name={r.name}
+                      value={parseFloat((r.gainedPts || 0).toFixed(1))}
+                      max={oppMax}
+                      unit=" pts"
+                      color={colors.ok}
+                      styles={styles}
+                      colors={colors}
+                    />
+                  ))
+                )}
+              </View>
+              <Text style={[styles.sectionTitleText, { marginTop: 10, marginBottom: 4 }]}>{t('games.threats')}</Text>
+              <View style={styles.barsBox}>
+                {thr.length === 0 ? (
+                  <Text style={styles.mutedSmall}>{t('games.noMajorThreatsDetected')}</Text>
+                ) : (
+                  thr.map((r, i) => (
+                    <BarRow
+                      key={`thr-${r.id || i}`}
+                      name={r.name}
+                      value={parseFloat((r.lostPts || 0).toFixed(1))}
+                      max={thrMax}
+                      unit=" pts"
+                      color={colors.red}
+                      styles={styles}
+                      colors={colors}
+                    />
+                  ))
+                )}
+              </View>
+            </>
+          );
+        })()}
+      </CollapsibleSection>
 
       {/* Bonus points list */}
-      <SectionTitle icon="medal-outline" styles={styles} colors={colors}>Bonus Points</SectionTitle>
+      <SectionTitle icon="medal-outline" styles={styles} colors={colors}>{t('games.bonusPoints')}</SectionTitle>
  
 <BonusRow home={bonusHomeDerived} away={bonusAwayDerived} styles={styles} colors={colors} />
 
 
       {/* Cards & Pens */}
-      <SectionTitle icon="card-outline" styles={styles} colors={colors}>Cards & Pens</SectionTitle>
+      <SectionTitle icon="card-outline" styles={styles} colors={colors}>{t('games.cardsAndPens')}</SectionTitle>
       <View style={styles.tagsRow}>
         {[
           ...rowsFromList('🟨', playersH.filter(p=>p.yc>0).map(p=>({name:p.name,count:p.yc})), 'left', null, styles, colors),
@@ -1642,13 +1696,13 @@ const bonusAwayDerived = useMemo(() => {
                 </View>
                 <View style={styles.tableCols}>
                   <Text style={[styles.th, styles.cellPlayer, SM && styles.thSM, { flex: COL_FLEX.player }]}>
-                    Player
+                    {t('games.player')}
                   </Text>
                   <Text style={[styles.th, styles.cellRight, SM && styles.thSM, { flex: COL_FLEX.eo }]}>
-                    EO%
+                    {t('games.eoPct')}
                   </Text>
                   <Text style={[styles.th, styles.cellRight, SM && styles.thSM, { flex: COL_FLEX.pts }]}>
-                    Pts
+                    {t('games.pts')}
                   </Text>
                 </View>
                 <ScrollView style={{ maxHeight: TABLE_MAX_H }}>
@@ -1683,7 +1737,7 @@ const bonusAwayDerived = useMemo(() => {
                 </ScrollView>
                 <View style={styles.breakdownFooter}>
                   <MaterialCommunityIcons name="gesture-tap" size={14} color={colors.muted} />
-                  <Text style={styles.mutedSmall}> Tap a player in the table to view their breakdown.</Text>
+                  <Text style={styles.mutedSmall}> {t('games.tapPlayerForBreakdown')}</Text>
                 </View>
               </View>
 
@@ -1695,13 +1749,13 @@ const bonusAwayDerived = useMemo(() => {
                 </View>
                 <View style={styles.tableCols}>
                   <Text style={[styles.th, styles.cellPlayer, SM && styles.thSM, { flex: COL_FLEX.player }]}>
-                    Player
+                    {t('games.player')}
                   </Text>
                   <Text style={[styles.th, styles.cellRight, SM && styles.thSM, { flex: COL_FLEX.eo }]}>
-                    EO%
+                    {t('games.eoPct')}
                   </Text>
                   <Text style={[styles.th, styles.cellRight, SM && styles.thSM, { flex: COL_FLEX.pts }]}>
-                    Pts
+                    {t('games.pts')}
                   </Text>
                 </View>
                 <ScrollView style={{ maxHeight: TABLE_MAX_H }}>
@@ -1736,7 +1790,7 @@ const bonusAwayDerived = useMemo(() => {
                 </ScrollView>
                 <View style={styles.breakdownFooter}>
                   <MaterialCommunityIcons name="gesture-tap" size={14} color={colors.muted} />
-                  <Text style={styles.mutedSmall}> Tap a player in the table to view their breakdown.</Text>
+                  <Text style={styles.mutedSmall}> {t('games.tapPlayerForBreakdown')}</Text>
                 </View>
               </View>
             </View>
@@ -1756,10 +1810,10 @@ const bonusAwayDerived = useMemo(() => {
                 <View style={styles.breakdownHeader}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <MaterialCommunityIcons name="chart-box-outline" size={18} color={colors.accent} />
-                    <Text style={styles.breakdownTitle}>Points Breakdown</Text>
+                    <Text style={styles.breakdownTitle}>{t('games.pointsBreakdown')}</Text>
                   </View>
                   <Text style={styles.breakdownPts}>
-                    Total: <Text style={styles.bold}>{playerDetail.pts}</Text>
+                    {t('games.totalLabel')} <Text style={styles.bold}>{playerDetail.pts}</Text>
                   </Text>
                 </View>
 
@@ -1776,7 +1830,7 @@ const bonusAwayDerived = useMemo(() => {
                       }))
                       .sort((a, b) => Math.abs(b.pts) - Math.abs(a.pts) || a.label.localeCompare(b.label));
                     if (items.length === 0) {
-                      return <Text style={styles.mutedSmall}>No scoring events recorded.</Text>;
+                      return <Text style={styles.mutedSmall}>{t('games.noScoringEventsRecorded')}</Text>;
                     }
                     return items.map((it, idx) => {
                       const mult = it.times > 1 ? ` ×${it.times}` : '';
@@ -1793,7 +1847,7 @@ const bonusAwayDerived = useMemo(() => {
 
                 <View style={styles.breakdownFooter}>
                   <MaterialCommunityIcons name="gesture-tap" size={14} color={colors.muted} />
-                  <Text style={styles.mutedSmall}> Tap another player in the table to view their breakdown.</Text>
+                  <Text style={styles.mutedSmall}> {t('games.tapAnotherPlayerForBreakdown')}</Text>
                 </View>
               </View>
             )}
@@ -1819,11 +1873,22 @@ function rowsFromList(label, list, side, borderColor, styles, colors) {
 
 /* --------------------------- Screen --------------------------- */
 function Games() {
-  
+  const { t } = useTranslation();
   const [gwTitle, setGwTitle] = useState(null);
-const [sortBy, setSortBy] = useState('chrono'); // default: chronological
-const [viewTab, setViewTab] = useState('summary'); // 'summary' | 'feed'
-const [onePt, setOnePt] = useState(null);
+  const [sortBy, setSortBy] = useState('live'); // default: live first
+  const [viewTab, setViewTab] = useState('summary'); // 'summary' | 'feed'
+  const [onePt, setOnePt] = useState(null);
+
+  const sortOptions = useMemo(() => [
+    { label: t('games.chronological'), value: 'chrono' },
+    { label: t('games.liveMatchesFirst'), value: 'live' },
+    { label: t('games.biggestGainLoss'), value: 'net' },
+    { label: t('games.highestEo'), value: 'eo' },
+  ], [t]);
+  const sampleOptions = useMemo(() => SAMPLE_VALUES.map(({ value, key }) => ({
+    label: t(`games.${key}`),
+    value,
+  })), [t]);
 
 useEffect(() => {
   (async () => {
@@ -1858,7 +1923,7 @@ useEffect(() => {
   (async () => {
     try {
       const v = await AsyncStorage.getItem(SORT_KEY);
-      if (v && SORT_OPTIONS.some(o => o.value === v)) setSortBy(v);
+      if (v && SORT_VALUES.includes(v)) setSortBy(v);
     } catch {}
   })();
 }, []);
@@ -2072,8 +2137,16 @@ const sortedData = useMemo(() => {
   });
 }, [data, eoMap, myExposure, sortBy]);
 
+const hasLiveGames = useMemo(
+  () => (data || []).some((g) => gameSortMetrics(g, eoMap, myExposure).isLive),
+  [data, eoMap, myExposure]
+);
+
+// When sort is 'live' and there are no live games, show chronological view (dates) like chrono mode
+const useChronoView = sortBy === 'chrono' || (sortBy === 'live' && !hasLiveGames);
+
 const chronoSections = useMemo(() => {
-  if (sortBy !== 'chrono') return [];
+  if (sortBy !== 'chrono' && (sortBy !== 'live' || hasLiveGames)) return [];
 
   // Group by YYYY-MM-DD based on kickoff date (fallback bucket if missing)
   const bucket = new Map();
@@ -2085,13 +2158,13 @@ const chronoSections = useMemo(() => {
       String(ko.getDate()).padStart(2, '0')
     ].join('-') : 'unknown';
 
-    if (!bucket.has(dayKey)) bucket.set(dayKey, { title: ko ? formatDay(ko) : '—', data: [] });
+    if (!bucket.has(dayKey)) bucket.set(dayKey, { title: ko ? formatDay(ko) : t('games.unknownDay'), data: [] });
     bucket.get(dayKey).data.push(g);
   }
 
   // Keep natural chronological order of the map based on sortedData pass
   return Array.from(bucket.values());
-}, [sortedData, sortBy]);
+}, [sortedData, sortBy, hasLiveGames, t]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -2104,7 +2177,7 @@ const chronoSections = useMemo(() => {
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} />
-          <Text style={styles.muted}>Loading games…</Text>
+          <Text style={styles.muted}>{t('games.loadingGames')}</Text>
         </View>
       </SafeAreaView>
     );
@@ -2113,7 +2186,7 @@ const chronoSections = useMemo(() => {
   return (
     <SafeAreaView style={styles.safe}  edges={['left', 'right']}>
       <AppHeader />
-      {/* Full-width selector: Games Summary / Live Feed */}
+      {/* Full-width selector: Match Summary / Live Feed */}
 <View style={styles.viewToggleWrap}>
   <TouchableOpacity
     activeOpacity={0.9}
@@ -2129,7 +2202,7 @@ const chronoSections = useMemo(() => {
         viewTab === 'summary' && styles.viewToggleTextActive,
       ]}
     >
-      Games Info
+      {t('games.matchInfo')}
     </Text>
   </TouchableOpacity>
 
@@ -2147,13 +2220,13 @@ const chronoSections = useMemo(() => {
         viewTab === 'feed' && styles.viewToggleTextActive,
       ]}
     >
-      Live Feed
+      {t('games.liveFeed')}
     </Text>
   </TouchableOpacity>
 </View>
 
       {err ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 8 }]}>{err}</Text> : null}
-      {eoErr ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 4 }]}>EO overlay: {eoErr}</Text> : null}
+      {eoErr ? <Text style={[styles.muted, { textAlign: 'center', marginTop: 4 }]}>{t('games.eoOverlayError', { message: eoErr })}</Text> : null}
 
     
 
@@ -2162,8 +2235,8 @@ const chronoSections = useMemo(() => {
     {/* EO Sample Selector with Help (ONLY on summary tab) */}
     <View style={styles.toolbar}>
       <View style={[styles.segmentRow, { alignItems: 'center', flexWrap: 'wrap' }]}>
-        <Text style={styles.toolbarLabel}>Gain/Loss vs:</Text>
-        {SAMPLE_OPTIONS.map((opt) => {
+        <Text style={styles.toolbarLabel}>{t('games.gainLossVs')}</Text>
+        {sampleOptions.map((opt) => {
           const active = sample === opt.value;
           return (
             <TouchableOpacity
@@ -2180,28 +2253,33 @@ const chronoSections = useMemo(() => {
         })}
         <TouchableOpacity style={styles.helpBtn} onPress={() => setShowSampleHelp(true)} activeOpacity={0.8}>
           <MaterialCommunityIcons name="help-circle-outline" size={14} color={colors.accent} />
-          <Text style={styles.helpBtnText}>What’s this?</Text>
+          <Text style={styles.helpBtnText}>{t('games.whatsThis')}</Text>
         </TouchableOpacity>
       </View>
     </View>
 
     {/* GW header + sort dropdown */}
     <View style={styles.gwHeaderRow}>
-      <Text style={styles.gwHeaderText}>
-        {gwTitle ? `Gameweek ${gwTitle}` : 'Gameweek'}
-      </Text>
-
+      <View>
+        <Text style={styles.gwHeaderText}>
+          {gwTitle ? `${t('games.gameweek')} ${gwTitle}` : t('games.gameweek')}
+        </Text>
+        <Text style={[styles.mutedSmall, { marginTop: 2 }]}>
+          {t('games.expandToSeeLiveDefconBonus')}
+        </Text>
+      </View>
       <SortDropdown
         value={sortBy}
         onChange={setSort}
-        options={SORT_OPTIONS}
+        options={sortOptions}
         styles={styles}
         colors={colors}
+        accessibilityLabel={t('games.changeSortOrder')}
       />
     </View>
 
-    {/* Existing lists */}
-    {sortBy === 'chrono' ? (
+    {/* Existing lists: SectionList with dates when chrono OR when live but no live games */}
+    {chronoSections.length > 0 ? (
       <SectionList
         sections={chronoSections}
         keyExtractor={(_, i) => String(i)}
@@ -2219,6 +2297,7 @@ const chronoSections = useMemo(() => {
         )}
         renderItem={({ item }) => {
           const index = sortedData.indexOf(item);
+          const secondFixture = isSecondFixtureInDgw(item, data || sortedData);
           return openIndex === index ? (
             <GameCard
               game={item}
@@ -2227,6 +2306,7 @@ const chronoSections = useMemo(() => {
               styles={styles}
               colors={colors}
               onCollapse={() => toggleAt(index)}
+              isSecondFixture={secondFixture}
             />
           ) : (
             <CompactGameRow
@@ -2236,6 +2316,7 @@ const chronoSections = useMemo(() => {
               styles={styles}
               colors={colors}
               onPress={() => toggleAt(index)}
+              isSecondFixture={secondFixture}
             />
           );
         }}
@@ -2252,8 +2333,9 @@ const chronoSections = useMemo(() => {
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.accent} />
         }
-        renderItem={({ item, index }) =>
-          openIndex === index ? (
+        renderItem={({ item, index }) => {
+          const secondFixture = isSecondFixtureInDgw(item, data || sortedData);
+          return openIndex === index ? (
             <GameCard
               game={item}
               eoMap={eoMap}
@@ -2261,6 +2343,7 @@ const chronoSections = useMemo(() => {
               styles={styles}
               colors={colors}
               onCollapse={() => toggleAt(index)}
+              isSecondFixture={secondFixture}
             />
           ) : (
             <CompactGameRow
@@ -2270,9 +2353,10 @@ const chronoSections = useMemo(() => {
               styles={styles}
               colors={colors}
               onPress={() => toggleAt(index)}
+              isSecondFixture={secondFixture}
             />
-          )
-        }
+          );
+        }}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
       />
     )}
@@ -3126,3 +3210,4 @@ gwHeaderText: {
 }
 
 export default Games;
+

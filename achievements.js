@@ -19,6 +19,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import AppHeader from './AppHeader';
 import { useColors } from './theme';
 
@@ -187,7 +188,7 @@ const makePlatinum = (C) => {
 
 
 // ----------------------------- badge UI -----------------------------
-const TrophyBadge = ({ id, unlocked, title, desc, progress, colors, pending, who = [], onPress }) => {
+const TrophyBadge = ({ id, unlocked, title, desc, progress, colors, pending, who = [], onPress, pendingLabel, progressLabel }) => {
   const T = makePlatinum(colors);
   const iconName = iconFor(id);
 
@@ -252,13 +253,13 @@ const TrophyBadge = ({ id, unlocked, title, desc, progress, colors, pending, who
           </Text>
           <Text style={[styles.badgeDesc, { color: T.muted }]} numberOfLines={2}>{desc}</Text>
 
-          {pending ? (
+          {pending && pendingLabel ? (
             <Text style={[styles.progress, { color: T.muted }]} numberOfLines={1}>
-              Pending — GW still live
+              {pendingLabel}
             </Text>
-          ) : (!unlocked && progress) ? (
+          ) : (!unlocked && progress && progressLabel) ? (
             <Text style={[styles.progress, { color: T.muted }]} numberOfLines={1}>
-              Progress: {progress}
+              {progressLabel}
             </Text>
           ) : null}
 
@@ -350,7 +351,10 @@ function EmojiBurst({ visible, onDone }) {
 }
 
 // ----------------------------- main -----------------------------
+const BUCKET_KEYS = { legendary: 'legendary', uncommon: 'uncommon', common: 'common', oopsies: 'oopsies' };
+
 export default function Achievements() {
+  const { t } = useTranslation();
   const C = useColors();
   const T = makePlatinum(C);
 
@@ -359,10 +363,10 @@ export default function Achievements() {
   const [refreshing, setRefreshing] = useState(false);
   const [showEarnedOnly, setShowEarnedOnly] = useState(false);
   const [expanded, setExpanded] = useState({
-    'Legendary 🥇': false,
-    'Uncommon 🥈': false,
-    'Common 🥉': false,
-    'Oopsies 🙃': false,
+    [BUCKET_KEYS.legendary]: false,
+    [BUCKET_KEYS.uncommon]: false,
+    [BUCKET_KEYS.common]: false,
+    [BUCKET_KEYS.oopsies]: false,
   });
 
   // Modal state
@@ -838,14 +842,14 @@ const loadFromCache = useCallback(async () => {
     });
 
   const buckets = [
-    { label: 'Legendary 🥇', items: sortUnlockedFirst(filterByEarned(legendaryUnf)) },
-    { label: 'Uncommon 🥈', items: sortUnlockedFirst(filterByEarned(uncommonUnf)) },
-    { label: 'Common 🥉',   items: sortUnlockedFirst(filterByEarned(commonUnf)) },
-    { label: 'Oopsies 🙃',  items: sortUnlockedFirst(filterByEarned(oopsiesUnf)) },
+    { key: BUCKET_KEYS.legendary, items: sortUnlockedFirst(filterByEarned(legendaryUnf)) },
+    { key: BUCKET_KEYS.uncommon, items: sortUnlockedFirst(filterByEarned(uncommonUnf)) },
+    { key: BUCKET_KEYS.common,   items: sortUnlockedFirst(filterByEarned(commonUnf)) },
+    { key: BUCKET_KEYS.oopsies,  items: sortUnlockedFirst(filterByEarned(oopsiesUnf)) },
   ];
 
   const anyItems = buckets.some((b) => b.items.length > 0);
-  const toggleSection = (label) => setExpanded((prev) => ({ ...prev, [label]: !prev[label] }));
+  const toggleSection = (key) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const currentUnlockedIds = [...legendaryUnf, ...uncommonUnf, ...commonUnf, ...oopsiesUnf]
     .filter((a) => a.unlocked)
@@ -879,7 +883,7 @@ const loadFromCache = useCallback(async () => {
     hitSlop={{ top:8, bottom:8, left:8, right:8 }}
   >
     <MaterialCommunityIcons name="arrow-left" size={16} color={T.silverDeep} />
-    <Text style={[styles.backText, { color: T.silverDeep }]}>Back to Rank</Text>
+    <Text style={[styles.backText, { color: T.silverDeep }]}>{t('trophyRoom.backToRank')}</Text>
   </TouchableOpacity>
 </View>
 
@@ -895,10 +899,8 @@ const loadFromCache = useCallback(async () => {
           elevation: 2,
         }
       ]}>
-        <Text style={[styles.pageTitle, { color: T.silverDeep }]}>Trophy Room</Text>
-        <Text style={[styles.pageSub, { color: T.muted }]}>
-          Your weekly haul — unlock badges as your GW unfolds.
-        </Text>
+        <Text style={[styles.pageTitle, { color: T.silverDeep }]}>{t('trophyRoom.pageTitle')}</Text>
+        <Text style={[styles.pageSub, { color: T.muted }]}>{t('trophyRoom.pageSub')}</Text>
       </View>
 
       <EmojiBurst visible={burstVisible} onDone={() => setBurstVisible(false)} />
@@ -909,7 +911,7 @@ const loadFromCache = useCallback(async () => {
       >
         <View style={styles.headerRow}>
           <Text style={[styles.sectionTitle, { color: T.silverDeep }]}>
-            Gameweek {safe?.gw ?? safe?.GW ?? safe?.gameweek ?? (payload ? '?' : '—')}
+            {t('trophyRoom.gameweek', { gw: safe?.gw ?? safe?.GW ?? safe?.gameweek ?? (payload ? '?' : '—') })}
           </Text>
 
           {/* Earned / All toggle */}
@@ -918,13 +920,13 @@ const loadFromCache = useCallback(async () => {
               onPress={() => setShowEarnedOnly(false)}
               style={[styles.toggleBtn, { backgroundColor: !showEarnedOnly ? T.silverDeep : 'transparent' }]}
             >
-              <Text style={[styles.toggleText, { color: !showEarnedOnly ? C.bg : T.silverDeep }]}>All</Text>
+              <Text style={[styles.toggleText, { color: !showEarnedOnly ? C.bg : T.silverDeep }]}>{t('trophyRoom.all')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => setShowEarnedOnly(true)}
               style={[styles.toggleBtn, { backgroundColor: showEarnedOnly ? T.silverDeep : 'transparent' }]}
             >
-              <Text style={[styles.toggleText, { color: showEarnedOnly ? C.bg : T.silverDeep }]}>Earned</Text>
+              <Text style={[styles.toggleText, { color: showEarnedOnly ? C.bg : T.silverDeep }]}>{t('trophyRoom.earned')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -933,7 +935,7 @@ const loadFromCache = useCallback(async () => {
             style={[styles.refreshBtn, { borderColor: T.border, backgroundColor: T.card }]}
           >
             <MaterialCommunityIcons name="refresh" size={16} color={T.silverDeep} />
-            <Text style={[styles.refreshText, { color: T.silverDeep }]}>Refresh</Text>
+            <Text style={[styles.refreshText, { color: T.silverDeep }]}>{t('trophyRoom.refresh')}</Text>
           </TouchableOpacity>
         </View>
 
@@ -941,33 +943,38 @@ const loadFromCache = useCallback(async () => {
           <ActivityIndicator style={{ marginTop: 20 }} color={T.silverDeep} />
         ) : !payload ? (
           <View style={{ marginTop: 12 }}>
-            <Text style={[styles.text, { color: T.muted }]}>No gameweek data found yet.</Text>
+            <Text style={[styles.text, { color: T.muted }]}>{t('trophyRoom.noGameweekData')}</Text>
           </View>
         ) : (
           <Text style={[styles.text, { color: T.muted, marginBottom: 10 }]}>
-            Points: {nice(pointsFinal)} | Safety: {nice(safety)} | Rank Δ: {rankDelta > 0 ? `+${nice(rankDelta)}` : nice(rankDelta)} ({rankPctGain.toFixed(1)}%)
+            {t('trophyRoom.pointsSafetyRank', {
+              points: nice(pointsFinal),
+              safety: nice(safety),
+              rankDelta: rankDelta > 0 ? `+${nice(rankDelta)}` : nice(rankDelta),
+              rankPct: rankPctGain.toFixed(1),
+            })}
           </Text>
         )}
 
         {buckets.map((b) => {
-  const open = !!expanded[b.label];
+  const open = !!expanded[b.key];
 
   const cnt = {
     earned:
-      b.label === 'Legendary 🥇' ? legendaryUnf.filter((a) => a.unlocked).length :
-      b.label === 'Uncommon 🥈' ? uncommonUnf.filter((a) => a.unlocked).length :
-      b.label === 'Common 🥉'   ? commonUnf.filter((a) => a.unlocked).length   :
+      b.key === BUCKET_KEYS.legendary ? legendaryUnf.filter((a) => a.unlocked).length :
+      b.key === BUCKET_KEYS.uncommon ? uncommonUnf.filter((a) => a.unlocked).length :
+      b.key === BUCKET_KEYS.common   ? commonUnf.filter((a) => a.unlocked).length   :
       oopsiesUnf.filter((a) => a.unlocked).length,
     total:
-      b.label === 'Legendary 🥇' ? legendaryUnf.length :
-      b.label === 'Uncommon 🥈' ? uncommonUnf.length :
-      b.label === 'Common 🥉'   ? commonUnf.length   :
+      b.key === BUCKET_KEYS.legendary ? legendaryUnf.length :
+      b.key === BUCKET_KEYS.uncommon ? uncommonUnf.length :
+      b.key === BUCKET_KEYS.common   ? commonUnf.length   :
       oopsiesUnf.length,
   };
 
   return (
     <View
-      key={b.label}
+      key={b.key}
       style={[
         styles.section,
         {
@@ -982,12 +989,12 @@ const loadFromCache = useCallback(async () => {
       ]}
     >
       <TouchableOpacity
-        onPress={() => toggleSection(b.label)}
+        onPress={() => toggleSection(b.key)}
         activeOpacity={0.7}
         style={styles.sectionHeader}
       >
         <Text style={[styles.catTitle, { color: T.ink }]}>
-          {b.label}{'  '}
+          {t(`trophyRoom.${b.key}`)}{'  '}
           <Text style={{ color: T.silverDeep, fontWeight: '800' }}>
             {cnt.earned}/{cnt.total}
           </Text>
@@ -1003,21 +1010,23 @@ const loadFromCache = useCallback(async () => {
         b.items.length ? (
           b.items.map((ach) => (
             <TrophyBadge
-              key={`${b.label}-${ach.id}`}
+              key={`${b.key}-${ach.id}`}
               id={ach.id}
               unlocked={!!ach.unlocked}
-              title={ach.title}
-              desc={ach.desc}
+              title={t(`trophyRoom.ach_${ach.id}_title`) || ach.title}
+              desc={t(`trophyRoom.ach_${ach.id}_desc`) || ach.desc}
               progress={ach.progress}
               colors={C}
               pending={!!ach.pending}
               who={ach.who || []}
               onPress={() => { setModalAch(ach); setModalOpen(true); }}
+              pendingLabel={t('trophyRoom.pendingGwLive')}
+              progressLabel={ach.progress ? t('trophyRoom.progress', { value: ach.progress }) : ''}
             />
           ))
         ) : (
           <Text style={[styles.text, { color: T.muted, paddingVertical: 6 }]}>
-            {showEarnedOnly ? 'No earned yet in this category.' : 'No items to show.'}
+            {showEarnedOnly ? t('trophyRoom.noEarnedInCategory') : t('trophyRoom.noItemsToShow')}
           </Text>
         )
       )}
@@ -1028,7 +1037,7 @@ const loadFromCache = useCallback(async () => {
 
         {!anyItems && (
           <Text style={[styles.text, { color: T.muted, marginTop: 12 }]}>
-            No achievements to show here yet.
+            {t('trophyRoom.noAchievementsYet')}
           </Text>
         )}
       </ScrollView>
@@ -1044,35 +1053,35 @@ const loadFromCache = useCallback(async () => {
           <View style={[styles.modalCard, { backgroundColor: T.card, borderColor: T.border }]}>
             <View style={styles.modalHeader}>
               <Text style={[styles.modalTitle, { color: T.ink }]}>
-                {modalAch?.unlocked ? '✅ ' : modalAch?.pending ? '⏳ ' : '🔒 '}{modalAch?.title || 'Achievement'}
+                {modalAch?.unlocked ? '✅ ' : modalAch?.pending ? '⏳ ' : '🔒 '}{t(`trophyRoom.ach_${modalAch?.id}_title`) || modalAch?.title || t('trophyRoom.achievement')}
               </Text>
               <TouchableOpacity onPress={() => setModalOpen(false)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                 <MaterialCommunityIcons name="close" size={20} color={T.ink} />
               </TouchableOpacity>
             </View>
 
-            {!!modalAch?.desc && (
-              <Text style={[styles.modalDesc, { color: T.muted }]}>{modalAch.desc}</Text>
+            {!!(modalAch?.desc || t(`trophyRoom.ach_${modalAch?.id}_desc`)) && (
+              <Text style={[styles.modalDesc, { color: T.muted }]}>{t(`trophyRoom.ach_${modalAch?.id}_desc`) || modalAch.desc}</Text>
             )}
 
             {!!modalAch?.pending && (
-              <Text style={[styles.modalStatus, { color: T.muted }]}>Pending — GW still live</Text>
+              <Text style={[styles.modalStatus, { color: T.muted }]}>{t('trophyRoom.pendingGwLive')}</Text>
             )}
 
             {(!modalAch?.pending && modalAch?.progress) ? (
-              <Text style={[styles.modalStatus, { color: T.ink }]}>Progress: {modalAch.progress}</Text>
+              <Text style={[styles.modalStatus, { color: T.ink }]}>{t('trophyRoom.progress', { value: modalAch.progress })}</Text>
             ) : null}
 
             {!!modalAch?.who?.length && !modalAch?.pending && (
               <View style={styles.modalWhoWrap}>
-                <Text style={[styles.modalWhoTitle, { color: T.silverDeep }]}>Who contributed</Text>
+                <Text style={[styles.modalWhoTitle, { color: T.silverDeep }]}>{t('trophyRoom.whoContributed')}</Text>
                 {modalAch.who.slice(0, 12).map((line, i) => (
                   <Text key={i} style={[styles.modalWhoItem, { color: T.muted }]} numberOfLines={1} ellipsizeMode="tail">
                     • {line}
                   </Text>
                 ))}
                 {modalAch.who.length > 12 ? (
-                  <Text style={[styles.modalWhoItem, { color: T.muted }]}>…and {modalAch.who.length - 12} more</Text>
+                  <Text style={[styles.modalWhoItem, { color: T.muted }]}>{t('trophyRoom.andMore', { count: modalAch.who.length - 12 })}</Text>
                 ) : null}
               </View>
             )}
@@ -1091,7 +1100,7 @@ const loadFromCache = useCallback(async () => {
                 style={[styles.modalCloseBtn, { borderColor: T.border, backgroundColor: T.card }]}
                 onPress={() => setModalOpen(false)}
               >
-                <Text style={[styles.modalCloseText, { color: T.ink }]}>Close</Text>
+                <Text style={[styles.modalCloseText, { color: T.ink }]}>{t('trophyRoom.close')}</Text>
               </TouchableOpacity>
             </View>
           </View>

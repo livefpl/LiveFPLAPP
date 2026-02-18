@@ -1,3 +1,5 @@
+
+
 // planner.js — rank-like pitch + action sheet + C/VC badges + sellOverrides
 // Tap jersey -> actions (Cap, Vice, Transfer Out, Bench, Change Selling Price)
 // Autosave + forward propagation of future GWs after edits
@@ -61,6 +63,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation,useFocusEffect,useRoute  } from '@react-navigation/native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 
+import { useTranslation } from 'react-i18next';
 import { useFplId } from './FplIdContext';
 import { useColors } from './theme';
 import { clubCrestUri, assetImages } from './clubs';
@@ -84,12 +87,7 @@ const SCREEN_W = Dimensions.get('window').width;
 const SCREEN_H = Dimensions.get('window').height;
 const rem = SCREEN_W / 380;
 const vrem = SCREEN_H / 380;
-const CHIP_LABELS = {
-  freehit: 'Free Hit',
-  wildcard: 'Wildcard',
-  bboost: 'Bench Boost',
-  '3xc': 'Triple Captain',
-};
+const CHIP_KEYS = { freehit: 'freeHit', wildcard: 'wildcard', bboost: 'benchBoost', '3xc': 'tripleCaptain' };
 const FREE_MAX_PLANS = 2;
 const PRO_MAX_PLANS = 9999; // effectively unlimited
 
@@ -159,7 +157,8 @@ const HIT_COST = 4; // positive UI cost
 const CACHE_TTL_MS = 9600_000;
 
 const SNAPSHOT_URL = (id) => `https://livefpl-api-489391001748.europe-west4.run.app/LH_api2/planner/snapshot?id=${id}`;
-const FDR_URL        = 'https://livefpl.us/planner/fdr.json';
+const FDR_URL        = 'https://livefpl.us/planner/fdr.json';       // confirmed fixtures only
+const FDR2_URL       = 'https://livefpl.us/fdr2.json';            // projected fixtures (future DGW/BGW may move)
 const FDR_RATINGS_URL= 'https://livefpl.us/planner/fdr_ratings.json';
 const FIX_NAMES_URL  = 'https://livefpl.us/planner/fixtures_names.json';
 const API_ALL_INFO   = 'https://livefpl.us/planner/all_player_info.json';
@@ -176,6 +175,7 @@ const ZOOM_KEY = 'planner_zoom_v1';
 // New: local FDR override storage
 const FDR_OVERRIDES_KEY = 'planner_fdr_overrides_v1';
 const FDR_CUSTOM_ENABLED_KEY = 'planner_fdr_useCustom_v1';
+const USE_PROJECTED_FIXTURES_KEY = 'planner_use_projected_fixtures_v1';
 const MARKET_AFFORDABLE_KEY = 'planner_market_affordable_only_v1';
 // ---- Extended metrics → ranking (overall + by position type) ----
 
@@ -378,6 +378,7 @@ export function CompareRadar({
   maxAxes = 7,
   height = 200,
 }) {
+  const { t } = useTranslation();
   const C = useColors();
   const { width: screenW } = useWindowDimensions();
 
@@ -557,12 +558,12 @@ for (const { metric } of concrete) {
   const cx = size / 2, cy = size / 2;
   const radius = size * 0.34;
   const spokes = Math.max(3, concrete.length);
-  const toXY = (i, t) => {
+  const toXY = (i, val) => {
     const ang = (Math.PI * 2 * i / spokes) - Math.PI / 2;
-    const r = radius * t;
+    const r = radius * val;
     return [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
   };
-  const poly = vals => vals.map((t, i) => toXY(i, t || 0)).map(([x,y]) => `${x},${y}`).join(' ');
+  const poly = vals => vals.map((val, i) => toXY(i, val || 0)).map(([x,y]) => `${x},${y}`).join(' ');
 
 
 
@@ -584,9 +585,9 @@ const pad = 16; // visual padding around the chart
   return (
     <View style={{ paddingVertical: 6, paddingHorizontal: 8 }}>
       <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom:4 }}>
-        <Text style={{ color:C.muted, fontSize:12 }}>Normalized stat values (A vs B)</Text>
+        <Text style={{ color:C.muted, fontSize:12 }}>{t('planner.normalizedStatValues')}</Text>
         <TouchableOpacity onPress={() => setPickerOpen(true)}>
-          <Text style={{ color:C.accent, fontSize:12, fontWeight:'700' }}>Edit stats</Text>
+          <Text style={{ color:C.accent, fontSize:12, fontWeight:'700' }}>{t('planner.editStats')}</Text>
         </TouchableOpacity>
       </View>
 
@@ -839,6 +840,7 @@ function seedFromSnapshot(snap) {
 
 // ---------- main ----------
 export default function Planner() {
+  const { t } = useTranslation();
   const { width: winW, height: winH } = useWindowDimensions();
  const insets = useSafeAreaInsets();
 
@@ -919,6 +921,8 @@ const closePicker = () => setPicker({ visible: false, type: null });
   // FDR overrides
   const [fdrOverrides, setFdrOverrides] = useState({}); // { [label]: 1..5 }
   const [useCustomFdr, setUseCustomFdr] = useState(false);
+  // Projected fixtures (fdr2) vs confirmed only (fdr) for future DGW/BGW
+  const [useProjectedFixtures, setUseProjectedFixtures] = useState(true);
 
   // base from server
   const [snapshot, setSnapshot] = useState(null);
@@ -969,6 +973,7 @@ const [settingsOpen, setSettingsOpen] = useState(false);
   // summary + ticker + GW picker
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [tickerOpen, setTickerOpen] = useState(false);
+  const [tickerLookahead, setTickerLookahead] = useState(5); // lifted so it survives ticker remount when FDR refetches
   const [gwPickerOpen, setGwPickerOpen] = useState(false);
   // All-Players Stats modal state
 const [allStatsOpen, setAllStatsOpen] = useState(false);
@@ -1048,9 +1053,9 @@ const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
       title,
       message,
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t('planner.cancel'), style: 'cancel' },
         {
-          text: 'Save',
+          text: t('planner.save'),
           onPress: (txt) => {
             const name = String(txt || '').trim();
             if (!name) return;
@@ -1067,7 +1072,7 @@ const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
   // Minimal non-iOS fallback: keep behavior (no text input).
   Alert.alert(title, message, [
     { text: 'OK', onPress: () => onSubmit(String(initialValue || '').trim() || 'Plan') },
-    { text: 'Cancel', style: 'cancel' },
+    { text: t('planner.cancel'), style: 'cancel' },
   ]);
 }, []);
 
@@ -1098,7 +1103,7 @@ const deletePlan = useCallback(async (planId) => {
     'Delete plan?',
     `Delete “${plan?.name || 'this plan'}”? This cannot be undone.`,
     [
-      { text: 'Cancel', style: 'cancel' },
+      { text: t('planner.cancel'), style: 'cancel' },
       {
         text: 'Delete',
         style: 'destructive',
@@ -1384,9 +1389,18 @@ const rankedMetricKeys = extRanks.keys; // e.g. ["assists","bonus","bps","creati
 
   // ---------- load data ----------
   const loadStatic = useCallback(async () => {
+    // FDR source: projected (fdr2) vs confirmed only (fdr). Default ON (projected).
+    let useProj = true;
+    try {
+      const raw = await AsyncStorage.getItem(USE_PROJECTED_FIXTURES_KEY);
+      if (raw !== null) useProj = raw === '1';
+    } catch {}
+    setUseProjectedFixtures(useProj);
+    const fdrSourceUrl = useProj ? FDR2_URL : FDR_URL;
+
     const [ai, f1, f2, fx, tm,ext] = await Promise.all([
       fetch(API_ALL_INFO).then(r => r.json()),
-      fetch(FDR_URL).then(r => r.json()),
+      fetch(fdrSourceUrl).then(r => r.json()),
       fetch(FDR_RATINGS_URL).then(r => r.json()),
       fetch(FIX_NAMES_URL).then(r => r.json()),
       fetch(TEAMS_JSON).then(r => r.json()),
@@ -1410,6 +1424,17 @@ const rankedMetricKeys = extRanks.keys; // e.g. ["assists","bonus","bps","creati
     } catch { setUseCustomFdr(false); }
 
     return { ai, f1, f2, fx, tm,ext };
+  }, []);
+
+  // Refetch FDR when user toggles projected vs confirmed fixtures
+  const setProjectedFixturesAndRefetch = useCallback(async (useProjected) => {
+    setUseProjectedFixtures(useProjected);
+    try { await AsyncStorage.setItem(USE_PROJECTED_FIXTURES_KEY, useProjected ? '1' : '0'); } catch {}
+    try {
+      const url = useProjected ? FDR2_URL : FDR_URL;
+      const data = await fetch(url).then(r => r.json());
+      setFdr(data);
+    } catch (_) { /* keep previous fdr on error */ }
   }, []);
 
   const loadSnapshot = useCallback(async (id, { revalidateIfGwAdvanced = false } = {}) => {
@@ -1803,9 +1828,10 @@ const bankFinal = bankAfter;
       out[g] = weekObj;
 
       const ftNext = nextFT(base.ft, used, chip);
-      if (chip === 'freehit' && preFH) {
-        // Always restore from the immutable snapshot taken BEFORE any FH-week edits
-        const snap = preFH;
+      if (chip === 'freehit') {
+        // After FH, next GW must restore to the team from the week BEFORE FH (start of FH week = carry from previous GW).
+        // Use base (state at start of this GW), not preFH/gwStart, so we never rely on a stale __gwStart__ or API snapshot.
+        const snap = base;
         carry = {
           picks: snap.picks.slice(),
           bank: snap.bank,
@@ -1978,8 +2004,7 @@ if (
     };
   }, [snapshot]);
 function chipBaseAvailForGW(code, gwNum) {
-   // Fresh set in the second half regardless of snapshot
-   if (gwNum >= 20) return true;
+   // Always respect snapshot chips_available (API tells us which chips are still left)
    return !!baseChipAvail[code];
  }
   function chipIsSelectable(code, gwNum) {
@@ -2581,7 +2606,7 @@ sheetCloseBtn:{ position: 'absolute', top: 8, right: 10, width: 32, height: 32, 
 
       pitchStacked: { justifyContent: 'flex-start' },
 
-      firstRow: { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center', width: '100%', height: rowHeight, marginVertical: ROW_GAP_LOCAL / 3 },
+      firstRow: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', width: '100%', height: rowHeight, marginVertical: ROW_GAP_LOCAL / 3 },
       row:      { flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'center', width: '100%', height: rowHeight, marginVertical: ROW_GAP_LOCAL / 3 },
 
       slot: { alignItems: 'center', width: '20%' },
@@ -2661,6 +2686,11 @@ statsTd: { flex: 0.2, color: C.ink, fontWeight:'700', fontSize:12, flexWrap:'wra
       fixNowBar: {
         fontSize: 9, lineHeight: LINE_H, includeFontPadding: false,
         width: IMG_W_BASE, textAlign: 'center', overflow: 'hidden',
+        flexDirection: 'row', // Allow horizontal layout for DGW
+      },
+      fixNowBarDGW: {
+        fontSize: 7, lineHeight: LINE_H, includeFontPadding: false,
+        flex: 1, textAlign: 'center', overflow: 'hidden',
       },
       priceBar: {
         fontSize: 11, lineHeight: LINE_H, includeFontPadding: false,
@@ -2957,15 +2987,15 @@ mFixTxt: { fontSize: 10, fontWeight: '800' },
  },
  settingsOverlay: {
    backgroundColor: C.card,
-   justifyContent: 'center',
-    alignItems: 'center',
+   justifyContent: 'flex-start',
+   alignItems: 'center',
    borderRadius: 12,
    borderWidth: 1,
    borderColor: C.border,
    paddingVertical: 8,
    paddingHorizontal: 10,
    flexDirection: 'row',
-
+   flexWrap: 'wrap',
    gap: 10,
    ...Platform.select({
      ios: { shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 8, shadowOffset: { width: 0, height: 4 } },
@@ -3136,7 +3166,7 @@ chipPillTxt: { color: C.ink, fontWeight: '800', fontSize: 11, maxWidth: 160 },
     const rawCost = Math.max(0, Number(current?.hits || 0));
     const cost = rawCost ? -rawCost : 0;
       const bankTenths = Number(current?.bank || 0); // <- add this
-const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.chip)) : 'No chip';
+const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || current.chip}`)) : t('planner.noChip');
 
   return (
     <View style={S.topBar}>
@@ -3150,13 +3180,13 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
         <Text style={S.chipMiniTxt} numberOfLines={1}>{chipLabel}</Text>
       </TouchableOpacity>
         <View style={S.card}>
-          <Text style={S.cardTitle}>Transfers</Text>
+          <Text style={S.cardTitle}>{t('planner.transfers')}</Text>
           <Text style={S.cardValue}>{`${used}/${ftShown}`}</Text>
         </View>
 
         <View style={S.card}>
           <View style={{ flexDirection:'row', alignItems:'center', gap:6 }}>
-            <Text style={S.cardTitle}>Bank</Text>
+            <Text style={S.cardTitle}>{t('planner.bank')}</Text>
             <TouchableOpacity
   onPress={() => {
   // seed from CURRENT (final) bank shown on screen
@@ -3176,7 +3206,7 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
         </View>
 
         <View style={S.card}>
-          <Text style={S.cardTitle}>Cost</Text>
+          <Text style={S.cardTitle}>{t('planner.cost')}</Text>
           <Text style={[S.cardValue, cost < 0 && { color: '#ef4444' }]}>{cost}</Text>
         </View>
       </View>
@@ -3189,16 +3219,16 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
       <View style={S.navRow}>
         <TouchableOpacity style={[S.navBtn, !canPrev && S.navBtnDisabled]} onPress={() => canPrev && setGw(gw - 1)} disabled={!canPrev}>
           <Ionicons name="chevron-back" size={16} color={C.ink} />
-          <Text style={S.navTxt}>Prev</Text>
+          <Text style={S.navTxt}>{t('planner.prev')}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={S.gwPickerBtn} onPress={() => setGwPickerOpen(true)}>
           <MaterialCommunityIcons name="calendar" size={16} color={C.ink} />
-          <Text style={S.navTxt}>Gameweek {gw}</Text>
+          <Text style={S.navTxt}>{t('planner.gameweekNum', { n: gw })}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity style={S.navBtn} onPress={() => setGw(Math.min(maxGw, gw + 1))}>
-          <Text style={S.navTxt}>Next</Text>
+          <Text style={S.navTxt}>{t('planner.next')}</Text>
           <Ionicons name="chevron-forward" size={16} color={C.ink} />
         </TouchableOpacity>
       </View>
@@ -3209,15 +3239,15 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
     <View style={S.controlsRow}>
       <TouchableOpacity style={S.iconBtn} onPress={() => setSummaryOpen(true)}>
         <MaterialCommunityIcons name="clipboard-text-outline" size={18} color={C.ink} />
-        <Text style={S.iconBtnLabel}>Summary</Text>
+        <Text style={S.iconBtnLabel}>{t('planner.summary')}</Text>
       </TouchableOpacity>
       <TouchableOpacity style={S.iconBtn} onPress={() => setTickerOpen(true)}>
         <MaterialCommunityIcons name="chart-timeline-variant" size={18} color={C.ink} />
-        <Text style={S.iconBtnLabel}>Ticker</Text>
+        <Text style={S.iconBtnLabel}>{t('planner.ticker')}</Text>
       </TouchableOpacity>
       <TouchableOpacity style={S.iconBtn} onPress={resetFromCurrentGW}>
         <MaterialCommunityIcons name="backup-restore" size={18} color="#ef4444" />
-        <Text style={[S.iconBtnLabel, { color: '#ef4444' }]}>Reset</Text>
+        <Text style={[S.iconBtnLabel, { color: '#ef4444' }]}>{t('planner.reset')}</Text>
       </TouchableOpacity>
       <TouchableOpacity
   style={S.iconBtn}
@@ -3225,7 +3255,7 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
   accessibilityLabel="Stats"
 >
   <MaterialCommunityIcons name="chart-box-outline" size={18} color={C.ink} />
-  <Text style={S.iconBtnLabel}>Stats</Text>
+  <Text style={S.iconBtnLabel}>{t('planner.stats')}</Text>
 </TouchableOpacity>
 <TouchableOpacity
   style={S.iconBtn}
@@ -3236,7 +3266,7 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
 >
 
     <MaterialCommunityIcons name="layers-outline" size={16} color={C.ink} />
-    <Text style={S.iconBtnLabel}>Plans</Text>
+    <Text style={S.iconBtnLabel}>{t('planner.plans')}</Text>
   </TouchableOpacity>
 
 
@@ -3246,7 +3276,7 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
        
         <TouchableOpacity style={S.iconBtn} onPress={() => setSettingsOpen(o => !o)}>
    <MaterialCommunityIcons name="cog" size={16} color={C.ink} />
-   <Text style={S.iconBtnLabel}>Settings</Text>
+   <Text style={S.iconBtnLabel}>{t('planner.settings')}</Text>
  </TouchableOpacity>
       </View>
     </View>
@@ -3336,19 +3366,51 @@ const chipLabel = current?.chip ? (CHIP_LABELS[current.chip] || String(current.c
           {name}
         </Text>
 
-        <Text
-          numberOfLines={1}
-          ellipsizeMode="clip"
-          allowFontScaling={false}
-          style={[
-            S.fixNowBar,
-            big
-              ? { backgroundColor: big.color, color: big.textColor }
-              : { backgroundColor: 'rgba(128,128,128,0.25)', color: '#000' },
-          ]}
-        >
-          {big ? shortFixture(big.label) : '—'}
-        </Text>
+        {/* Main fixture bar - shows all fixtures for current GW */}
+        {firstGW && !firstGW.isBlank ? (
+          firstGW.fixtures.length === 1 ? (
+            // Single fixture
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="clip"
+              allowFontScaling={false}
+              style={[
+                S.fixNowBar,
+                { backgroundColor: firstGW.fixtures[0].color, color: firstGW.fixtures[0].textColor }
+              ]}
+            >
+              {shortFixture(firstGW.fixtures[0].label)}
+            </Text>
+          ) : (
+            // Double gameweek - show both horizontally
+            <View style={S.fixNowBar}>
+              {firstGW.fixtures.map((f, idx) => (
+                <Text
+                  key={`fix-${idx}`}
+                  numberOfLines={1}
+                  ellipsizeMode="clip"
+                  allowFontScaling={false}
+                  style={[
+                    S.fixNowBarDGW,
+                    { backgroundColor: f.color, color: f.textColor }
+                  ]}
+                >
+                  {shortFixture(f.label)}
+                </Text>
+              ))}
+            </View>
+          )
+        ) : (
+          // Blank gameweek
+          <Text
+            numberOfLines={1}
+            ellipsizeMode="clip"
+            allowFontScaling={false}
+            style={[S.fixNowBar, { backgroundColor: 'rgba(128,128,128,0.25)', color: '#000' }]}
+          >
+            —
+          </Text>
+        )}
 
         <Text numberOfLines={1} ellipsizeMode="clip" allowFontScaling={false} style={[S.priceBar, !showMinis && S.bottomRounded]}>
           {money(getSellPriceTenths(pid))}
@@ -3486,6 +3548,7 @@ const prettyVal = (k, v) => {
 
   // ---------- Action Sheet ----------
   const ActionSheet = () => {
+    const { t } = useTranslation();
     const pid = actionModal.pid;
     if (!pid || !current) return null;
     const name = namesById?.[pid] || String(pid);
@@ -3597,15 +3660,25 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
             
 
             {!!fixtureGWs.length && (
-  <View style={[S.marketMiniRow, { flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}>
-    <View style={{ flex: 1, flexDirection:'row', flexWrap:'wrap', gap: 4 }}>
+  <View style={[S.marketMiniRow, { flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingVertical: 8 }]}>
+    <View style={{ flex: 1, flexDirection:'row', flexWrap:'wrap', gap: 6, alignItems:'flex-start' }}>
       {fixtureGWs.slice(0, 5).map((gwData, gwIdx) => {
         if (gwData.isBlank) {
           return (
-            <View key={`asgw-${gwIdx}`} style={{ flexDirection: 'column' }}>
+            <View key={`asgw-${gwIdx}`} style={{ flexDirection: 'column', minWidth: 36 }}>
               <Text
                 numberOfLines={1}
-                style={[S.marketMiniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}
+                style={{
+                  textAlign: 'center',
+                  fontSize: 9,
+                  fontWeight: '700',
+                  paddingHorizontal: 6,
+                  paddingVertical: 4,
+                  borderRadius: 6,
+                  backgroundColor: 'rgba(128,128,128,0.15)',
+                  color: '#666',
+                  minHeight: 20,
+                }}
               >
                 —
               </Text>
@@ -3613,12 +3686,22 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
           );
         }
         return (
-          <View key={`asgw-${gwIdx}`} style={{ flexDirection: 'column', gap: 1 }}>
+          <View key={`asgw-${gwIdx}`} style={{ flexDirection: 'column', gap: 2, minWidth: 36 }}>
             {gwData.fixtures.map((f, fixIdx) => (
               <Text
                 key={`asgw-${gwIdx}-f${fixIdx}`}
                 numberOfLines={1}
-                style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+                style={{
+                  textAlign: 'center',
+                  fontSize: 9,
+                  fontWeight: '700',
+                  paddingHorizontal: 6,
+                  paddingVertical: 4,
+                  borderRadius: 6,
+                  backgroundColor: f.color,
+                  color: f.textColor,
+                  minHeight: 20,
+                }}
               >
                 {tinyFixture(f.label)}
               </Text>
@@ -3634,7 +3717,7 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
       accessibilityLabel="Expand fixtures"
     >
       <MaterialCommunityIcons name="open-in-new" size={14} color={C.ink} />
-      <Text style={{ color: C.ink, fontWeight: '700' }}>All Fixtures</Text>
+      <Text style={{ color: C.ink, fontWeight: '700' }}>{t('planner.allFixtures')}</Text>
     </TouchableOpacity>
   </View>
  )}
@@ -3656,7 +3739,7 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
 ) : null}
 
   <View style={S.sellBox}>
-            <Text style={{ color: C.ink, fontWeight: '800' }}>Sell price</Text>
+            <Text style={{ color: C.ink, fontWeight: '800' }}>{t('planner.sellPrice')}</Text>
             <View style={{ flexDirection:'row', alignItems:'center', gap: 6 }}>
               <TouchableOpacity onPress={() => onStep(-0.1)} style={S.smallBtn}><Text style={S.smallBtnTxt}>–</Text></TouchableOpacity>
               <Text style={[S.smallBtnTxt, { minWidth: 44, textAlign:'center' }]}>{sellValue.toFixed(1)}</Text>
@@ -3672,11 +3755,11 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
             </View>
             <TouchableOpacity onPress={onSaveSell} disabled={!canSave} style={[S.smallBtn, !canSave && { opacity: 0.45 }]}>
               <MaterialCommunityIcons name="content-save" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>Save</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.save')}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={onClose} style={S.smallBtn}>
               <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>Close</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -3684,26 +3767,26 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
           
 <TouchableOpacity style={S.actionRow}  onPress={() => openCompareWith(pid)}>
               <MaterialCommunityIcons name="scale-balance" size={18} color={C.ink} />
-              <Text style={S.actionRowText}>Compare</Text>
+              <Text style={S.actionRowText}>{t('planner.compare')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={[S.actionRow, !inXI && { opacity: 0.4 }]} disabled={!inXI} onPress={doCap}>
               <MaterialCommunityIcons name="crown-outline" size={18} color={C.ink} />
-              <Text style={S.actionRowText}>Make Captain</Text>
+              <Text style={S.actionRowText}>{t('planner.makeCaptain')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={[S.actionRow, !inXI && { opacity: 0.4 }]} disabled={!inXI} onPress={doVice}>
               <MaterialCommunityIcons name="shield-star-outline" size={18} color={C.ink} />
-              <Text style={S.actionRowText}>Make Vice Captain</Text>
+              <Text style={S.actionRowText}>{t('planner.makeViceCaptain')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={S.actionRow} onPress={doTransferOut}>
               <MaterialCommunityIcons name="close-thick" size={18} color={C.ink} />
-              <Text style={S.actionRowText}>Transfer Out</Text>
+              <Text style={S.actionRowText}>{t('planner.transferOut')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={S.actionRow} onPress={doBench}>
               <MaterialCommunityIcons name="swap-vertical" size={18} color={C.ink} />
-              <Text style={S.actionRowText}>{inXI ? 'Bench (start swap)' : (benchFrom ? 'Place from Bench (complete)' : 'Bench')}</Text>
+              <Text style={S.actionRowText}>{inXI ? t('planner.benchStartSwap') : (benchFrom ? t('planner.placeFromBench') : t('planner.bench'))}</Text>
             </TouchableOpacity>
           </View>
          
@@ -3719,7 +3802,7 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
     accessibilityLabel="Show all statistics"
   >
     <MaterialCommunityIcons name="chevron-down" size={16} color={C.ink} />
-    <Text style={S.expandText}>Show all statistics</Text>
+    <Text style={S.expandText}>{t('planner.showAllStatistics')}</Text>
   </TouchableOpacity>
    {/* --- Major stats with ranks (FPL-like tiles) --- */}
 {(() => {
@@ -3845,6 +3928,7 @@ const MiniSelectModal = ({ visible, title, options, selected, onSelect, onClose,
 
  
 const CompareModal = () => {
+  const { t } = useTranslation();
   const C = useColors();
   if (!compareOpen) return null;
 
@@ -3923,7 +4007,7 @@ const MiniFixturesStrip = ({ fixtures, C }) => (
 );
 
 // The comparison row to inject at the top
-const FixturesCompareRow = ({ pidA, pidB, C }) => {
+const FixturesCompareRow = ({ pidA, pidB, C, t }) => {
   const fixturesA = useMemo(() => getFixturesForPid(pidA), [pidA, nextFixtures]);
   const fixturesB = useMemo(() => getFixturesForPid(pidB), [pidB, nextFixtures]);
 const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesById]);
@@ -3942,7 +4026,7 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
       borderColor: C.border,
       alignSelf: 'flex-start',
     }}>
-      <Text style={{ fontSize: 11, color: C.ink }}>Easier</Text>
+      <Text style={{ fontSize: 11, color: C.ink }}>{t('planner.easier')}</Text>
     </View>
   );
 
@@ -4144,8 +4228,8 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
     const set = new Set();
     for (const pidStr of Object.keys(names || {})) {
       const pid = Number(pidStr);
-      const t = teamNameByPid?.[pid];
-      if (t) set.add(t);
+      const teamName = teamNameByPid?.[pid];
+      if (teamName) set.add(teamName);
     }
     return Array.from(set).sort();
   }, [names, teamNameByPid]);
@@ -4295,7 +4379,7 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
               <ThemedTextInput
                 value={search}
                 onChangeText={setSearch}
-                placeholder="Search players to change comparison…"
+                placeholder={t('planner.searchPlayersCompare')}
                 style={{ height: 36, color: C.ink, backgroundColor: C.page }}
                 placeholderTextColor={C.muted ?? '#888'}
                 returnKeyType="search"
@@ -4347,14 +4431,14 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
 
                            <MiniSelectModal
   visible={cmpTeamPicker}
-  title="Choose Team"
+  title={t('planner.chooseTeam')}
   C={C}
  
   options={[{ label: 'All Teams', value: null }].concat(
-    (availableTeams || []).map(t =>
-      typeof t === 'string'
-        ? ({ label: String(t), value: String(t) })
-        : ({ label: t.name || String(t.code), value: t.code ?? t.name })
+    (availableTeams || []).map(team =>
+      typeof team === 'string'
+        ? ({ label: String(team), value: String(team) })
+        : ({ label: team.name || String(team.code), value: team.code ?? team.name })
     )
   )}
   selected={teamFilter ?? null}
@@ -4386,10 +4470,10 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
                       </TouchableOpacity>
                       <View style={{ flexDirection:'row', gap:8 }}>
                         <TouchableOpacity onPress={() => pickSlot('A', item.id)} style={[S.miniBtn, { borderColor: C.border }]}>
-                          <Text style={[S.miniBtnTxt, { color: C.ink }]}>Set A</Text>
+                          <Text style={[S.miniBtnTxt, { color: C.ink }]}>{t('planner.setA')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity onPress={() => pickSlot('B', item.id)} style={[S.miniBtn, { borderColor: C.border }]}>
-                          <Text style={[S.miniBtnTxt, { color: C.ink }]}>Set B</Text>
+                          <Text style={[S.miniBtnTxt, { color: C.ink }]}>{t('planner.setB')}</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
@@ -4439,16 +4523,16 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
                   <Text style={[S.kpiValue, { color: C.ink, fontSize: 17, fontWeight: '900' }]} numberOfLines={1}>
                     {nameA}
                   </Text>
-                  <Text style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Player A</Text>
+                  <Text style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{t('planner.playerA')}</Text>
                 </View>
 
-                <Text style={{ opacity: 0.5, paddingHorizontal: 8, color: C.ink }}>vs</Text>
+                <Text style={{ opacity: 0.5, paddingHorizontal: 8, color: C.ink }}>{t('planner.vs')}</Text>
 
                 <View style={{ width: 120, minWidth: 120, alignItems: 'flex-start' }}>
                   <Text style={[S.kpiValue, { color: C.ink, fontSize: 17, fontWeight: '900' }]} numberOfLines={1}>
                     {nameB}
                   </Text>
-                  <Text style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>Player B</Text>
+                  <Text style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{t('planner.playerB')}</Text>
                 </View>
               </View>
             </View>
@@ -4465,13 +4549,13 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
             {/* Comparison: Top Stats, then Rest */}
             <View style={{ padding:12, backgroundColor: C.card, gap: 12 }}>
               {(!compareA || !compareB) ? (
-                <Text style={{ opacity:0.7, color: C.muted }}>Pick both players to see the comparison.</Text>
+                <Text style={{ opacity:0.7, color: C.muted }}>{t('planner.pickBothPlayers')}</Text>
               ) : (
                 <>
                   {rows.topRows.length > 0 && (
                     <View>
-                      <Text style={[S.kpiTitle, { color: C.muted, marginBottom: 6 }]}>Top Stats</Text>
-                      <FixturesCompareRow pidA={compareA} pidB={compareB} C={C} />
+                      <Text style={[S.kpiTitle, { color: C.muted, marginBottom: 6 }]}>{t('planner.topStats')}</Text>
+                      <FixturesCompareRow pidA={compareA} pidB={compareB} C={C} t={t} />
                       <View style={{ gap:6 }}>
                         {rows.topRows.map(({ k, vA, vB, rA, rB }) => {
                           const label = getStatLabel(k);
@@ -4525,7 +4609,7 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
                   {rows.restRows.length > 0 && (
                     <View>
                       {rows.topRows.length > 0 && (
-                        <Text style={[S.kpiTitle, { color: C.muted, marginTop: 8, marginBottom: 6 }]}>More</Text>
+                        <Text style={[S.kpiTitle, { color: C.muted, marginTop: 8, marginBottom: 6 }]}>{t('planner.more')}</Text>
                       )}
                       <View style={{ gap:6 }}>
                         {rows.restRows.map(({ k, vA, vB, rA, rB }) => {
@@ -4584,10 +4668,6 @@ const nameA = useMemo(() => (namesById?.[pidA] || String(pidA)), [pidA, namesByI
     </Modal>
   );
 };
-
-
-
-
 
 const SeasonStatsModal = () => {
   if (!statsOpen || !statsPid) return null;
@@ -4744,15 +4824,25 @@ const SeasonStatsModal = () => {
 
         {/* Fixtures chips */}
         {!!fixtureGWs.length && (
-          <View style={[S.marketMiniRow, { paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}>
-    <View style={{ flex:1, flexDirection:'row', flexWrap:'wrap', gap: 4 }}>
+          <View style={[S.marketMiniRow, { paddingHorizontal:16, flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingVertical: 8 }]}>
+    <View style={{ flex:1, flexDirection:'row', flexWrap:'wrap', gap: 6, alignItems:'flex-start' }}>
       {fixtureGWs.slice(0, 8).map((gwData, gwIdx) => {
         if (gwData.isBlank) {
           return (
-            <View key={`ssgw-${gwIdx}`} style={{ flexDirection: 'column' }}>
+            <View key={`ssgw-${gwIdx}`} style={{ flexDirection: 'column', minWidth: 36 }}>
               <Text
                 numberOfLines={1}
-                style={[S.marketMiniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}
+                style={{
+                  textAlign: 'center',
+                  fontSize: 9,
+                  fontWeight: '700',
+                  paddingHorizontal: 6,
+                  paddingVertical: 4,
+                  borderRadius: 6,
+                  backgroundColor: 'rgba(128,128,128,0.15)',
+                  color: '#666',
+                  minHeight: 20,
+                }}
               >
                 —
               </Text>
@@ -4760,12 +4850,22 @@ const SeasonStatsModal = () => {
           );
         }
         return (
-          <View key={`ssgw-${gwIdx}`} style={{ flexDirection: 'column', gap: 1 }}>
+          <View key={`ssgw-${gwIdx}`} style={{ flexDirection: 'column', gap: 2, minWidth: 36 }}>
             {gwData.fixtures.map((f, fixIdx) => (
               <Text
                 key={`ssgw-${gwIdx}-f${fixIdx}`}
                 numberOfLines={1}
-                style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+                style={{
+                  textAlign: 'center',
+                  fontSize: 9,
+                  fontWeight: '700',
+                  paddingHorizontal: 6,
+                  paddingVertical: 4,
+                  borderRadius: 6,
+                  backgroundColor: f.color,
+                  color: f.textColor,
+                  minHeight: 20,
+                }}
               >
                 {tinyFixture(f.label)}
               </Text>
@@ -4781,7 +4881,7 @@ const SeasonStatsModal = () => {
       accessibilityLabel="Expand fixtures"
     >
       <MaterialCommunityIcons name="open-in-new" size={14} color={C.ink} />
-      <Text style={{ color: C.ink, fontWeight: '700' }}>All Fixtures</Text>
+      <Text style={{ color: C.ink, fontWeight: '700' }}>{t('planner.allFixtures')}</Text>
     </TouchableOpacity>
   </View>
         )}
@@ -5462,11 +5562,11 @@ const statDefs = useMemo(() => {
                 size={14}
                 color={C.ink}
               />
-              <Text style={S.smallBtnTxt}>Columns</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.columns')}</Text>
             </TouchableOpacity>
             <TouchableOpacity onPress={onClose} style={S.smallBtn}>
               <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>Close</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -5531,7 +5631,7 @@ const statDefs = useMemo(() => {
             <ThemedTextInput
               value={q}
               onChangeText={setQ}
-              placeholder="Search"
+              placeholder={t('planner.search')}
               placeholderTextColor={C.muted}
               style={{
                 flex: 1,
@@ -5883,7 +5983,7 @@ const statDefs = useMemo(() => {
         {/* Team picker dropdown (MiniSelectModal) */}
         <MiniSelectModal
           visible={teamPickerOpen}
-          title="Filter by team"
+          title={t('planner.filterByTeam')}
           C={C}
           options={[
             { label: 'All teams', value: null },
@@ -5972,7 +6072,7 @@ const TransferMarketModal = React.memo(() => {
   const overlayOpen = picker.visible || statsOpen;
 
   const [marketSearchRaw, setMarketSearchRaw] = useState('');
-  const [affordableOnly, setAffordableOnly] = useState(true);
+  const [affordableOnly, setAffordableOnly] = useState(false);
   useEffect(() => {
     if (!marketOpen) return;
     (async () => {
@@ -6104,14 +6204,24 @@ const TransferMarketModal = React.memo(() => {
           </View>
 
           {!!item._fixtureGWs?.length && (
-            <View style={[S.marketMiniRow, { gap: 4 }]}>
+            <View style={[S.marketMiniRow, { gap: 6, alignItems:'flex-start' }]}>
               {item._fixtureGWs.slice(0, 5).map((gwData, gwIdx) => {
                 if (gwData.isBlank) {
                   return (
-                    <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column' }}>
+                    <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column', minWidth: 32 }}>
                       <Text
                         numberOfLines={1}
-                        style={[S.marketMiniCell, { backgroundColor: 'rgba(128,128,128,0.15)', color: '#666' }]}
+                        style={{
+                          textAlign: 'center',
+                          fontSize: 8,
+                          fontWeight: '700',
+                          paddingHorizontal: 5,
+                          paddingVertical: 3,
+                          borderRadius: 6,
+                          backgroundColor: 'rgba(128,128,128,0.15)',
+                          color: '#666',
+                          minHeight: 18,
+                        }}
                       >
                         —
                       </Text>
@@ -6119,12 +6229,22 @@ const TransferMarketModal = React.memo(() => {
                   );
                 }
                 return (
-                  <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column', gap: 1 }}>
+                  <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column', gap: 2, minWidth: 32 }}>
                     {gwData.fixtures.map((f, fixIdx) => (
                       <Text
                         key={`${item.id}-gw${gwIdx}-f${fixIdx}`}
                         numberOfLines={1}
-                        style={[S.marketMiniCell, { backgroundColor: f.color, color: f.textColor }]}
+                        style={{
+                          textAlign: 'center',
+                          fontSize: 8,
+                          fontWeight: '700',
+                          paddingHorizontal: 5,
+                          paddingVertical: 3,
+                          borderRadius: 6,
+                          backgroundColor: f.color,
+                          color: f.textColor,
+                          minHeight: 18,
+                        }}
                       >
                         {tinyFixture(f.label)}
                       </Text>
@@ -6216,7 +6336,7 @@ const TransferMarketModal = React.memo(() => {
               style={S.search}
               value={marketSearchRaw}
               onChangeText={setMarketSearchRaw}
-              placeholder="Search players..."
+              placeholder={t('planner.searchPlayers')}
               placeholderTextColor={C.muted}
             />
             {!statsMode && (
@@ -6226,12 +6346,12 @@ const TransferMarketModal = React.memo(() => {
                   size={14}
                   color={C.ink}
                 />
-                <Text style={S.smallBtnTxt}>Affordable</Text>
+                <Text style={S.smallBtnTxt}>{t('planner.affordable')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity onPress={close} style={S.smallBtn}>
               <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>Close</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -6291,7 +6411,7 @@ const TransferMarketModal = React.memo(() => {
           {/* TEAM PICKER */}
 <MiniSelectModal
   visible={picker.visible && picker.type === 'team'}
-  title="Choose Team"
+  title={t('planner.chooseTeam')}
   C={C}
 
   options={[{ label: 'All teams', value: null }].concat(
@@ -6309,7 +6429,7 @@ const TransferMarketModal = React.memo(() => {
 {/* POSITION PICKER */}
 <MiniSelectModal
   visible={picker.visible && picker.type === 'pos'}
-  title="Choose Position"
+  title={t('planner.choosePosition')}
   C={C}
  
   options={[
@@ -6327,7 +6447,7 @@ const TransferMarketModal = React.memo(() => {
 {/* STAT / SORT PICKER */}
 <MiniSelectModal
   visible={picker.visible && picker.type === 'stat'}
-  title="Choose Stat"
+  title={t('planner.chooseStat')}
   C={C}
 
   options={(statDefs || []).map(s => ({ label: String(s.label || s.key), value: String(s.key) }))}
@@ -6386,20 +6506,20 @@ const TransferMarketModal = React.memo(() => {
        
         <View style={S.sumCardCenter}>
           <View style={S.sumHeader}>
-            <Text style={S.sumTitle}>Season Plan Summary</Text>
+            <Text style={S.sumTitle}>{t('planner.seasonPlanSummary')}</Text>
             <TouchableOpacity style={S.smallBtn} onPress={() => setSummaryOpen(false)}>
               <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>Close</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
             </TouchableOpacity>
           </View>
 
           {/* Header row */}
           <View style={[S.tableRow, { borderTopWidth: 0 }]}>
-            <Text style={[S.th, {flex:0.6}]}>GW</Text>
-            <Text style={[S.th, {flex:3.4}]}>Transfers</Text>
-            <Text style={[S.th, {flex:1.0}]}>Chip</Text>
-            <Text style={[S.th, {flex:1.2}]}>Captain</Text>
-            <Text style={[S.th, {flex:0.8}]}>Cost</Text>
+            <Text style={[S.th, {flex:0.6}]}>{t('planner.gw')}</Text>
+            <Text style={[S.th, {flex:3.4}]}>{t('planner.transfers')}</Text>
+            <Text style={[S.th, {flex:1.0}]}>{t('planner.chip')}</Text>
+            <Text style={[S.th, {flex:1.2}]}>{t('planner.captain')}</Text>
+            <Text style={[S.th, {flex:0.8}]}>{t('planner.cost')}</Text>
           </View>
 
           <ScrollView>
@@ -6438,26 +6558,22 @@ const TransferMarketModal = React.memo(() => {
     <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setGwPickerOpen(false)} />
       <View style={S.sumCardCenter}>
         <View style={S.sumHeader}>
-          <Text style={S.sumTitle}>Go to Gameweek</Text>
+          <Text style={S.sumTitle}>{t('planner.goToGameweek')}</Text>
           <TouchableOpacity style={S.smallBtn} onPress={() => setGwPickerOpen(false)}>
             <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-            <Text style={S.smallBtnTxt}>Close</Text>
+            <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
           </TouchableOpacity>
         </View>
         <ScrollView>
-          {Array.from({ length: maxGw }, (_, i) => i + 1).map((n) => {
-            const disabled = n < minGw;
-            return (
+          {Array.from({ length: maxGw - minGw + 1 }, (_, i) => minGw + i).map((n) => (
               <TouchableOpacity
                 key={`gw-${n}`}
-                style={[S.gwItem, disabled && S.navBtnDisabled]}
-                onPress={() => { if (!disabled) { setGw(n); setGwPickerOpen(false); } }}
-                disabled={disabled}
+                style={S.gwItem}
+                onPress={() => { setGw(n); setGwPickerOpen(false); }}
               >
-                <Text style={S.gwItemTxt}>Gameweek {n}</Text>
+                <Text style={S.gwItemTxt}>{t('planner.gameweekNum', { n })}</Text>
               </TouchableOpacity>
-            );
-          })}
+            ))}
         </ScrollView>
       </View>
     </View>
@@ -6466,24 +6582,24 @@ const TransferMarketModal = React.memo(() => {
   // ---------- Chips (overlay) ----------
   const ChipsOverlay = () => {
     const items = [
-      { code: 'freehit', label: 'Free Hit' },
-      { code: 'wildcard', label: 'Wildcard' },
-      { code: 'bboost',  label: 'Bench Boost' },
-      { code: '3xc',     label: 'Triple Captain' },
+      { code: 'freehit', labelKey: 'freeHit' },
+      { code: 'wildcard', labelKey: 'wildcard' },
+      { code: 'bboost',  labelKey: 'benchBoost' },
+      { code: '3xc',     labelKey: 'tripleCaptain' },
     ];
     return (
       <View pointerEvents={chipsOpen ? 'auto' : 'none'} style={[S.modalWrap, { display: chipsOpen ? 'flex' : 'none' }]}>
        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setChipsOpen(false)} />
         <View style={S.chipsCard}>
           <View style={S.chipsHeader}>
-            <Text style={S.chipsTitle}>Chips</Text>
+            <Text style={S.chipsTitle}>{t('planner.chips')}</Text>
             <TouchableOpacity style={S.smallBtn} onPress={() => setChipsOpen(false)}>
               <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>Close</Text>
+              <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
             </TouchableOpacity>
           </View>
           <View style={S.chipsList}>
-            {items.map(({ code, label }) => {
+            {items.map(({ code, labelKey }) => {
               const on = current?.chip === code;
               const selectable = chipIsSelectable(code, gw);
               const status = chipStatusLabel(code, gw, on);
@@ -6494,7 +6610,7 @@ const TransferMarketModal = React.memo(() => {
                   disabled={!selectable && !on}
                   style={[S.chipLine, (!selectable && !on) && { opacity: 0.4 }]}
                 >
-                  <Text style={S.chipName}>{label}</Text>
+                  <Text style={S.chipName}>{t(`planner.${labelKey}`)}</Text>
                   <Text style={[S.chipName, { color: on ? C.ink : (status === 'USED' ? '#ef4444' : C.muted) }]}>
                     {status}
                   </Text>
@@ -6535,7 +6651,6 @@ function RankLine({ label, rank, den, suffix, style }) {
       setRowHeights(prev => (prev[team] === h ? prev : { ...prev, [team]: h }));
     }, []);
 
-    const [lookahead, setLookahead] = useState(5); // default 5 GWs
     const [sortByDiff, setSortByDiff] = useState(true);
     const [ascDiff, setAscDiff] = useState(true);
 
@@ -6579,7 +6694,7 @@ function RankLine({ label, rank, den, suffix, style }) {
     const teamsRaw = useMemo(() => Object.keys(fdr || {}).sort(), [fdr]);
     const gwCount = maxGw;
     const startCol0 = Math.min(gwCount - 1, Math.max(0, (gw || 1) - 1));
-    const endCol = Math.min(gwCount - 1, startCol0 + Math.max(1, lookahead) - 1);
+    const endCol = Math.min(gwCount - 1, startCol0 + Math.max(1, tickerLookahead) - 1);
     const range = useMemo(() => Array.from({ length: endCol - startCol0 + 1 }, (_, i) => startCol0 + i), [startCol0, endCol]);
 const sumForTeam = useCallback((team) => {
   let sum = 0, gwCount = 0;
@@ -6730,20 +6845,20 @@ const cycleSort = useCallback(() => {
           <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setTickerOpen(false)} />
             <View style={S.tickCard}>
               <View style={S.tickHeader}>
-                <Text style={S.tickTitle}>Season Ticker (GW {startCol0 + 1} → GW {endCol + 1})</Text>
+                <Text style={S.tickTitle}>{t('planner.seasonTicker', { start: startCol0 + 1, end: endCol + 1 })}</Text>
                 <TouchableOpacity style={S.smallBtn} onPress={() => setTickerOpen(false)}>
                   <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-                  <Text style={S.smallBtnTxt}>Close</Text>
+                  <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
                 </TouchableOpacity>
               </View>
 
               {/* Options */}
               <View style={S.tickOpts}>
-                <Text style={{ color:C.muted, fontWeight:'800' }}>Gameweeks:</Text>
+                <Text style={{ color:C.muted, fontWeight:'800' }}>{t('planner.gameweeks')}</Text>
                 <View style={{ flexDirection:'row', alignItems:'center', gap:6 }}>
-                  <TouchableOpacity style={S.smallBtn} onPress={()=> setLookahead(v=> Math.max(1, v-1))}><Text style={S.smallBtnTxt}>–</Text></TouchableOpacity>
-                  <Text style={[S.smallBtnTxt, { minWidth:40, textAlign:'center' }]}>{lookahead}</Text>
-                  <TouchableOpacity style={S.smallBtn} onPress={()=> setLookahead(v=> Math.min(38, v+1))}><Text style={S.smallBtnTxt}>+</Text></TouchableOpacity>
+                  <TouchableOpacity style={S.smallBtn} onPress={()=> setTickerLookahead(v=> Math.max(1, v-1))}><Text style={S.smallBtnTxt}>–</Text></TouchableOpacity>
+                  <Text style={[S.smallBtnTxt, { minWidth:40, textAlign:'center' }]}>{tickerLookahead}</Text>
+                  <TouchableOpacity style={S.smallBtn} onPress={()=> setTickerLookahead(v=> Math.min(38, v+1))}><Text style={S.smallBtnTxt}>+</Text></TouchableOpacity>
                 </View>
 
                 <TouchableOpacity style={[S.smallBtn, { borderColor: C.ink }]} onPress={cycleSort}>
@@ -6761,13 +6876,14 @@ const cycleSort = useCallback(() => {
   </Text>
 </TouchableOpacity>
 
-
-
-               
-
                 <TouchableOpacity style={S.smallBtn} onPress={openEditor}>
                   <MaterialCommunityIcons name="pencil" size={14} color={C.ink} />
-                  <Text style={S.smallBtnTxt}>Edit FDR</Text>
+                  <Text style={S.smallBtnTxt}>{t('planner.editFdr')}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={[S.smallBtn, { borderColor: C.ink }]} onPress={() => setProjectedFixturesAndRefetch(!useProjectedFixtures)}>
+                  <MaterialCommunityIcons name={useProjectedFixtures ? 'toggle-switch' : 'toggle-switch-off'} size={16} color={C.ink} />
+                  <Text style={S.smallBtnTxt}>{t('planner.projectedFixtures', { value: useProjectedFixtures ? t('planner.projectedOn') : t('planner.projectedOff') })}</Text>
                 </TouchableOpacity>
               </View>
 
@@ -6777,7 +6893,7 @@ const cycleSort = useCallback(() => {
                   <View>
                     <View style={[S.tickRow, { paddingHorizontal: 12 }]}>
                       <View style={[S.tickTeam, { backgroundColor:'transparent', borderWidth:0, height: BASE_CELL_H }]}>
-                        <Text style={[S.tickCellTxt, { color: C.ink }]}>Club</Text>
+                        <Text style={[S.tickCellTxt, { color: C.ink }]}>{t('planner.club')}</Text>
                       </View>
                     </View>
                     {teams.map((team) => (
@@ -6794,11 +6910,11 @@ const cycleSort = useCallback(() => {
                     <View>
                       <View style={[S.tickRow, { paddingHorizontal: 12 }]}>
                         <View style={[S.tickMine, { width: MINE_W }]}>
-                          <Text style={[S.tickCellTxt, { color: C.ink }]}>Mine</Text>
+                          <Text style={[S.tickCellTxt, { color: C.ink }]}>{t('planner.mine')}</Text>
                         </View>
                         {/* NEW: Diff header cell */}
     <View style={[S.tickMine, { width: DIFF_W }]}>
-      <Text style={[S.tickCellTxt, { color: C.ink }]}>Score</Text>
+      <Text style={[S.tickCellTxt, { color: C.ink }]}>{t('planner.score')}</Text>
     </View>
                         <View style={[S.tickCellsWrap, { borderWidth:0 }]}>
                           <View style={S.tickCells}>
@@ -6845,7 +6961,7 @@ const cycleSort = useCallback(() => {
                                       justifyContent: 'center',
                                       alignItems: 'center'
                                     }]}>
-                                      <Text style={[S.tickCellTxt, { color: C.muted }]}>BGW</Text>
+                                      <Text style={[S.tickCellTxt, { color: C.muted }]}>{t('planner.bgw')}</Text>
                                     </View>
                                   );
                                 }
@@ -6886,15 +7002,15 @@ const cycleSort = useCallback(() => {
           >
             <View style={S.editorCard}>
               <View style={S.sumHeader}>
-                <Text style={S.sumTitle}>Edit FDR (start from FPL)</Text>
+                <Text style={S.sumTitle}>{t('planner.editFdrFromFpl')}</Text>
                 <View style={{ flexDirection:'row', gap:8 }}>
                   <TouchableOpacity style={S.smallBtn} onPress={saveEditor}>
                     <MaterialCommunityIcons name="content-save" size={14} color={C.ink} />
-                    <Text style={S.smallBtnTxt}>Save</Text>
+                    <Text style={S.smallBtnTxt}>{t('planner.save')}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity style={S.smallBtn} onPress={() => setEditorOpen(false)}>
                     <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-                    <Text style={S.smallBtnTxt}>Cancel</Text>
+                    <Text style={S.smallBtnTxt}>{t('planner.cancel')}</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -6920,14 +7036,14 @@ const cycleSort = useCallback(() => {
               <View style={{ flexDirection:'row', justifyContent:'space-between', padding:12 }}>
                 <TouchableOpacity style={S.smallBtn} onPress={resetEditorVisible}>
                   <MaterialCommunityIcons name="backup-restore" size={14} color={C.ink} />
-                  <Text style={S.smallBtnTxt}>Reset Visible</Text>
+                  <Text style={S.smallBtnTxt}>{t('planner.resetVisible')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[S.smallBtn, { borderColor:'#ef4444' }]}
                   onPress={() => { saveOverrides({}); saveUseCustom(false); setEditorOpen(false); }}
                 >
                   <MaterialCommunityIcons name="trash-can-outline" size={14} color="#ef4444" />
-                  <Text style={[S.smallBtnTxt, { color:'#ef4444' }]}>Reset All My FDR</Text>
+                  <Text style={[S.smallBtnTxt, { color:'#ef4444' }]}>{t('planner.resetAllMyFdr')}</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -7024,15 +7140,15 @@ const clearOverride = () => {
         <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={close} />
           <View style={S.editorCard}>
             <View style={S.sumHeader}>
-              <Text style={S.sumTitle}>Override Bank (GW {gw})</Text>
+              <Text style={S.sumTitle}>{t('planner.overrideBank', { gw })}</Text>
               <TouchableOpacity style={S.smallBtn} onPress={close}>
                 <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-                <Text style={S.smallBtnTxt}>Close</Text>
+                <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
               </TouchableOpacity>
             </View>
 
             <View style={{ paddingHorizontal:16, paddingBottom:12, alignItems:'center' }}>
-              <Text style={{ color:C.muted, fontWeight:'800', marginBottom:10 }}>Bank value</Text>
+              <Text style={{ color:C.muted, fontWeight:'800', marginBottom:10 }}>{t('planner.bankValue')}</Text>
               <Text style={[S.cardValue, { marginBottom: 12 }]}>{displayMoney(bankDraftTenths)}</Text>
 
               {/* big steppers row */}
@@ -7053,7 +7169,7 @@ const clearOverride = () => {
                 </TouchableOpacity>
                 <TouchableOpacity style={S.smallBtn} onPress={saveDraft}>
                   <MaterialCommunityIcons name="content-save" size={14} color={C.ink} />
-                  <Text style={S.smallBtnTxt}>Save</Text>
+                  <Text style={S.smallBtnTxt}>{t('planner.save')}</Text>
                 </TouchableOpacity>
                 
               </View>
@@ -7102,7 +7218,7 @@ const clearOverride = () => {
           <TouchableOpacity
             style={S.settingsBtn}
             onPress={() => setZoom(z => clampZoom(z * 0.99))}
-            accessibilityLabel="Zoom out"
+            accessibilityLabel={t('planner.zoomOut')}
           >
             <View style={S.settingsBtnInner}>
               <MaterialCommunityIcons name="magnify-minus-outline" size={18} color={C.ink} />
@@ -7114,7 +7230,7 @@ const clearOverride = () => {
           <TouchableOpacity
             style={S.settingsBtn}
             onPress={() => setZoom(z => clampZoom(z * 1.010))}
-            accessibilityLabel="Zoom in"
+            accessibilityLabel={t('planner.zoomIn')}
           >
             <View style={S.settingsBtnInner}>
               <MaterialCommunityIcons name="magnify-plus-outline" size={18} color={C.ink} />
@@ -7135,7 +7251,23 @@ const clearOverride = () => {
                 size={22}
                 color={C.ink}
               />
-              <Text style={S.settingsTxt}>Mini fixtures: {showMinis ? 'ON' : 'OFF'}</Text>
+              <Text style={S.settingsTxt}>{t('planner.miniFixtures', { value: showMinis ? t('planner.projectedOn') : t('planner.projectedOff') })}</Text>
+            </View>
+          </TouchableOpacity>
+          {/* Projected fixtures (future DGW/BGW) vs confirmed only */}
+          <TouchableOpacity
+            style={S.settingsBtn}
+            onPress={() => setProjectedFixturesAndRefetch(!useProjectedFixtures)}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: useProjectedFixtures }}
+          >
+            <View style={S.settingsBtnInner}>
+              <MaterialCommunityIcons
+                name={useProjectedFixtures ? 'toggle-switch' : 'toggle-switch-off'}
+                size={22}
+                color={C.ink}
+              />
+              <Text style={S.settingsTxt}>{t('planner.projectedFixtures', { value: useProjectedFixtures ? t('planner.projectedOn') : t('planner.projectedOff') })}</Text>
             </View>
           </TouchableOpacity>
           {/* Share */}
@@ -7143,11 +7275,11 @@ const clearOverride = () => {
      style={[S.settingsBtn, { display: 'none' }]}
 
      onPress={handleShare}
-     accessibilityLabel="Share planner image"
+     accessibilityLabel={t('planner.sharePlannerImage')}
    >
      <View style={S.settingsBtnInner}>
        <MaterialCommunityIcons name="share-variant" size={18} color={C.ink} />
-       <Text style={S.settingsTxt}>Share</Text>
+       <Text style={S.settingsTxt}>{t('planner.share')}</Text>
      </View>
    </TouchableOpacity>
         </View>
@@ -7319,3 +7451,5 @@ const clearOverride = () => {
       </SafeAreaView>
     );
   }
+
+

@@ -32,6 +32,7 @@ import { useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { assetImages, clubCrestUri } from './clubs';
 import { useFplId } from './FplIdContext';
+import { useTranslation } from 'react-i18next';
 import { smartFetch } from './signedFetch';
 import { useColors, useTheme } from './theme';
 Text.defaultProps = Text.defaultProps || {};
@@ -68,6 +69,35 @@ const countYetFromTeam = (teamArr = []) => {
   }
   return yet;
 };
+
+// Count "live" (currently playing) same multiplier logic
+const countLiveFromTeam = (teamArr = []) => {
+  let live = 0;
+  for (const p of teamArr) {
+    const role = String(p?.role || '').toLowerCase();
+    const status = String(p?.status || '').toLowerCase();
+    let mul = 0;
+    if (role === 'b') mul = 0;
+    else if (role === 'tc') mul = 3;
+    else if (role === 'c') mul = 2;
+    else mul = 1;
+    if (status === 'l') live += mul;
+  }
+  return live;
+};
+
+// From roster (has .status 'yet'|'live'|'played'|'missed' and .multiplier)
+const countLiveFromRoster = (roster = []) => {
+  let live = 0;
+  for (const p of roster) {
+    if (String(p?.status || '').toLowerCase() !== 'live') continue;
+    const mul = Number(p?.multiplier ?? p?.mul ?? 1);
+    if (p?.role === 'b') continue;
+    live += mul >= 3 ? 3 : mul >= 2 ? 2 : 1;
+  }
+  return live;
+};
+
 // Multiplier: 1 normal, 2 captain, 3 TC (fallback to role if multiplier missing)
 const capMultOf = (p) => {
   const role = String(p?.role || '').toLowerCase();
@@ -153,13 +183,14 @@ const buildMeLeagueRow = (payload, myEntryId, autosubs) => {
   const manager = String(payload?.manager ?? 'You');
   const teamName = String(payload?.team_name ?? payload?.teamname ?? 'My Team');
 
-  const live = safeNum(payload?.live_points);
+  const livePts = safeNum(payload?.live_points);
   const bench = safeNum(payload?.bench_points);
   const hit = safeNum(payload?.hit);
-  const gwGross = live + bench;            // GW points *before* hits
+  const gwGross = livePts + bench;         // GW points *before* hits
   const gwHits = hit;                      // (likely negative)
   const roster = buildRosterFromRank(payload);
   const yet = countYetFromTeam(payload?.team || []);
+  const liveCount = countLiveFromTeam(payload?.team || []);
 
   // Which OR do we show in the row bubble? Match Rank screen logic.
   const showPost = autosubs || !!payload?.aut;
@@ -190,6 +221,7 @@ const buildMeLeagueRow = (payload, myEntryId, autosubs) => {
     gw_hits: gwHits,
     total: seasonTotal,     // season total (server’s best truth)
     yet,                    // “players left” using multipliers
+    live: liveCount,
     used_chips: Array.isArray(payload?.used_chips) ? payload.used_chips : [],
     active_chip,
     transfers: [],          // rank payload didn’t include; ok to leave empty
@@ -465,6 +497,7 @@ const emojiToChar = (s) => {
 };
 
 const League = () => {
+  const { t } = useTranslation();
   const { fplId, triggerRefetch } = useFplId();
   const navigation = useNavigation();
 
@@ -712,11 +745,11 @@ const chipsOverallRows = useMemo(() => {
 
 // Rank player "type" (accepts several common fields)
 const typeRank = (p) => {
-  const t = (p.type ?? p.pos ?? p.position ?? p.element_type ?? '').toString().toLowerCase();
-  if (t === 'gk' || t === 'g' || t === '1' || t === 'goalkeeper') return 0;
-  if (t === 'def' || t === 'd' || t === '2' || t === 'defender')   return 1;
-  if (t === 'mid' || t === 'm' || t === '3' || t === 'midfielder') return 2;
-  if (t === 'fwd' || t === 'fw' || t === 'f' || t === '4' || t === 'forward') return 3;
+  const posType = (p.type ?? p.pos ?? p.position ?? p.element_type ?? '').toString().toLowerCase();
+  if (posType === 'gk' || posType === 'g' || posType === '1' || posType === 'goalkeeper') return 0;
+  if (posType === 'def' || posType === 'd' || posType === '2' || posType === 'defender')   return 1;
+  if (posType === 'mid' || posType === 'm' || posType === '3' || posType === 'midfielder') return 2;
+  if (posType === 'fwd' || posType === 'fw' || posType === 'f' || posType === '4' || posType === 'forward') return 3;
   return 9; // unknown types at the end
 };
 
@@ -1098,6 +1131,22 @@ useEffect(() => {
   } catch {}
 }
 
+      // Enrich "me" row with live count from rank payload when available (any league)
+      try {
+        const raw = await AsyncStorage.getItem('fplData');
+        const parsed = raw ? JSON.parse(raw) : null;
+        const payload = parsed?.id != null && Number(parsed.id) === Number(fplId) ? (parsed.data || null) : null;
+        if (payload && Array.isArray(payload.team) && result?.rows?.length) {
+          const myId = Number(fplId);
+          result = {
+            ...result,
+            rows: result.rows.map((r) => {
+              if (Number(r?.entry_id ?? r?.entry ?? r?.id) !== myId) return r;
+              return { ...r, live: countLiveFromTeam(payload.team) };
+            }),
+          };
+        }
+      } catch {}
 
       // 7) Set in UI (augmented if celebs)
       setLeague(result);
@@ -1196,6 +1245,7 @@ useEffect(() => {
         return s.toLowerCase();
       }
       case 'yet':    return Number(row.yet ?? row.played_rem ?? 0);
+      case 'live':   return getLive(row);
       case 'cap':    return (row.captain || '').toString().toLowerCase();
       case 'gw': {
         const net = (row.gw_net != null)
@@ -1244,6 +1294,9 @@ useEffect(() => {
     return rows;
   }, [league?.rows, sortKey, sortDir,tableQuery]);
 
+  const getLive = (row) =>
+    Number(row?.live ?? (Array.isArray(row?.roster) ? countLiveFromRoster(row.roster) : 0));
+
   // Hide "Yet" if every entry is 0
   let showYet = useMemo(() => {
     return false;
@@ -1251,17 +1304,27 @@ useEffect(() => {
     if (!rows.length) return true; // show by default while loading/empty
     return rows.some(r => Number(r?.yet ?? r?.played_rem ?? 0) > 0);
   }, [league?.rows]);
-  
-  // Rebalance widths when Yet is hidden (steal its width and give to Manager + GW)
+
+  const showLive = useMemo(() => {
+    const rows = league?.rows || [];
+    if (!rows.length) return false;
+    return rows.some(r => getLive(r) > 0);
+  }, [league?.rows]);
+
+  // Rebalance widths when Yet/Live hidden (steal width to Manager + GW or add Live)
   const COLS = useMemo(() => {
-    if (showYet) return COL;
+    const base = { ...COL, live: 8 };
+    if (showYet && showLive) return { ...base, manager: COL.manager - 8 };
+    if (showYet && !showLive) return COL;
+    if (!showYet && showLive) return { ...base, yet: 0, manager: COL.manager + 1 };
     return {
       ...COL,
       yet: 0,
-      manager: COL.manager + 7, // take some of Yet's 9%
-      gw:      COL.gw + 2,      // …and a bit to GW
+      live: 0,
+      manager: COL.manager + 7,
+      gw: COL.gw + 2,
     };
-  }, [showYet]);
+  }, [showYet, showLive]);
 
   const onShareLeague = useCallback(() => {
     if (!selected?.id) return;
@@ -1322,12 +1385,12 @@ const scrollToManagerByName = (name) => {
 
         <View style={S.thead}>
           <Text style={S.theadTitle}>
-            {league.league_name ?? 'League'}
-            {league.gameweek ? ` — Live Gameweek ${league.gameweek} Table` : ''}
+            {league.league_name ?? t('league.title')}
+            {league.gameweek ? ` — ${t('league.liveGwTable', { gw: league.gameweek })}` : ''}
           </Text>
           <View style={{ alignItems: 'center', marginTop: 2 }}>
   <Text style={S.theadTitle2}>
-  Full downloadable league analysis at{' '}
+  {t('league.fullDownloadableAt')}{' '}
   <Text
     style={[S.leagueLinkLine, { textDecorationLine: 'underline' }]}
     onPress={() => Linking.openURL(`https://${_leagueLink}`)}
@@ -1342,14 +1405,14 @@ const scrollToManagerByName = (name) => {
           <View style={S.colHeadRow}>
             <View style={[S.thCell, S.thCenter, { width: toPct(COLS.pos) }]}>
               <Pressable style={S.thPress} onPress={() => handleSort('pos')}>
-                <Text style={[S.th, sortKey==='pos' && S.thActive]}>Pos</Text>
+                <Text style={[S.th, sortKey==='pos' && S.thActive]}>{t('league.pos')}</Text>
                 <Caret active={sortKey==='pos'} />
               </Pressable>
             </View>
 
             <View style={[S.thCell, S.thStart, { width: toPct(COLS.manager) }]}>
               <Pressable style={S.thPress} onPress={() => handleSort('manager')}>
-                <Text style={[S.th, sortKey==='manager' && S.thActive]}>Manager</Text>
+                <Text style={[S.th, sortKey==='manager' && S.thActive]}>{t('league.managerHeader')}</Text>
                 <Caret active={sortKey==='manager'} />
               </Pressable>
             </View>
@@ -1357,29 +1420,38 @@ const scrollToManagerByName = (name) => {
             {showYet && (
               <View style={[S.thCell, S.thCenter, { width: toPct(COLS.yet) }]}>
                 <Pressable style={S.thPress} onPress={() => handleSort('yet')}>
-                  <Text style={[S.th, sortKey==='yet' && S.thActive]}>Yet</Text>
+                  <Text style={[S.th, sortKey==='yet' && S.thActive]}>{t('league.yet')}</Text>
                   <Caret active={sortKey==='yet'} />
+                </Pressable>
+              </View>
+            )}
+
+            {showLive && (
+              <View style={[S.thCell, S.thCenter, { width: toPct(COLS.live ?? 8), minWidth: 24 }]}>
+                <Pressable style={S.thPress} onPress={() => handleSort('live')}>
+                  <Text style={[S.th, sortKey==='live' && S.thActive]}>{t('league.live')}</Text>
+                  <Caret active={sortKey==='live'} />
                 </Pressable>
               </View>
             )}
 
             <View style={[S.thCell, S.thCenter, { width: toPct(COLS.cap) }]}>
               <Pressable style={S.thPress} onPress={() => handleSort('cap')}>
-                <Text style={[S.th, sortKey==='cap' && S.thActive]}>(C)</Text>
+                <Text style={[S.th, sortKey==='cap' && S.thActive]}>{t('league.capShort')}</Text>
                 <Caret active={sortKey==='cap'} />
               </Pressable>
             </View>
 
             <View style={[S.thCell, S.thCenter, { width: toPct(COLS.gw) }]}>
               <Pressable style={S.thPress} onPress={() => handleSort('gw')}>
-                <Text style={[S.th, sortKey==='gw' && S.thActive]}>GW</Text>
+                <Text style={[S.th, sortKey==='gw' && S.thActive]}>{t('league.gw')}</Text>
                 <Caret active={sortKey==='gw'} />
               </Pressable>
             </View>
 
             <View style={[S.thCell, S.thCenter, { width: toPct(COLS.total) }]}>
               <Pressable style={S.thPress} onPress={() => handleSort('total')}>
-                <Text style={[S.th, sortKey==='total' && S.thActive]}>Total</Text>
+                <Text style={[S.th, sortKey==='total' && S.thActive]}>{t('league.total')}</Text>
                 <Caret active={sortKey==='total'} />
               </Pressable>
             </View>
@@ -1388,16 +1460,16 @@ const scrollToManagerByName = (name) => {
           {leagueLoading && (
             <View style={S.loadingBar}>
               <ActivityIndicator size="small" color={C.accent} />
-              <Text style={S.loadingTxt}>Loading data…</Text>
+              <Text style={S.loadingTxt}>{t('league.loadingData')}</Text>
             </View>
           )}
         </View>
       </View>
     );
-  }, [league, sortKey, sortDir, S, _leagueLink, leagueLoading]);
+  }, [league, sortKey, sortDir, S, _leagueLink, leagueLoading, showYet, showLive, COLS]);
 
   const onToggleAutosubs = async (val) => {
-    if (!showYet) return;
+    if (!showYet && !showLive) return;
     setAutosubs(val);
     await AsyncStorage.setItem('autosubs', val ? '1' : '0');
     if (isValidLeagueId(selected?.id)) {
@@ -1424,11 +1496,13 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
         isDark={isDark}
         S={S}
         showYet={showYet}
+        showLive={showLive}
         cols={COLS}
-         detailedView={detailedView}
+        detailedView={detailedView}
+        t={t}
       />
     );
-  }, [fplId, favs, expanded, C, isDark, S, showYet, COLS,detailedView]);
+  }, [fplId, favs, expanded, C, isDark, S, showYet, showLive, COLS, detailedView, t]);
 
   // abort anything still in flight on unmount
   useEffect(() => {
@@ -1441,7 +1515,7 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
   if (!fplId) {
     return (
       <View style={[S.center, { paddingTop: 50 }]}>
-        <Text style={S.muted}>Set your FPL ID first.</Text>
+        <Text style={S.muted}>{t('league.setFplIdFirst')}</Text>
       </View>
     );
   }
@@ -1450,7 +1524,7 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
     
     <View style={S.page}>
       <AppHeader 
-      bannerText="Full league analysis & awards at" bannerLink={_leagueLink}
+      bannerText={t('league.fullLeagueAnalysis')} bannerLink={_leagueLink}
       />
       <View style={{paddingHorizontal: 10}}>
 
@@ -1458,7 +1532,7 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
       <View style={[S.toolbarRow, { marginTop: 8, alignItems: 'center' }]}>
         <Pressable style={[S.select, { flex: 1 }]} onPress={() => setOpen(true)}>
           <Text style={[S.selectText, !selected && S.placeholder]}>
-            {selected?.name ?? 'Select a league'}
+            {(selected?.id === 'celebs' ? t('league.youVsCelebs') : selected?.name) ?? t('league.selectLeague')}
           </Text>
           <MaterialCommunityIcons name="chevron-down" size={18} color={C.muted} />
         </Pressable>
@@ -1469,7 +1543,7 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
           style={S.iconBtn}
           onPress={() => setSettingsOpen(true)}
           activeOpacity={0.7}
-          accessibilityLabel="Settings"
+          accessibilityLabel={t('common.settings')}
         >
           <MaterialCommunityIcons name="cog" size={18} color={C.ink} />
         </TouchableOpacity>
@@ -1480,7 +1554,7 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
             style={S.iconBtn}
             onPress={() => setAnalyticsOpen(true)}
             activeOpacity={0.7}
-            accessibilityLabel="League analytics (EO & Chips)"
+            accessibilityLabel={t('league.leagueAnalytics')}
           >
             <MaterialCommunityIcons name="chart-box-outline" size={18} color={C.ink} />
           </TouchableOpacity>
@@ -1501,7 +1575,7 @@ const getEntryId = (r) => Number(r?.entry_id ?? r?.entry ?? r?.id);
               setCompareOpen(true);
             }}
 activeOpacity={0.7}
-            accessibilityLabel="Compare two teams"
+            accessibilityLabel={t('league.compareTwoTeams')}
           >
             <MaterialCommunityIcons name="scale-balance" size={18} color={C.ink} />
           </TouchableOpacity>
@@ -1513,7 +1587,7 @@ activeOpacity={0.7}
             style={[S.iconBtn,{display:'none'}]}
             onPress={onShareLeague}
             activeOpacity={0.7}
-            accessibilityLabel="Share league"
+            accessibilityLabel={t('league.shareLeague')}
           >
             <MaterialCommunityIcons name="share-variant" size={18} color={C.ink} />
           </TouchableOpacity>
@@ -1524,7 +1598,7 @@ activeOpacity={0.7}
     <ThemedTextInput
       value={tableQuery}
       onChangeText={setTableQuery}
-      placeholder="Search league…"
+      placeholder={t('league.searchLeaguePlaceholder')}
       placeholderTextColor={C.muted}
       multiline={false}
       textAlignVertical="center"
@@ -1540,18 +1614,18 @@ activeOpacity={0.7}
     style={S.findBtn}
     onPress={scrollToMe}
     activeOpacity={0.7}
-    accessibilityLabel="Find my row"
+    accessibilityLabel={t('league.findMyRow')}
   >
-    <Text style={S.findBtnText}>Find me</Text>
+    <Text style={S.findBtnText}>{t('league.findMe')}</Text>
   </TouchableOpacity>
 
   <Pressable
     onPress={() => setDetailedView(v => !v)}
     style={[S.viewToggleBtn, detailedView && S.viewToggleBtnOn]}
-    accessibilityLabel="Toggle detailed view"
+    accessibilityLabel={t('league.detailed') + '/' + t('league.compact')}
   >
     <Text style={[S.viewToggleText, detailedView && S.viewToggleTextOn]}>
-      {detailedView ? 'Detailed' : 'Compact'}
+      {detailedView ? t('league.detailed') : t('league.compact')}
     </Text>
   </Pressable>
 </View>
@@ -1564,9 +1638,9 @@ activeOpacity={0.7}
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <View style={S.overlay}>
           <View style={S.sheet}>
-            <Text style={S.sheetTitle}>Choose league</Text>
+            <Text style={S.sheetTitle}>{t('league.chooseLeague')}</Text>
             {loadingOptions ? (
-              <View style={S.centerRow}><ActivityIndicator color={C.accent} /><Text style={[S.muted, { marginLeft: 8 }]}>Loading…</Text></View>
+              <View style={S.centerRow}><ActivityIndicator color={C.accent} /><Text style={[S.muted, { marginLeft: 8 }]}>{t('common.loading')}</Text></View>
             ) : optionsError ? (
               <Text style={S.error}>{optionsError}</Text>
             ) : (
@@ -1577,7 +1651,7 @@ activeOpacity={0.7}
                 
                 renderItem={({ item }) => (
                   <TouchableOpacity style={S.optItem} onPress={() => selectAndClose(item)} activeOpacity={0.6}>
-                    <Text style={S.optText}>{item.name}</Text>
+                    <Text style={S.optText}>{item.id === 'celebs' ? t('league.youVsCelebs') : item.name}</Text>
                     {selected?.id === item.id && <MaterialCommunityIcons name="check" size={18} color={C.ink} />}
                   </TouchableOpacity>
                 )}
@@ -1618,21 +1692,22 @@ activeOpacity={0.7}
             </View>
 
             {/* Glossary */}
-            <Text style={[S.tableTitle, { marginTop: 12 }]}>Glossary</Text>
+            <Text style={[S.tableTitle, { marginTop: 12 }]}>{t('league.glossary')}</Text>
             {[
-              ['EO', 'Effective ownership within this league for a player.'],
-              ['OR', 'Live Overall Rank (as calculated by LiveFPL).'],
-              ['FT', 'Free Transfers Left.'],
-              ['TV', 'Team Value (At deadline time).'],
-              ['Yet', 'Players left to play (captain counts twice).'],
-              ['WC', 'Wildcard.'],
-              ['FH', 'Free Hit.'],
-              ['BB', 'Bench Boost.'],
-              ['TC', 'Triple Captain.'],
-            ].map(([k, v]) => (
+              ['EO', 'helpEo'],
+              ['OR', 'helpOr'],
+              ['FT', 'helpFt'],
+              ['TV', 'helpTv'],
+              ['Yet', 'helpYet'],
+              ['Live', 'helpLive'],
+              ['WC', 'helpWc'],
+              ['FH', 'helpFh'],
+              ['BB', 'helpBb'],
+              ['TC', 'helpTc'],
+            ].map(([k, key]) => (
               <View style={S.bulletRow} key={k}>
                 <Text style={S.bulletDot}>•</Text>
-                <Text style={S.bulletText}><Text style={{ fontWeight: '800' }}>{k}</Text>: {v}</Text>
+                <Text style={S.bulletText}><Text style={{ fontWeight: '800' }}>{k}</Text>: {t(`league.${key}`)}</Text>
               </View>
             ))}
           </View>
@@ -1644,9 +1719,9 @@ activeOpacity={0.7}
         <View style={S.overlay}>
           <View style={S.analyticsSheet}>
             <View style={S.analyticsHeaderRow}>
-              <Text style={S.analyticsTitle}>League analytics</Text>
-              <TouchableOpacity onPress={() => setAnalyticsOpen(false)}>
-                <Text style={S.link}>Close</Text>
+<Text style={S.analyticsTitle}>{t('league.leagueAnalyticsTitle')}</Text>
+            <TouchableOpacity onPress={() => setAnalyticsOpen(false)}>
+                <Text style={S.link}>{t('common.close')}</Text>
               </TouchableOpacity>
             </View>
 
@@ -1656,29 +1731,29 @@ activeOpacity={0.7}
                 style={[S.segment, analyticsTab==='eo' && S.segmentActive]}
                 onPress={() => setAnalyticsTab('eo')}
               >
-                <Text style={[S.segmentTxt, analyticsTab==='eo' && S.segmentTxtActive]}>EO</Text>
+                <Text style={[S.segmentTxt, analyticsTab==='eo' && S.segmentTxtActive]}>{t('league.eoTab')}</Text>
               </Pressable>
               <Pressable
                 style={[S.segment, analyticsTab==='chips' && S.segmentActive]}
                 onPress={() => setAnalyticsTab('chips')}
               >
-                <Text style={[S.segmentTxt, analyticsTab==='chips' && S.segmentTxtActive]}>Chips</Text>
+                <Text style={[S.segmentTxt, analyticsTab==='chips' && S.segmentTxtActive]}>{t('league.chipsTab')}</Text>
               </Pressable>
             </View>
 
             {analyticsTab === 'chips' ? (
               <>
-                <Text style={S.tableTitle}>Chips usage this week (%)</Text>
+                <Text style={S.tableTitle}>{t('league.chipsUsageThisWeek')}</Text>
 <View style={S.tableHeaderRow}>
   <Pressable style={[S.headCell, { flex: 2 }]} onPress={() => handleChipsSort('chip')}>
-    <Text style={[S.headTxt, chipsSortKey === 'chip' && S.headActive]}>Chip</Text>
+    <Text style={[S.headTxt, chipsSortKey === 'chip' && S.headActive]}>{t('league.chip')}</Text>
     {chipsSortKey === 'chip' && <Text style={S.sortCaretSm}>{chipsSortDir==='asc'?'▲':'▼'}</Text>}
   </Pressable>
   <View style={[S.headCell, S.headNum, { flex: 1 }]}>
-    <Text style={S.headTxt}>Managers used</Text>
+    <Text style={S.headTxt}>{t('league.managersUsed')}</Text>
   </View>
   <Pressable style={[S.headCell, S.headNum, { flex: 1 }]} onPress={() => handleChipsSort('pct')}>
-    <Text style={[S.headTxt, chipsSortKey === 'pct' && S.headActive]}>Pct</Text>
+    <Text style={[S.headTxt, chipsSortKey === 'pct' && S.headActive]}>{t('league.pct')}</Text>
     {chipsSortKey === 'pct' && <Text style={S.sortCaretSm}>{chipsSortDir==='asc'?'▲':'▼'}</Text>}
   </Pressable>
 </View>
@@ -1699,18 +1774,18 @@ activeOpacity={0.7}
                 />
                 <View style={{ height: 12 }} />
 
-<Text style={S.tableTitle}>Overall chip usage (season)</Text>
+<Text style={S.tableTitle}>{t('league.overallChipUsage')}</Text>
 <View style={S.tableHeaderRow}>
   <Pressable style={[S.headCell, { flex: 2 }]} onPress={() => handleChipsOverallSort('chip')}>
-    <Text style={[S.headTxt, chipsOverallSortKey === 'chip' && S.headActive]}>Chip</Text>
+    <Text style={[S.headTxt, chipsOverallSortKey === 'chip' && S.headActive]}>{t('league.chip')}</Text>
     {chipsOverallSortKey === 'chip' && <Text style={S.sortCaretSm}>{chipsOverallSortDir==='asc'?'▲':'▼'}</Text>}
   </Pressable>
   <Pressable style={[S.headCell, S.headNum, { flex: 1 }]} onPress={() => handleChipsOverallSort('used')}>
-    <Text style={[S.headTxt, chipsOverallSortKey === 'used' && S.headActive]}>Managers used</Text>
+    <Text style={[S.headTxt, chipsOverallSortKey === 'used' && S.headActive]}>{t('league.managersUsed')}</Text>
     {chipsOverallSortKey === 'used' && <Text style={S.sortCaretSm}>{chipsOverallSortDir==='asc'?'▲':'▼'}</Text>}
   </Pressable>
   <Pressable style={[S.headCell, S.headNum, { flex: 1 }]} onPress={() => handleChipsOverallSort('pct')}>
-    <Text style={[S.headTxt, chipsOverallSortKey === 'pct' && S.headActive]}>Pct</Text>
+    <Text style={[S.headTxt, chipsOverallSortKey === 'pct' && S.headActive]}>{t('league.pct')}</Text>
     {chipsOverallSortKey === 'pct' && <Text style={S.sortCaretSm}>{chipsOverallSortDir==='asc'?'▲':'▼'}</Text>}
   </Pressable>
   
@@ -1733,7 +1808,7 @@ activeOpacity={0.7}
               </>
             ) : (
               <>
-                <Text style={S.tableTitle}>Player EO & captains (%)</Text>
+                <Text style={S.tableTitle}>{t('league.playerEoCaptains')}</Text>
                 <Text style={[S.muted, { fontSize: 11, marginTop: -2, marginBottom: 6 }]}>
     Tip: tap the group icon next to a player to see which managers started, captained, triple-captained, or benched him.
   </Text>
@@ -1742,26 +1817,26 @@ activeOpacity={0.7}
                 <ThemedTextInput
                   value={eoQuery}
                   onChangeText={setEoQuery}
-                  placeholder="Search player…"
+                  placeholder={t('league.searchPlayerPlaceholder')}
                   placeholderTextColor={C.muted}
                   style={S.searchInput}
                 />
 
                 <View style={S.tableHeaderRow}>
                   <Pressable style={[S.headCell, { flex: 2 }]} onPress={() => handleEoSort('name')}>
-                    <Text style={[S.headTxt, eoSortKey === 'name' && S.headActive]}>Player</Text>
+                    <Text style={[S.headTxt, eoSortKey === 'name' && S.headActive]}>{t('league.player')}</Text>
                     {eoSortKey === 'name' && <Text style={S.sortCaretSm}>{eoSortDir==='asc'?'▲':'▼'}</Text>}
                   </Pressable>
 
                   {[
-                    ['own_pct', 'Own'],
-                    ['s_pct', 'Start'],
-                    ['c_pct', '(C)'],
-                    ['tc_pct', '(TC)'],
-                    ['eo_pct', 'EO'],
-                  ].map(([key, label]) => (
+                    ['own_pct', 'league.own'],
+                    ['s_pct', 'league.start'],
+                    ['c_pct', 'league.capShort'],
+                    ['tc_pct', 'league.tcShort'],
+                    ['eo_pct', 'league.eoTab'],
+                  ].map(([key, tKey]) => (
                     <Pressable key={key} style={[S.headCell, S.headNum]} onPress={() => handleEoSort(key)}>
-                      <Text style={[S.headTxt, eoSortKey === key && S.headActive]}>{label}</Text>
+                      <Text style={[S.headTxt, eoSortKey === key && S.headActive]}>{t(tKey)}</Text>
                       {eoSortKey === key && <Text style={S.sortCaretSm}>{eoSortDir==='asc'?'▲':'▼'}</Text>}
                     </Pressable>
                   ))}
@@ -1783,7 +1858,7 @@ activeOpacity={0.7}
         }}
         style={S.eoInfoBtn}
         activeOpacity={0.7}
-        accessibilityLabel={`Who has ${item.name}?`}
+        accessibilityLabel={t('league.whoHasPlayer', { name: item.name })}
       >
         <MaterialCommunityIcons
           name="account-multiple-outline"
@@ -1817,10 +1892,10 @@ activeOpacity={0.7}
      <View style={S.eoDetailCard}>
        <View style={S.analyticsHeaderRow}>
          <Text style={S.analyticsTitle}>
-           {eoDetailPlayer?.name ? `Managers for ${eoDetailPlayer.name}` : 'Managers'}
+           {eoDetailPlayer?.name ? t('league.managersFor', { name: eoDetailPlayer.name }) : t('league.managers')}
          </Text>
          <TouchableOpacity onPress={() => setEoDetailOpen(false)}>
-           <Text style={S.link}>Close</Text>
+           <Text style={S.link}>{t('common.close')}</Text>
          </TouchableOpacity>
        </View>
 
@@ -1828,7 +1903,7 @@ activeOpacity={0.7}
        {/* Total managers in this league */}
 <View style={S.eoTotalsRow}>
   <Text style={S.eoTotalsText}>
-    Total managers in league: {Array.isArray(league?.rows) ? league.rows.length : 0}
+    {t('league.totalManagersInLeague', { count: Array.isArray(league?.rows) ? league.rows.length : 0 })}
   </Text>
 </View>
 
@@ -1838,10 +1913,10 @@ activeOpacity={0.7}
          <>
            {/* Quick counts row */}
            <View style={S.eoCountsRow}>
-             <View style={S.eoCountPill}><Text style={S.eoCountKey}>TC</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.tc.length}</Text></View>
-             <View style={S.eoCountPill}><Text style={S.eoCountKey}>(C)</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.c.length}</Text></View>
-             <View style={S.eoCountPill}><Text style={S.eoCountKey}>Started</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.started.length}</Text></View>
-             <View style={S.eoCountPill}><Text style={S.eoCountKey}>Benched</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.bench.length}</Text></View>
+             <View style={S.eoCountPill}><Text style={S.eoCountKey}>{t('league.tcShort')}</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.tc.length}</Text></View>
+             <View style={S.eoCountPill}><Text style={S.eoCountKey}>{t('league.capShort')}</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.c.length}</Text></View>
+             <View style={S.eoCountPill}><Text style={S.eoCountKey}>{t('league.started')}</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.started.length}</Text></View>
+             <View style={S.eoCountPill}><Text style={S.eoCountKey}>{t('league.benched')}</Text><Text style={S.eoCountVal}>{eoDetailPlayer.groups.bench.length}</Text></View>
            </View>
 
            <ScrollView
@@ -1888,7 +1963,7 @@ activeOpacity={0.7}
            </ScrollView>
          </>
        ) : (
-         <Text style={S.muted}>No data.</Text>
+         <Text style={S.muted}>{t('league.noData')}</Text>
        )}
      </View>
    </>
@@ -1930,13 +2005,13 @@ activeOpacity={0.7}
     }}
   >
     <Text style={{ color: C.muted, fontSize: 12, fontWeight: '800' }}>
-      Sort Managers By {compareTeamSort === 'rank' ? 'Rank' : 'A–Z'}
+      {t('league.sortManagersBy')} {compareTeamSort === 'rank' ? t('league.sortByRank') : t('league.sortByAZ')}
     </Text>
   </Pressable>
 </View>
 
         <TouchableOpacity onPress={() => setCompareOpen(false)}>
-          <Text style={S.link}>Close</Text>
+          <Text style={S.link}>{t('common.close')}</Text>
         </TouchableOpacity>
       </View>
 <ScrollView
@@ -1964,7 +2039,7 @@ activeOpacity={0.7}
      {/* Pickers */}
 <View style={S.comparePickRow}>
   <View style={S.comparePickCol}>
-    <Text style={S.comparePickLabel}>Team A</Text>
+    <Text style={S.comparePickLabel}>{t('league.teamA')}</Text>
     <Pressable
       onPress={() => {
         setOpenA((v) => !v);
@@ -1974,7 +2049,7 @@ activeOpacity={0.7}
       style={[S.select, { justifyContent:'space-between' }]}
     >
       <Text style={S.selectText}>
-        {league?.rows?.find(r => r.entry_id === compareA)?.manager_name || 'Select…'}
+        {league?.rows?.find(r => r.entry_id === compareA)?.manager_name || t('league.select')}
       </Text>
       <MaterialCommunityIcons name={openA ? 'chevron-up' : 'chevron-down'} size={18} color={C.muted} />
     </Pressable>
@@ -2021,7 +2096,7 @@ activeOpacity={0.7}
   </View>
 
   <View style={S.comparePickCol}>
-    <Text style={S.comparePickLabel}>Team B</Text>
+    <Text style={S.comparePickLabel}>{t('league.teamB')}</Text>
     <Pressable
       onPress={() => {
         setOpenB((v) => !v);
@@ -2031,7 +2106,7 @@ activeOpacity={0.7}
       style={[S.select, { justifyContent:'space-between' }]}
     >
       <Text style={S.selectText}>
-        {league?.rows?.find(r => r.entry_id === compareB)?.manager_name || 'Select…'}
+        {league?.rows?.find(r => r.entry_id === compareB)?.manager_name || t('league.select')}
       </Text>
       <MaterialCommunityIcons name={openB ? 'chevron-up' : 'chevron-down'} size={18} color={C.muted} />
     </Pressable>
@@ -2170,28 +2245,27 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
             <View style={S.cMetaRow}>
               <View style={S.cMetaCol}>
                 <Text style={S.cMetaTitle}>{A.manager_name}</Text>
-                <Text style={S.cMetaSub}>Chip: {A.active_chip || '-'}</Text>
+                <Text style={S.cMetaSub}>{t('league.chipLabel')}: {A.active_chip || '-'}</Text>
                 <Text style={S.cMetaSub}>
-                  GW: {(A.gw_gross ?? 0)}{A.gw_hits ? ` (${A.gw_hits > 0 ? `+${A.gw_hits}` : A.gw_hits})` : ''}
+                  {t('league.gwLabel')}: {(A.gw_gross ?? 0)}{A.gw_hits ? ` (${A.gw_hits > 0 ? `+${A.gw_hits}` : A.gw_hits})` : ''}
                 </Text>
-                <Text style={S.cMetaSub}>Total: {A.total ?? 0}</Text>
-                <Text style={S.cMetaSub}>League Rank: {A.rank ?? '-'}</Text>
+                <Text style={S.cMetaSub}>{t('league.totalLabel')}: {A.total ?? 0}</Text>
+                <Text style={S.cMetaSub}>{t('league.leagueRank')}: {A.rank ?? '-'}</Text>
                  <Text style={S.cMetaSub}>
-  OR: {A.overall_rank != null ? compactNumber(A.overall_rank) : '-'}
+  {t('league.orShort')}: {A.overall_rank != null ? compactNumber(A.overall_rank) : '-'}
 </Text>
               </View>
               <View style={S.cMetaCol}>
                 <Text style={S.cMetaTitle}>{B.manager_name}</Text>
-                <Text style={S.cMetaSub}>Chip: {B.active_chip || '-'}</Text>
+                <Text style={S.cMetaSub}>{t('league.chipLabel')}: {B.active_chip || '-'}</Text>
                 <Text style={S.cMetaSub}>
-                  GW: {(B.gw_gross ?? 0)}{B.gw_hits ? ` (${B.gw_hits > 0 ? `+${B.gw_hits}` : B.gw_hits})` : ''}
+                  {t('league.gwLabel')}: {(B.gw_gross ?? 0)}{B.gw_hits ? ` (${B.gw_hits > 0 ? `+${B.gw_hits}` : B.gw_hits})` : ''}
                 </Text>
-                <Text style={S.cMetaSub}>Total: {B.total ?? 0}</Text>
-                <Text style={S.cMetaSub}>League Rank: {B.rank ?? '-'}</Text>
+                <Text style={S.cMetaSub}>{t('league.totalLabel')}: {B.total ?? 0}</Text>
+                <Text style={S.cMetaSub}>{t('league.leagueRank')}: {B.rank ?? '-'}</Text>
                
-…
 <Text style={S.cMetaSub}>
-  OR: {B.overall_rank != null ? compactNumber(B.overall_rank) : '-'}
+  {t('league.orShort')}: {B.overall_rank != null ? compactNumber(B.overall_rank) : '-'}
 </Text>
               </View>
             </View>
@@ -2206,7 +2280,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
         onPress={() => toggleCompareSort('name')}
       >
         <Text style={[S.headTxt, compareSortKey === 'name' && S.headActive]}>
-          Player
+          {t('league.player')}
         </Text>
         {compareSortKey === 'name' && (
           <Text style={S.sortCaretSm}>{compareSortDir === 'asc' ? '▲' : '▼'}</Text>
@@ -2217,7 +2291,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
         onPress={() => toggleCompareSort('pts')}
       >
         <Text style={[S.headTxt, compareSortKey === 'pts' && S.headActive]}>
-          Pts
+          {t('league.pts')}
         </Text>
         {compareSortKey === 'pts' && (
           <Text style={S.sortCaretSm}>{compareSortDir === 'asc' ? '▲' : '▼'}</Text>
@@ -2238,7 +2312,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
         onPress={() => toggleCompareSort('name')}
       >
         <Text style={[S.headTxt, compareSortKey === 'name' && S.headActive]}>
-          Player
+          {t('league.player')}
         </Text>
         {compareSortKey === 'name' && (
           <Text style={S.sortCaretSm}>{compareSortDir === 'asc' ? '▲' : '▼'}</Text>
@@ -2249,7 +2323,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
         onPress={() => toggleCompareSort('pts')}
       >
         <Text style={[S.headTxt, compareSortKey === 'pts' && S.headActive]}>
-          Pts
+          {t('league.pts')}
         </Text>
         {compareSortKey === 'pts' && (
           <Text style={S.sortCaretSm}>{compareSortDir === 'asc' ? '▲' : '▼'}</Text>
@@ -2278,11 +2352,11 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
             <View style={S.stickyWrap}>
               <View style={S.thead}>
                 <Text style={S.theadTitle}>
-                  {selected?.name ?? 'League'}
+                  {(selected?.id === 'celebs' ? t('league.youVsCelebs') : selected?.name) ?? t('league.title')}
                 </Text>
                 <View style={S.loadingBar}>
                   <ActivityIndicator size="small" color={C.accent} />
-                  <Text style={S.loadingTxt}>Loading data…</Text>
+                  <Text style={S.loadingTxt}>{t('league.loadingData')}</Text>
                 </View>
               </View>
             </View>
@@ -2292,7 +2366,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
           <View style={[S.center, { paddingTop: 24 }]}>
             <Text style={S.error}>{leagueError}</Text>
             <View style={{ height: 8 }} />
-            <TouchableOpacity onPress={() => fetchLeague(selected.id, { autosubs })}><Text style={S.link}>Retry</Text></TouchableOpacity>
+            <TouchableOpacity onPress={() => fetchLeague(selected.id, { autosubs })}><Text style={S.link}>{t('league.retry')}</Text></TouchableOpacity>
           </View>
         ) : league ? (
           <FlatList
@@ -2312,7 +2386,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
             windowSize={8}
             initialNumToRender={20}
             removeClippedSubviews
-            extraData={{ showYet, cols: COLS }}
+            extraData={{ showYet, showLive, cols: COLS }}
           />
         ) : null
       ) : null}
@@ -2322,7 +2396,7 @@ const listB = applyCompareSort([...bStar, ...bBench], priB);
 };
 
 /** ===== Row ===== */
-const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDark, S, showYet, cols,detailedView  }) => {
+const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDark, S, showYet, showLive, cols, detailedView, t }) => {
   const ME_GRADIENT = isDark
     ? ['rgba(34,211,238,0.18)', 'rgba(99,102,241,0.18)']
     : ['#22d3ee', '#6366f1'];
@@ -2341,7 +2415,7 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
   const badColor = C.danger ?? '#ef4444';
   const sameColor = C.muted ?? '#9aa0ad';
 
-  const t = delta > 0 ? { key: 'up', color: okColor }
+  const deltaStyle = delta > 0 ? { key: 'up', color: okColor }
         : delta < 0 ? { key: 'down', color: badColor }
         : { key: 'same', color: sameColor };
 
@@ -2371,16 +2445,26 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
   const hits = Number(row.gw_hits ?? row.hits ?? row.hit ?? 0) || 0;
   const xferNet = xferSum + hits;
   const netForColor = hits ? xferNet : xferSum;
-  const xferText = hits ? ` ${sign(xferSum)} + ${hits} = ${sign(xferNet)} (incl. hits)` : ` ${sign(xferSum)}`;
+  const xferText = hits ? ` ${sign(xferSum)} + ${hits} = ${sign(xferNet)} ${t('league.inclHits')}` : ` ${sign(xferSum)}`;
+
+  // Concise extra line for detailed mode: FT · TV · Played [· Net]
+  const detailLine = useMemo(() => {
+    const ft = row.FT != null ? String(row.FT) : '-';
+    const tv = row.team_value != null && row.team_value !== '' ? `£${row.team_value}` : '-';
+    const played = row.played_text || (row.played != null ? `${row.played}/12` : '-');
+    const parts = [`FT ${ft}`, `TV ${tv}`, played];
+    if (hits || xferNet !== 0) parts.push(`Net ${sign(xferNet)}`);
+    return parts.join(' · ');
+  }, [row.FT, row.team_value, row.played_text, row.played, hits, xferNet]);
 
   const HeaderInner = () => (
     <>
       {/* Pos */}
       <View style={[S.rankWrap, { width: toPct(cols.pos) }]}>
         <View style={S.arrowBlock}>
-          <Image source={assetImages[t.key]} style={S.rankArrow} />
+          <Image source={assetImages[deltaStyle.key]} style={S.rankArrow} />
           {showDelta && (
-            <Text style={[S.deltaTiny, { color: me ? '#ffffff' : t.color }]}>{sign(delta)}</Text>
+            <Text style={[S.deltaTiny, { color: me ? '#ffffff' : deltaStyle.color }]}>{sign(delta)}</Text>
           )}
         </View>
         <Text style={[S.rankNum, me && S.rankNumMine]}>{row.rank}</Text>
@@ -2471,6 +2555,15 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
         </View>
       )}
 
+      {/* Live — column between Yet and (C) */}
+      {showLive && (
+        <View style={[S.colFixed, { width: toPct(cols?.live ?? 8), minWidth: 24 }]}>
+          <Text style={[S.fixedNum, me && S.fixedNumMine]}>
+            {String(Number(row.live ?? (Array.isArray(row?.roster) ? countLiveFromRoster(row.roster) : 0)) || 0)}
+          </Text>
+        </View>
+      )}
+
       {/* Captain / Vice */}
       <View style={[S.colFixed, { width: toPct(cols.cap) }]}>
         <Text numberOfLines={1} style={[S.capMain, me && S.capMainMine]}>{row.captain || ''}</Text>
@@ -2491,7 +2584,7 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
                 <Text style={[S.gwHit, { color: badColor }]}>({gwHits > 0 ? `+${gwHits}` : gwHits})</Text>
               )}
               { yetCount > 0 && (
-      <Text style={S.gwYet}>Yet {yetCount}</Text>
+      <Text style={S.gwYet}>{t('league.yetCount', { count: yetCount })}</Text>
     )}
             </View>
           );
@@ -2537,12 +2630,24 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
     ellipsizeMode="tail"
     style={[
       S.inlineTransfers,
-      // ✅ indent to start under the Manager column
       { marginLeft: ((cols.pos || 0) / 100) * (Dimensions.get('window').width - 20) + 8 },
       me && isDark && { color: 'rgba(255,255,255,0.92)' },
     ]}
   >
     {transfersInline}
+  </Text>
+)}
+  {detailedView && (
+  <Text
+    numberOfLines={1}
+    ellipsizeMode="tail"
+    style={[
+      S.inlineTransfers,
+      { marginTop: 1, marginLeft: ((cols.pos || 0) / 100) * (Dimensions.get('window').width - 20) + 8 },
+      me && isDark && { color: 'rgba(255,255,255,0.85)' },
+    ]}
+  >
+    {detailLine}
   </Text>
 )}
 
@@ -2559,12 +2664,24 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
     ellipsizeMode="tail"
     style={[
       S.inlineTransfers,
-      // ✅ indent to start under the Manager column
       { marginLeft: ((cols.pos || 0) / 100) * (Dimensions.get('window').width - 20) + 8 },
       me && isDark && { color: 'rgba(255,255,255,0.92)' },
     ]}
   >
     {transfersInline}
+  </Text>
+)}
+  {detailedView && (
+  <Text
+    numberOfLines={1}
+    ellipsizeMode="tail"
+    style={[
+      S.inlineTransfers,
+      { marginTop: 1, marginLeft: ((cols.pos || 0) / 100) * (Dimensions.get('window').width - 20) + 8 },
+      me && isDark && { color: 'rgba(255,255,255,0.85)' },
+    ]}
+  >
+    {detailLine}
   </Text>
 )}
 
@@ -2589,41 +2706,41 @@ const LeagueRow = React.memo(({ row, me, fav, expanded, onToggle, onFav, C, isDa
                   navigation.navigate('Rank', { viewFplId: row.entry_id });
                 }}
                 style={S.kpiPill}
-                accessibilityLabel="Open this manager’s Rank page"
+                accessibilityLabel={t('league.openManagerRank')}
               >
                 <MaterialCommunityIcons name="open-in-new" size={12} color={ C.accent} />
-                <Text style={[S.kpiKey, { marginLeft: 2, fontSize: 10 }]}>View Rank</Text>
+                <Text style={[S.kpiKey, { marginLeft: 2, fontSize: 10 }]}>{t('rank.title')}</Text>
               </Pressable>
             </View>
 
             {!!transfers.length && (
               <View style={S.transfersRow}>
-                {(showAllTransfers ? transfers : transfers.slice(0, 6)).map((t, idx) => (
+                {(showAllTransfers ? transfers : transfers.slice(0, 6)).map((xfer, idx) => (
                   <View
-                    key={`${t.out}-${t.in}-${idx}`}
+                    key={`${xfer.out}-${xfer.in}-${idx}`}
                     style={[
                       S.xferPill,
                       { borderColor: C.border2 },
                     ]}
                   >
-                    <Text style={S.xferOut}>{t.in}</Text>
+                    <Text style={S.xferOut}>{xfer.in}</Text>
                     <Text style={S.xferArrow}>→</Text>
-                    <Text style={S.xferIn}>{t.out}</Text>
-                    {typeof t.gain === 'number' && (
+                    <Text style={S.xferIn}>{xfer.out}</Text>
+                    {typeof xfer.gain === 'number' && (
                       <Text style={[
                         S.xferDiff,
-                        t.gain > 0 ? { color: (C.ok ?? '#22c55e') } :
-                        t.gain < 0 ? { color: (C.danger ?? '#ef4444') } :
+                        xfer.gain > 0 ? { color: (C.ok ?? '#22c55e') } :
+                        xfer.gain < 0 ? { color: (C.danger ?? '#ef4444') } :
                         { color: C.muted },
                       ]}>
-                        {' '}{sign(t.gain)}
+                        {' '}{sign(xfer.gain)}
                       </Text>
                     )}
                   </View>
                 ))}
                 {transfers.length > 6 && (
                   <TouchableOpacity onPress={() => setShowAllTransfers((v) => !v)} style={S.moreXfersBtn}>
-                    <Text style={S.moreXfersTxt}>{showAllTransfers ? 'Show fewer' : `+${transfers.length - 6} more`}</Text>
+                    <Text style={S.moreXfersTxt}>{showAllTransfers ? t('league.showFewer') : t('league.moreTransfers', { count: transfers.length - 6 })}</Text>
                   </TouchableOpacity>
                 )}
                 {typeof xferSum === 'number' && (
