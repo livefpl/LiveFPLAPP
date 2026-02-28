@@ -2110,7 +2110,7 @@ const renderStatsListCompact = (stats = [], C) => {
         const k = String(item?.[0] ?? '').toLowerCase();
         const c = item?.[1];
         const p = item?.[2];
-        return <Row key={`${k}-${i}`} k={k} c={c} pts={p} />;
+        return <Row key={k || `stat-${i}`} k={k} c={c} pts={p} />;
       })}
     </View>
   );
@@ -2130,7 +2130,7 @@ const renderStatsListCompact = (stats = [], C) => {
         {stats.map((item, index) => {
           const key = String(item[0]).toLowerCase();
           return (
-            <View key={index} style={styles.statRow}>
+            <View key={key || `stat-${index}`} style={styles.statRow}>
               <View style={{ flex: 3, flexDirection: 'row', alignItems: 'center' }}>
                 <EventIcon type={key} count={1} size={14} forModal />
                 <Text

@@ -2788,7 +2788,7 @@ const SkeletonList = ({ S, C }) => {
   return (
     <View style={{ paddingTop: 12 }}>
       {rows.map((i) => (
-        <View key={i} style={[S.rowCard, { marginVertical: 4, overflow: 'hidden' }]}>
+        <View key={`skel-${i}`} style={[S.rowCard, { marginVertical: 4, overflow: 'hidden' }]}>
           <View style={[S.rowHeader, { opacity: 0.9 }]}>
             <View style={[S.skel, { width: 30, height: 14 }]} />
             <View style={{ flex: 1, paddingHorizontal: 8 }}>

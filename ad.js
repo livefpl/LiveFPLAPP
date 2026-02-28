@@ -349,7 +349,7 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
         {AD_DEBUG_FOOTER ? (
           <View style={styles.debugHud} pointerEvents="none">
             {debugLines.map((l, i) => (
-              <Text key={i} style={styles.debugText} numberOfLines={1}>
+              <Text key={`debug-${i}-${String(l).slice(0, 20)}`} style={styles.debugText} numberOfLines={1}>
                 {l}
               </Text>
             ))}
@@ -406,7 +406,7 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
       {AD_DEBUG_FOOTER ? (
         <View style={styles.debugHud} pointerEvents="none">
           {debugLines.map((l, i) => (
-            <Text key={i} style={styles.debugText} numberOfLines={1}>
+            <Text key={`debug-${i}-${String(l).slice(0, 20)}`} style={styles.debugText} numberOfLines={1}>
               {l}
             </Text>
           ))}

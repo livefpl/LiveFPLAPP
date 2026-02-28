@@ -166,7 +166,7 @@ const benefits = [
           <Text style={[styles.cardTitle, { color: C.ink }]}>{t('paywall.benefitsOfPremium')}</Text>
           <View style={{ gap: 10 }}>
             {benefits.map((b, idx) => (
-              <View key={idx} style={styles.benefitRow}>
+              <View key={b.key || `benefit-${idx}`} style={styles.benefitRow}>
                 <MaterialCommunityIcons name={b.icon} size={18} color={C.ink} />
                 <Text style={[styles.benefitText, { color: C.ink }]}>{t(b.key)}</Text>
               </View>

@@ -182,7 +182,9 @@ function ExpectedPills({ h, C }) {
 }
 
 /* ---------- Main ---------- */
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+// Avoid enabling LayoutAnimation on Android: it frequently causes IllegalViewOperationException
+// "Trying to remove a view index above child count" when expanding/collapsing or switching tabs.
+if (Platform.OS === 'ios' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
@@ -329,7 +331,9 @@ export default function PlayerInfoModal({
   }
 
   const toggleExpand = useCallback((key) => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (Platform.OS === 'ios') {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    }
     setExpanded(prev => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
@@ -339,7 +343,9 @@ export default function PlayerInfoModal({
 
    function TabBar() {
     const onSel = (t) => {
-      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      if (Platform.OS === 'ios') {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      }
       setActiveTab(t);
 
       // Optional: if leaving Results tab, hide xG so it doesn't stay "on" invisibly

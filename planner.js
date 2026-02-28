@@ -70,6 +70,8 @@ import { clubCrestUri, assetImages } from './clubs';
 import { smartFetch } from './signedFetch';
 import AppHeader from './AppHeader';
 import InfoBanner from './InfoBanner';
+import AllPlayersStatsModal from './AllPlayersStatsModal';
+import ComparePlansModal from './ComparePlansModal';
 import Svg, { G, Polygon, Circle, Text as SvgText, Line } from 'react-native-svg';
 
 Text.defaultProps = Text.defaultProps || {};
@@ -940,7 +942,11 @@ const closePicker = () => setPicker({ visible: false, type: null });
 const [plans, setPlans] = useState([]);                 // [{id,name,createdAt}]
 const [activePlanId, setActivePlanId] = useState(DEFAULT_PLAN_ID);
 const [planPickerOpen, setPlanPickerOpen] = useState(false);
+  const [comparePlansOpen, setComparePlansOpen] = useState(false);
 
+  // Android (and fallback): Alert.prompt is iOS-only; use modal with TextInput
+  const [promptModal, setPromptModal] = useState({ visible: false, title: '', initialValue: '', value: '' });
+  const promptModalOnSubmitRef = useRef(null);
 
   // UI
   const [transferMode, setTransferMode] = useState(null);
@@ -1045,9 +1051,9 @@ const switchToPlan = useCallback(async (planId) => {
   }
 }, [fplId, isPro, loadStatic, loadSnapshot, snapshot]);
 
-// --- Plans: rename / delete helpers (iOS prompt-first) ---
+// --- Plans: rename / delete helpers (iOS Alert.prompt; Android = modal with TextInput) ---
 const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
-  // Alert.prompt exists on iOS only.
+  // Alert.prompt exists on iOS only; Android has no native text prompt.
   if (Platform.OS === 'ios' && typeof Alert.prompt === 'function') {
     Alert.prompt(
       title,
@@ -1069,12 +1075,11 @@ const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
     return;
   }
 
-  // Minimal non-iOS fallback: keep behavior (no text input).
-  Alert.alert(title, message, [
-    { text: 'OK', onPress: () => onSubmit(String(initialValue || '').trim() || 'Plan') },
-    { text: t('planner.cancel'), style: 'cancel' },
-  ]);
-}, []);
+  // Android (and fallback): show modal with TextInput so user can actually type the name.
+  const val = String(initialValue || '').trim() || '';
+  promptModalOnSubmitRef.current = onSubmit;
+  setPromptModal({ visible: true, title, initialValue: val, value: val });
+}, [t]);
 
 const renamePlan = useCallback(async (planId, nextName) => {
   if (!fplId) return;
@@ -2443,6 +2448,15 @@ const ratingRgbFromBase = useMemo(() => {
     return out;
   }, [fdr, teamNameByPid, gw, getRatingAndColor]);
 
+  const getFixtureLabel = useCallback((pid, forGw) => {
+    const arr = nextFixtures(pid, forGw);
+    const x = Array.isArray(arr) ? arr.find((e) => e && e.gw === forGw) : null;
+    if (!x) return '';
+    if (x.isBlank) return 'BGW';
+    const fixtures = x.fixtures || [];
+    return fixtures.map((f) => shortFixture(f.label)).join(' / ');
+  }, [nextFixtures]);
+
   // ---------- GW navigation helpers ----------
   const allGwCount = useMemo(() => {
     if (fdr) {
@@ -3625,9 +3639,7 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
     return (
       <View pointerEvents={actionModal.open ? 'auto' : 'none'} style={[S.actionWrap, { display: actionModal.open ? 'flex' : 'none' }]}>
       <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={onClose} />
-        // at the top of ActionSheet() add:
-
-<View
+        <View
   style={[
     S.actionCard,
     { maxHeight: SCREEN_H - insets.top - 16 } // <- cap by safe area
@@ -3826,12 +3838,7 @@ const headerTitle = subtitle ? `${name} — ${subtitle}` : name;
   if (majors.length === 0) return null;
 
   return (
-    
-  
-
-// ... later in the JSX where stats appear:
-
-<View style={S.kpiWrap}>
+    <View style={S.kpiWrap}>
 <RankModeToggle mode={rankMode} onChange={setRankMode} C={C} />
 <Text style={[S.kpiTitle, { textAlign: 'center', opacity: 0.7,marginBottom:4 }]} numberOfLines={2}>
             Toggle to view Overall or Position ranks. Stars mark top-10 (★★) and top-20 (★)
@@ -4002,7 +4009,7 @@ const FixturePill = ({ fx, C }) => (
 // A horizontal row of pills
 const MiniFixturesStrip = ({ fixtures, C }) => (
   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-    {fixtures.map((fx, i) => <FixturePill key={i} fx={fx} C={C} />)}
+    {fixtures.map((fx, i) => <FixturePill key={`${fx.gw ?? i}-${fx.opp}-${fx.home}`} fx={fx} C={C} />)}
   </View>
 );
 
@@ -5159,848 +5166,6 @@ const statDefs = useMemo(() => {
   // ---------- Market data ----------
   
 
-  // ---------- MARKET BOTTOM SHEET ----------
-  /** AllPlayersStatsModal — sortable table of all players with user-editable columns.
- *  - Default columns: Price, Total Points, Form, Goals, Assists, Minutes, xG/90, DEFCON/90
- *  - Tap headers to sort; tap again to toggle asc/desc.
- *  - “Columns” button lets user add/remove columns (persisted).
- *  - Quick filters: Position (GK/DEF/MID/FWD) + search by name.
- *//** ------------------------------------------------------------------
- *  AllPlayersStatsModal — ultra-fast, optimized version
- *  - Very fast sorting + filtering (FlatList, memoized rows)
- *  - Correct formatting: £ for prices, % for percent keys
- *  - Search is single-line, doesn’t collapse modal when no results
- * ------------------------------------------------------------------ */
-/**
- * AllPlayersStatsModal — sortable table of all players with user-editable columns.
- *  - Default columns: Price, Total Points, Form, Goals, Assists, Minutes, xG/90, DEFCON/90
- *  - Tap headers to sort; tap again to toggle asc/desc.
- *  - “Columns” button lets user add/remove columns (persisted).
- *  - Quick filters: Position (GK/DEF/MID/FWD) + search by name.
- *  - Performance trims to first 500 rows.
- *//**
- * AllPlayersStatsModal — sortable table of all players with user-editable columns.
- *  - Default columns: Pts, Price, Form, Sel%, Goals, Assists, Minutes, xG/90, DEFCON/90
- *  - Tap headers to sort; tap again to toggle asc/desc.
- *  - Little "×" in each header to remove that column.
- *  - “Columns” picker:
- *      • Shows active columns (in current order) with Up/Down + Remove
- *      • Shows available columns with "+" to add
- *      • Order + selection persisted in AsyncStorage
- *  - Quick filters: Position (GK/DEF/MID/FWD) + search by name.
- *  - Italic “i” next to position opens stats modal via setStatsPid / setStatsOpen.
- */const AllPlayersStatsModal = React.memo(function AllPlayersStatsModal({
-  open,
-  onClose,
-  extendedInfo,
-  playersInfo,
-  extRanks, // kept for possible future use
-  C,
-}) {
-  if (!open) return null;
-
-  const NAME_COL_W = 130;
-  const COL_MIN_W = 52;
-  const TABLE_MAX_H = Math.round(Dimensions.get('window').height * 0.6);
-
-  const colWidthFor = () => Math.max(COL_MIN_W, 52);
-
-  const POS_LABELS = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' };
-  const COLS_KEY = 'planner_allstats_columns_v1';
-
-  const isPercentish = (key = '') =>
-    key === 'selected_by_percent' ||
-    /ownership|tsb|percent|pct/i.test(key);
-
-  // Team maps
-  const teamShort = playersInfo?.teamShort || {};
-  const teamNames = playersInfo?.teamNames || playersInfo?.teamsById || {};
-
-  // Prefer full team name (Arsenal), then short (ARS), then fallback.
-  const teamLabelFor = React.useCallback(
-    (teamNum) => {
-      if (!teamNum) return '';
-      return teamNames?.[teamNum] || teamShort?.[teamNum] || `Team ${teamNum}`;
-    },
-    [teamNames, teamShort]
-  );
-
-  // Build catalog of numeric/rankable stat keys
-  const catalog = React.useMemo(() => {
-    const out = new Set();
-    for (const [, row] of Object.entries(extendedInfo || {})) {
-      if (!row || typeof row !== 'object') continue;
-      for (const [k, v] of Object.entries(row)) {
-        if (isRankableExtKey(k, v)) out.add(k);
-      }
-    }
-    if (!out.has('now_cost')) out.add('now_cost');
-    return Array.from(out).sort();
-  }, [extendedInfo]);
-
-  const DEFAULT_COLS = [
-    'total_points',
-    'now_cost',
-    'form',
-    'selected_by_percent',
-    'goals_scored',
-    'assists',
-    'minutes',
-    'xg_per90',
-    'defcon_per90',
-  ].filter((k) => catalog.includes(k));
-
-  const [columns, setColumns] = React.useState(DEFAULT_COLS);
-
-  // Load saved columns
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const raw = await AsyncStorage.getItem(COLS_KEY);
-        if (raw) {
-          const wanted = JSON.parse(raw).filter((k) => catalog.includes(k));
-          if (wanted.length) setColumns(wanted);
-        }
-      } catch {}
-    })();
-  }, [catalog]);
-
-  // Persist columns
-  React.useEffect(() => {
-    (async () => {
-      try {
-        await AsyncStorage.setItem(COLS_KEY, JSON.stringify(columns));
-      } catch {}
-    })();
-  }, [columns]);
-
-  // Column picker modal
-  const [pickerOpen, setPickerOpen] = React.useState(false);
-
-  const toggleCol = (k) => {
-    setColumns((cols) =>
-      cols.includes(k) ? cols.filter((x) => x !== k) : [...cols, k],
-    );
-  };
-
-  // header “x” remove
-  const removeCol = (k) => {
-    setColumns((cols) => {
-      if (cols.length <= 1) return cols;
-      return cols.filter((x) => x !== k);
-    });
-  };
-
-  // Reorder helpers (Up/Down)
-  const moveCol = (k, dir) => {
-    setColumns((cols) => {
-      const idx = cols.indexOf(k);
-      if (idx < 0) return cols;
-      const target = idx + dir;
-      if (target < 0 || target >= cols.length) return cols;
-      const next = cols.slice();
-      const [item] = next.splice(idx, 1);
-      next.splice(target, 0, item);
-      return next;
-    });
-  };
-
-  // Sort state: default by total_points (Pts)
-  const [sortKey, setSortKey] = React.useState(
-    DEFAULT_COLS.includes('total_points')
-      ? 'total_points'
-      : (DEFAULT_COLS[0] || 'now_cost'),
-  );
-  const [sortDir, setSortDir] = React.useState('desc');
-  const setSort = (k) => {
-    if (k === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    else {
-      setSortKey(k);
-      setSortDir('desc');
-    }
-  };
-
-  // Filters
-  const [posFilter, setPosFilter] = React.useState(null); // 1..4 or null
-  const [q, setQ] = React.useState('');
-  const [teamFilter, setTeamFilter] = React.useState(null); // teamNum or null
-  const [teamPickerOpen, setTeamPickerOpen] = React.useState(false);
-
-  // Helpers
-  const namesById = playersInfo?.names || {};
-  const types = playersInfo?.types || {};
-  const teams = playersInfo?.teams || {};
-
-  // Build flat player list once
-  const allRows = React.useMemo(() => {
-    const rows = [];
-    for (const [pidStr, row] of Object.entries(extendedInfo || {})) {
-      const pid = Number(pidStr);
-      if (!Number.isFinite(pid)) continue;
-      const type = Number(types?.[pid]) || Number(row.element_type) || null;
-      const name = namesById?.[pid] || row.web_name || String(pid);
-            const teamNum = Number(teams?.[pid]) || Number(row.team) || null;
-      const shortTeam =
-        (teams?.[pid]) || (row.team) || null;
-
-      const status = row.status || null; // FPL status
-
-      rows.push({
-        pid,
-        type,
-        name,
-        teamNum,
-        shortTeam,
-        status,
-        r: row,
-      });
-    }
-    return rows;
-  }, [extendedInfo, namesById, types, teams, teamShort, teamNames]);
-
-  // Build team options for dropdown (teamNum + label)
-  const teamOptions = React.useMemo(() => {
-    const map = new Map(); // teamNum -> label
-    for (const r of allRows) {
-      if (!r.teamNum) continue;
-      if (!map.has(r.teamNum)) {
-        map.set(r.teamNum, r.shortTeam);
-      }
-    }
-    return Array.from(map.entries()).sort((a, b) =>
-      String(a[1]).localeCompare(String(b[1])),
-    ); // [teamNum, label]
-  }, [allRows, teamLabelFor]);
-
-  // Apply filters (availability + position + team + name search)
-  const filtered = React.useMemo(() => {
-    const qn = q.trim().toLowerCase();
-    return allRows.filter((x) => {
-      // drop unavailable
-      if (x.status === 'u' || x.r?.status === 'u') return false;
-      // position filter
-      if (posFilter && x.type !== posFilter) return false;
-      // team filter
-      if (teamFilter != null && x.teamNum !== teamFilter) return false;
-      // name search
-      if (qn && !String(x.name).toLowerCase().includes(qn)) return false;
-      return true;
-    });
-  }, [allRows, posFilter, q, teamFilter]);
-
-  // Value extractor used for sorting
-  const valueFor = React.useCallback((row, key) => {
-    let v = row.r?.[key];
-    if (v == null) {
-      const lower = String(key).toLowerCase();
-      const alt = Object.keys(row.r || {}).find(
-        (k) => String(k).toLowerCase() === lower,
-      );
-      if (alt) v = row.r?.[alt];
-    }
-    if (/^now_?cost$/i.test(key)) return Number(v ?? 0);
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  }, []);
-
-  const sorted = React.useMemo(() => {
-    const arr = filtered.slice();
-    arr.sort((a, b) => {
-      const va = valueFor(a, sortKey);
-      const vb = valueFor(b, sortKey);
-      return sortDir === 'asc' ? va - vb : vb - va;
-    });
-    return arr.slice(0, 500);
-  }, [filtered, sortKey, sortDir, valueFor]);
-
-  // Cell formatter with £, % and compact decimals
-  const fmtCell = (k, rawV) => {
-    if (rawV == null || rawV === '') return '—';
-
-    if (/^now_?cost$/i.test(k) || /price/i.test(k)) {
-      const v = Number(rawV);
-      if (!Number.isFinite(v)) return '—';
-      const tenths = /^now_?cost$/i.test(k) ? v : v * 10;
-      return `£${(tenths / 10).toFixed(1)}`;
-    }
-
-    if (isPercentish(k)) {
-      const v = Number(rawV);
-      if (!Number.isFinite(v)) return '—';
-      return `${v.toFixed(1)}%`;
-    }
-
-    const v = Number(rawV);
-    if (Number.isInteger(v)) return String(v);
-    if (typeof v === 'number' && !isNaN(v)) {
-      return v.toFixed(2).replace(/\.00$/, '.0').replace(/\.0$/, '');
-    }
-    return String(rawV ?? '—');
-  };
-
-  const HeaderCell = ({ k }) => {
-    const active = k === sortKey;
-    return (
-      <View
-        style={{
-          flexDirection: 'row',
-          alignItems: 'center',
-          borderRightWidth: 1,
-          borderColor: C.border,
-          paddingVertical: 4,
-          paddingHorizontal: 4,
-          width: colWidthFor(k), // <-- fixed width for header
-        }}
-      >
-        <TouchableOpacity
-          onPress={() => setSort(k)}
-          style={{ flex: 1, paddingVertical: 2, paddingRight: 4 }}
-        >
-          <Text
-            style={{
-              color: C.ink,
-              fontWeight: active ? '800' : '700',
-              fontSize: 10,
-            }}
-            numberOfLines={1}
-          >
-            {shortHeaderFor(k)}
-            {active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
-          </Text>
-        </TouchableOpacity>
-
-        {/* small "x" to remove column */}
-        <TouchableOpacity
-          onPress={() => removeCol(k)}
-          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-          style={{ paddingHorizontal: 2, paddingVertical: 2 }}
-        >
-          <Text style={{ color: C.muted, fontSize: 10 }}>×</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  };
-
-  const RowCell = ({ k, row }) => {
-    const v = valueFor(row, k);
-    return (
-      <View
-        style={{
-          paddingVertical: 6,
-          paddingHorizontal: 6,
-          borderRightWidth: 1,
-          borderColor: C.border,
-          width: colWidthFor(k), // <-- same fixed width for body cell
-        }}
-      >
-        <Text style={{ color: C.ink, fontSize: 11 }}>{fmtCell(k, v)}</Text>
-      </View>
-    );
-  };
-
-  // --- RENDER ---
-
-  return (
-    <View
-      pointerEvents={open ? 'auto' : 'none'}
-      style={[S.modalWrap, { display: open ? 'flex' : 'none' }]}
-    >
-      {/* backdrop */}
-      <TouchableOpacity
-        style={StyleSheet.absoluteFill}
-        activeOpacity={1}
-        onPress={onClose}
-      />
-
-      <View
-        style={{
-          backgroundColor: C.card,
-          borderRadius: 14,
-          padding: 10,
-          maxHeight: Math.round(Dimensions.get('window').height * 0.86),
-          alignSelf: 'stretch',
-          marginHorizontal: 12,
-        }}
-      >
-        {/* Title + actions */}
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 8,
-          }}
-        >
-          <Text style={{ color: C.ink, fontWeight: '800', fontSize: 16 }}>
-            Stats
-          </Text>
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {/* Team dropdown */}
-            <TouchableOpacity
-              onPress={() => setTeamPickerOpen(true)}
-              style={S.smallBtn}
-            >
-              <MaterialCommunityIcons
-                name="shield-outline"
-                size={14}
-                color={C.ink}
-              />
-              <Text style={S.smallBtnTxt}>
-                {teamFilter == null
-                  ? 'All teams'
-                  : (teamOptions.find(([num]) => num === teamFilter)?.[1] ||
-                     teamLabelFor(teamFilter))}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setPickerOpen(true)}
-              style={S.smallBtn}
-            >
-              <MaterialCommunityIcons
-                name="view-column"
-                size={14}
-                color={C.ink}
-              />
-              <Text style={S.smallBtnTxt}>{t('planner.columns')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onClose} style={S.smallBtn}>
-              <MaterialCommunityIcons name="close" size={14} color={C.ink} />
-              <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        {/* Filters row */}
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 8,
-          }}
-        >
-          {[null, 1, 2, 3, 4].map((p) => {
-            const active = posFilter === p;
-            const label = p == null ? 'All' : POS_LABELS[p];
-            return (
-              <TouchableOpacity
-                key={String(p)}
-                onPress={() => setPosFilter(p)}
-                style={{
-                  paddingHorizontal: 10,
-                  paddingVertical: 6,
-                  borderRadius: 999,
-                  backgroundColor: active ? C.ink : 'transparent',
-                  borderWidth: active ? 0 : 1,
-                  borderColor: C.border,
-                }}
-              >
-                <Text
-                  style={{
-                    color: active ? C.card : C.ink,
-                    fontWeight: '700',
-                    fontSize: 12,
-                  }}
-                >
-                  {label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-          <View style={{ flex: 1 }} />
-          {/* Single-line search pill */}
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              borderRadius: 999,
-              borderWidth: 1,
-              borderColor: C.border,
-              paddingHorizontal: 10,
-              height: 32,
-              minWidth: 120,
-            }}
-          >
-            <MaterialCommunityIcons
-              name="magnify"
-              size={14}
-              color={C.muted}
-              style={{ marginRight: 6 }}
-            />
-            <ThemedTextInput
-              value={q}
-              onChangeText={setQ}
-              placeholder={t('planner.search')}
-              placeholderTextColor={C.muted}
-              style={{
-                flex: 1,
-                height: '100%',
-                paddingVertical: 0,
-                paddingHorizontal: 0,
-                color: C.ink,
-                fontSize: 10,
-                textAlignVertical: 'center',
-              }}
-              returnKeyType="search"
-            />
-          </View>
-        </View>
-
-        {/* Table */}
-        <ScrollView
-          horizontal
-          bounces={false}
-          style={{
-            borderWidth: 1,
-            borderColor: C.border,
-            borderRadius: 10,
-          }}
-        >
-          <View>
-            {/* Header */}
-            <View style={{ flexDirection: 'row', backgroundColor: C.bg }}>
-              <View
-                style={{
-                  width: NAME_COL_W,
-                  borderRightWidth: 1,
-                  borderColor: C.border,
-                  paddingVertical: 8,
-                  paddingHorizontal: 8,
-                }}
-              >
-                <Text
-                  style={{
-                    color: C.muted,
-                    fontWeight: '700',
-                    fontSize: 12,
-                  }}
-                >
-                  Player
-                </Text>
-              </View>
-              {columns.map((k) => (
-                <HeaderCell key={k} k={k} />
-              ))}
-            </View>
-
-            {/* Body with fixed min height (no collapsing when empty) */}
-            <View
-              style={{
-                maxHeight: TABLE_MAX_H,
-                minHeight: 140,
-              }}
-            >
-              {sorted.length === 0 ? (
-                <View
-                  style={{
-                    flex: 1,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 16,
-                  }}
-                >
-                  <Text style={{ color: C.muted, fontSize: 13 }}>
-                    No players match your filters.
-                  </Text>
-                </View>
-              ) : (
-  <FlatList
-    data={sorted}
-    keyExtractor={(row) => String(row.pid)}
-    keyboardShouldPersistTaps="handled"
-    nestedScrollEnabled
-    removeClippedSubviews
-    initialNumToRender={18}
-    maxToRenderPerBatch={24}
-    windowSize={7}
-    updateCellsBatchingPeriod={50}
-    renderItem={({ item: row }) => (
-      <View
-        style={{
-          flexDirection: 'row',
-          borderTopWidth: 1,
-          borderColor: C.border,
-        }}
-      >
-        {/* frozen identity */}
-        <View
-          style={{
-            width: NAME_COL_W,
-            borderRightWidth: 1,
-            borderColor: C.border,
-            paddingVertical: 6,
-            paddingHorizontal: 6,
-          }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <Image
-              source={{ uri: clubCrestUri?.(row.teamNum) }}
-              style={{ width: 18, height: 18, marginRight: 6, borderRadius: 3 }}
-              resizeMode="contain"
-            />
-            <View style={{ flex: 1 }}>
-              <Text
-                style={{ color: C.ink, fontWeight: '700', fontSize: 11 }}
-                numberOfLines={1}
-              >
-                {row.name}
-              </Text>
-
-              {/* Position + italic stats "i" */}
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={{ color: C.muted, fontSize: 10 }} numberOfLines={1}>
-                  {(POS_LABELS[row.type] || '?') + ''}
-                </Text>
-
-                <TouchableOpacity
-                  onPress={() => {
-                    setStatsPid(row.pid);
-                    setStatsOpen(true);
-                  }}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                  style={{ marginLeft: 6 }}
-                >
-                  <Text style={S.rItalicI2}>i</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {columns.map((k) => (
-          <RowCell key={k} k={k} row={row} />
-        ))}
-      </View>
-    )}
-  />
-)}
-
-              )}
-            </View>
-          </View>
-        </ScrollView>
-
-
-        {/* Column picker with reorder (Up/Down) */}
-        <Modal
-          visible={pickerOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setPickerOpen(false)}
-        >
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: 'rgba(0,0,0,0.35)',
-              justifyContent: 'center',
-              padding: 20,
-            }}
-          >
-            <View
-              style={{
-                backgroundColor: C.card,
-                borderRadius: 14,
-                padding: 12,
-                maxHeight: 480,
-                width: '100%',
-              }}
-            >
-              {/* Active columns (reorder via Up/Down) */}
-              <Text
-                style={{
-                  color: C.ink,
-                  fontWeight: '800',
-                  fontSize: 14,
-                  marginBottom: 4,
-                }}
-              >
-                Active columns (order)
-              </Text>
-              <ScrollView style={{ maxHeight: 220 }}>
-                {columns.map((k, idx) => {
-                  const canMoveUp = idx > 0;
-                  const canMoveDown = idx < columns.length - 1;
-                  const canRemove = columns.length > 1;
-                  return (
-                    <View
-                      key={`active-${k}`}
-                      style={{
-                        paddingVertical: 6,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          flex: 1,
-                          color: C.ink,
-                          fontSize: 13,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {pretty(k)}
-                      </Text>
-                      <View
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          gap: 4,
-                        }}
-                      >
-                        {/* Up */}
-                        <TouchableOpacity
-                          onPress={() => {
-                            if (canMoveUp) moveCol(k, -1);
-                          }}
-                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                          style={[
-                            S.smallBtn,
-                            {
-                              paddingHorizontal: 6,
-                              paddingVertical: 4,
-                              opacity: canMoveUp ? 1 : 0.35,
-                            },
-                          ]}
-                        >
-                          <MaterialCommunityIcons
-                            name="chevron-up"
-                            size={14}
-                            color={C.ink}
-                          />
-                        </TouchableOpacity>
-
-                        {/* Down */}
-                        <TouchableOpacity
-                          onPress={() => {
-                            if (canMoveDown) moveCol(k, +1);
-                          }}
-                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                          style={[
-                            S.smallBtn,
-                            {
-                              paddingHorizontal: 6,
-                              paddingVertical: 4,
-                              opacity: canMoveDown ? 1 : 0.35,
-                            },
-                          ]}
-                        >
-                          <MaterialCommunityIcons
-                            name="chevron-down"
-                            size={14}
-                            color={C.ink}
-                          />
-                        </TouchableOpacity>
-
-                        {/* Remove */}
-                        <TouchableOpacity
-                          onPress={() => {
-                            if (canRemove) toggleCol(k);
-                          }}
-                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                          style={[
-                            S.smallBtn,
-                            {
-                              paddingHorizontal: 6,
-                              paddingVertical: 4,
-                              borderColor: '#ef4444',
-                              opacity: canRemove ? 1 : 0.35,
-                            },
-                          ]}
-                        >
-                          <Text
-                            style={{
-                              color: '#ef4444',
-                              fontWeight: '700',
-                              fontSize: 11,
-                            }}
-                          >
-                            Remove
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-
-              {/* Available columns */}
-              <Text
-                style={{
-                  color: C.ink,
-                  fontWeight: '800',
-                  fontSize: 14,
-                  marginTop: 8,
-                  marginBottom: 4,
-                }}
-              >
-                Add more columns
-              </Text>
-              <ScrollView style={{ maxHeight: 160 }}>
-                {catalog
-                  .filter((k) => !columns.includes(k))
-                  .map((k) => (
-                    <TouchableOpacity
-                      key={`avail-${k}`}
-                      onPress={() => toggleCol(k)}
-                      style={{
-                        paddingVertical: 6,
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                      }}
-                    >
-                      <Text
-                        style={{ color: C.ink, fontSize: 13 }}
-                        numberOfLines={1}
-                      >
-                        {pretty(k)}
-                      </Text>
-                      <Text
-                        style={{
-                          color: C.accent,
-                          fontWeight: '700',
-                        }}
-                      >
-                        +
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-              </ScrollView>
-
-              <TouchableOpacity
-                onPress={() => setPickerOpen(false)}
-                style={{ alignSelf: 'flex-end', marginTop: 8 }}
-              >
-                <Text style={{ color: C.accent, fontWeight: '700' }}>
-                  Done
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-        {/* Team picker dropdown (MiniSelectModal) */}
-        <MiniSelectModal
-          visible={teamPickerOpen}
-          title={t('planner.filterByTeam')}
-          C={C}
-          options={[
-            { label: 'All teams', value: null },
-            ...teamOptions.map(([tn, label]) => ({
-              label,
-              value: tn,
-            })),
-          ]}
-          selected={teamFilter}
-          onSelect={(val) => setTeamFilter(val == null ? null : Number(val))}
-          onClose={() => setTeamPickerOpen(false)}
-        />
-      </View>
-    </View>
-  );
-});
-
 
 
  // ---------- Transfer Market: true Modal + keyboard-safe UX ----------
@@ -6486,6 +5651,17 @@ const TransferMarketModal = React.memo(() => {
       for (const g of k) {
         const w = weeks[g];
         if (!w) continue;
+        const capPid = w.cap || null;
+        let capFixtures = '';
+        if (capPid) {
+          const gwData = nextFixtures(capPid, g);
+          const forGw = Array.isArray(gwData) ? gwData.find((x) => x && x.gw === g) : null;
+          if (forGw) {
+            if (forGw.isBlank) capFixtures = 'BGW';
+            else if (forGw.fixtures && forGw.fixtures.length)
+              capFixtures = forGw.fixtures.map((f) => shortFixture(f.label)).join(' / ');
+          }
+        }
         out.push({
           g,
           transfers: collapseTransfers(w.transfers || [])
@@ -6493,12 +5669,13 @@ const TransferMarketModal = React.memo(() => {
 
 
           chip: w.chip || null,
-          cap: w.cap ? (namesById?.[w.cap] || w.cap) : '—',
+          cap: capPid ? (namesById?.[capPid] || capPid) : '—',
+          capFixtures,
           hits: w.hits || 0,
         });
       }
       return out;
-    }, [weeks, namesById]);
+    }, [weeks, namesById, nextFixtures]);
 
     return (
       <View pointerEvents={summaryOpen ? 'auto' : 'none'} style={[S.centerWrap, { display: summaryOpen ? 'flex' : 'none' }]}>
@@ -6540,7 +5717,12 @@ const TransferMarketModal = React.memo(() => {
                   )}
                 </View>
                 <Text style={[S.td, {flex:1.0}]} numberOfLines={1}>{r.chip ? r.chip : '—'}</Text>
-                <Text style={[S.td, {flex:1.2}]} numberOfLines={1}>{r.cap}</Text>
+                <View style={{ flex: 1.2 }}>
+                  <Text style={[S.td]} numberOfLines={1}>{r.cap}</Text>
+                  {r.capFixtures ? (
+                    <Text style={[S.td, { fontSize: 10, color: C.muted, marginTop: 0 }]} numberOfLines={2}>{r.capFixtures}</Text>
+                  ) : null}
+                </View>
                 <Text style={[S.td, {flex:0.8, color: r.hits ? '#ef4444' : C.ink}]}>
                   {r.hits ? -Math.abs(r.hits) : 0}
                 </Text>
@@ -6696,15 +5878,15 @@ function RankLine({ label, rank, den, suffix, style }) {
     const startCol0 = Math.min(gwCount - 1, Math.max(0, (gw || 1) - 1));
     const endCol = Math.min(gwCount - 1, startCol0 + Math.max(1, tickerLookahead) - 1);
     const range = useMemo(() => Array.from({ length: endCol - startCol0 + 1 }, (_, i) => startCol0 + i), [startCol0, endCol]);
+const BGW_DIFF = 5; // treat blank gameweek as hardest (5) for averages/sort
 const sumForTeam = useCallback((team) => {
   let sum = 0, gwCount = 0;
   for (const gi of range) {
     const perGw = (fdr?.[team] || [])[gi] || [];
     if (perGw.length === 0) {
-      // Blank gameweek - skip (don't count in average)
-      continue;
+      sum += BGW_DIFF;
+      gwCount++;
     } else {
-      // Calculate average difficulty for this gameweek
       let gwSum = 0;
       for (const [label] of perGw) {
         const d = diffOf(label);
@@ -6738,10 +5920,9 @@ const sumForTeam = useCallback((team) => {
         for (const gi of range) {
           const perGw = (fdr?.[team] || [])[gi] || [];
           if (perGw.length === 0) {
-            // Blank gameweek - skip
-            continue;
+            sum += BGW_DIFF;
+            gwCount++;
           } else {
-            // Calculate average difficulty for this gameweek
             let gwSum = 0;
             for (const [label] of perGw) {
               const d = diffOf(label);
@@ -7333,13 +6514,20 @@ const clearOverride = () => {
         <ActionSheet />
         <TransferMarketModal /> 
         <AllPlayersStatsModal
-  open={allStatsOpen}
-  onClose={() => setAllStatsOpen(false)}
-  extendedInfo={extendedInfo}
-  playersInfo={playersInfo}
-  extRanks={extRanks}
-  C={C}
-/>
+          open={allStatsOpen}
+          onClose={() => setAllStatsOpen(false)}
+          extendedInfo={extendedInfo}
+          playersInfo={playersInfo}
+          teamNums={teamNums}
+          C={C}
+          styles={S}
+          shortHeaderFor={shortHeaderFor}
+          pretty={pretty}
+          isRankableExtKey={isRankableExtKey}
+          setStatsPid={setStatsPid}
+          setStatsOpen={setStatsOpen}
+          MiniSelectModal={MiniSelectModal}
+        />
 
         <ChipsOverlay />
         <GwPickerOverlay />
@@ -7441,12 +6629,94 @@ const clearOverride = () => {
         <Text style={{ color: C.accent, fontWeight: '900' }}>+ New plan</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity
+        onPress={() => { setPlanPickerOpen(false); setComparePlansOpen(true); }}
+        style={{ marginTop: 8, paddingVertical: 10, borderRadius: 12, borderWidth: 1, borderColor: C.border, alignItems: 'center' }}
+      >
+        <MaterialCommunityIcons name="compare" size={18} color={C.ink} />
+        <Text style={{ color: C.ink, fontWeight: '800', marginTop: 2 }}>Compare plans</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity onPress={() => setPlanPickerOpen(false)} style={{ alignSelf: 'flex-end', marginTop: 10 }}>
         <Text style={{ color: C.accent, fontWeight: '900' }}>Close</Text>
       </TouchableOpacity>
     </View>
   </View>
 </Modal>
+
+      <ComparePlansModal
+        visible={comparePlansOpen}
+        onClose={() => setComparePlansOpen(false)}
+        plans={plans}
+        fplId={fplId}
+        namesById={namesById}
+        teamNums={teamNums}
+        getFixtureLabel={getFixtureLabel}
+        currentGw={baseGwNum}
+        C={C}
+      />
+
+      {/* Android (and fallback): plan name prompt modal — Alert.prompt is iOS-only */}
+      <Modal
+        visible={promptModal.visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          Keyboard.dismiss();
+          setPromptModal((p) => ({ ...p, visible: false }));
+        }}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'android' ? 'padding' : undefined}
+          style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: 'rgba(0,0,0,0.5)' }}
+        >
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => {
+              Keyboard.dismiss();
+              setPromptModal((p) => ({ ...p, visible: false }));
+            }}
+            style={StyleSheet.absoluteFill}
+          />
+          <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 320, borderRadius: 16, borderWidth: 1, borderColor: C.border, backgroundColor: C.card, padding: 16 }}>
+            <Text style={{ fontSize: 16, fontWeight: '900', color: C.ink, marginBottom: 12 }}>{promptModal.title}</Text>
+            <ThemedTextInput
+              value={promptModal.value}
+              onChangeText={(text) => setPromptModal((p) => ({ ...p, value: text }))}
+              placeholder="Name"
+              placeholderTextColor={C.muted}
+              style={{ height: 44, borderRadius: 10, paddingHorizontal: 12, marginBottom: 16, fontSize: 15, color: C.ink, backgroundColor: C.page ?? C.inputBg }}
+              autoFocus
+              selectTextOnFocus={Platform.OS === 'android'}
+            />
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 10 }}>
+              <TouchableOpacity
+                onPress={() => {
+                  Keyboard.dismiss();
+                  setPromptModal((p) => ({ ...p, visible: false }));
+                }}
+                style={{ paddingVertical: 10, paddingHorizontal: 16 }}
+              >
+                <Text style={{ color: C.muted, fontWeight: '800' }}>{t('planner.cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  const name = String(promptModal.value || '').trim();
+                  if (!name) return;
+                  const fn = promptModalOnSubmitRef.current;
+                  Keyboard.dismiss();
+                  setPromptModal((p) => ({ ...p, visible: false }));
+                  if (typeof fn === 'function') fn(name);
+                }}
+                style={{ paddingVertical: 10, paddingHorizontal: 16 }}
+              >
+                <Text style={{ color: C.accent, fontWeight: '900' }}>{t('planner.save')}</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
+        </KeyboardAvoidingView>
+      </Modal>
+
         <BankEditor />
       </SafeAreaView>
     );

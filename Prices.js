@@ -47,6 +47,8 @@ const BOTTOM_INSET = 40;
 
 const WATCHLIST_KEY = 'pricesWatchlist';
 const PLANNER_SNAPSHOT_URL = (id) => `https://livefpl-api-489391001748.europe-west4.run.app/LH_api2/planner/snapshot?id=${id}`;
+const PLANNER_SNAPSHOT_CACHE_PREFIX = 'prices.planner_snapshot.';
+const PLANNER_SNAPSHOT_TTL_MS = 2 * 24 * 60 * 60 * 1000; // 2 days
 const EO_CUTOFF = 0.1; // percent ownership threshold
 const MAYBE_THRESHOLD = 0.95;
 const PROGRESS_FALL_THRESHOLD = 0; // predictor: show sell hint if progress < this (i.e. any negative = toward a fall)
@@ -227,10 +229,44 @@ function usePricesData() {
         setBoughtValuesMap({});
         return;
       }
+      // Resolve current GW for per-GW cache (from Rank cache when available)
+      let gw = null;
+      try {
+        const fplRaw = await AsyncStorage.getItem('fplData');
+        if (fplRaw) {
+          const parsed = JSON.parse(fplRaw);
+          const payload = parsed?.data || parsed;
+          gw = Number(payload?.gw ?? payload?.GW ?? payload?.gameweek) || null;
+        }
+      } catch {}
+      const gwKey = gw != null ? String(gw) : 'x';
+      const cacheKey = `${PLANNER_SNAPSHOT_CACHE_PREFIX}${fplId}.${gwKey}`;
+
+      const cachedRaw = await AsyncStorage.getItem(cacheKey);
+      if (cachedRaw) {
+        try {
+          const cached = JSON.parse(cachedRaw);
+          if (cached?.t && (Date.now() - cached.t) < PLANNER_SNAPSHOT_TTL_MS && cached.bought_values && typeof cached.bought_values === 'object') {
+            setBoughtValuesMap(cached.bought_values);
+            return;
+          }
+        } catch {}
+      }
+
       const res = await fetch(PLANNER_SNAPSHOT_URL(fplId), { headers: { 'cache-control': 'no-cache' } });
       if (!res.ok) throw new Error('Snapshot failed');
       const snap = await res.json();
       const bought = snap?.data?.bought_values || snap?.bought_values || {};
+      const snapshotGw = Number(snap?.gw ?? snap?.base_gw ?? snap?.data?.gw) || gw;
+      const saveGwKey = snapshotGw != null ? String(snapshotGw) : gwKey;
+      const saveCacheKey = `${PLANNER_SNAPSHOT_CACHE_PREFIX}${fplId}.${saveGwKey}`;
+      try {
+        await AsyncStorage.setItem(saveCacheKey, JSON.stringify({
+          t: Date.now(),
+          bought_values: typeof bought === 'object' ? bought : {},
+          gw: snapshotGw,
+        }));
+      } catch {}
       setBoughtValuesMap(typeof bought === 'object' ? bought : {});
     } catch {
       setBoughtValuesMap({});
@@ -547,7 +583,7 @@ const tableRowS = (C, isDark) =>
     starHit: { padding: 4 },
   });
 
-const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark, myTeamIds, boughtValuesMap }) => {
+const TableRow = ({ player, starred, onToggleStar, onOpen, onSellHintPress, C, isDark, myTeamIds, boughtValuesMap }) => {
   const { t } = useTranslation('translation');
   const s = useMemo(() => tableRowS(C, isDark), [C, isDark]);
 
@@ -591,7 +627,8 @@ const TableRow = ({ player, starred, onToggleStar, onOpen, C, isDark, myTeamIds,
               <TouchableOpacity
                 onPress={(e) => {
                   e?.stopPropagation?.();
-                  Alert.alert(t('prices.sellingPrice'), sellHint);
+                  if (typeof onSellHintPress === 'function') onSellHintPress(player, sellHintData, cost);
+                  else Alert.alert(t('prices.sellingPrice'), sellHint);
                 }}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 style={{ padding: 2, flexShrink: 0 }}
@@ -1099,6 +1136,51 @@ const HelpModal = ({ visible, onClose, C, isDark }) => {
   );
 };
 
+/* ───────── Selling price info modal (bought / current / selling now / selling price at risk) ───────── */
+const SellingPriceModal = ({ visible, onClose, playerName, buyPrice, currentPrice, sellPriceNow, inDanger, affects, C, isDark }) => {
+  const { t } = useTranslation('translation');
+  if (!visible) return null;
+  const bg = isDark ? '#0f1525' : '#ffffff';
+  const border = isDark ? '#1e2638' : '#e2e8f0';
+  const ink = isDark ? C.ink : '#0f172a';
+  const muted = isDark ? C.muted : '#64748b';
+  const row = (label, value, valueColor) => (
+    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: isDark ? '#1b2642' : '#f1f5f9' }}>
+      <Text style={{ fontSize: 14, color: muted, fontWeight: '700' }}>{label}</Text>
+      <Text style={{ fontSize: 15, fontWeight: '800', color: valueColor ?? ink }}>{value}</Text>
+    </View>
+  );
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity activeOpacity={1} onPress={onClose} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+        <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 340, borderRadius: 16, borderWidth: 1, borderColor: border, backgroundColor: bg, overflow: 'hidden' }}>
+          <View style={{ paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 }}>
+            <Text style={{ fontSize: 16, fontWeight: '900', color: ink, marginBottom: 4 }} numberOfLines={1}>{playerName}</Text>
+            <Text style={{ fontSize: 12, color: muted, marginBottom: 12 }}>{t('prices.sellingPrice')}</Text>
+          </View>
+          <View style={{ paddingHorizontal: 16, paddingBottom: 14 }}>
+            {row(t('prices.boughtPrice'), `£${Number(buyPrice ?? 0).toFixed(1)}`, ink)}
+            {row(t('prices.currentPrice'), `£${Number(currentPrice ?? 0).toFixed(1)}`, ink)}
+            {row(t('prices.sellingPriceNow'), `£${Number(sellPriceNow ?? 0).toFixed(1)}`, C.accent || '#6366f1')}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 }}>
+              <Text style={{ fontSize: 14, color: muted, fontWeight: '700' }}>{t('prices.sellingPriceAtRisk')}</Text>
+              <View style={{ borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: inDanger ? (isDark ? 'rgba(239,68,68,0.2)' : '#fef2f2') : (isDark ? 'rgba(34,197,94,0.2)' : '#f0fdf4'), borderWidth: 1, borderColor: inDanger ? (isDark ? '#ef4444' : '#fecaca') : (isDark ? '#22c55e' : '#bbf7d0') }}>
+                <Text style={{ fontSize: 13, fontWeight: '800', color: inDanger ? (isDark ? '#fca5a5' : '#b91c1c') : (isDark ? '#86efac' : '#166534') }}>{inDanger ? t('prices.yes') : t('prices.no')}</Text>
+              </View>
+            </View>
+          </View>
+          <View style={{ paddingHorizontal: 16, paddingVertical: 12, backgroundColor: isDark ? '#0b1224' : '#f8fafc', borderTopWidth: 1, borderColor: border }}>
+            <Text style={{ fontSize: 13, fontWeight: '800', color: affects ? (isDark ? '#fbbf24' : '#b45309') : muted }}>{affects ? t('prices.dropAffectsSellPrice') : t('prices.dropWontAffectSellPrice')}</Text>
+          </View>
+          <TouchableOpacity onPress={onClose} style={{ padding: 14, alignItems: 'center' }}>
+            <Text style={{ fontSize: 15, fontWeight: '900', color: C.accent || '#6366f1' }}>{t('common.close')}</Text>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Modal>
+  );
+};
+
 /* ───────── Predictions tabs (All / Watchlist / My Team) ───────── */
 const Tabs = ({ value, onChange, C, isDark }) => {
   const { t } = useTranslation('translation');
@@ -1171,7 +1253,7 @@ const TopModeToggle = ({ mode, onChange, C, isDark }) => {
 };
 
 /* ───────── Summary Table (unchanged) ───────── */
-const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff = EO_CUTOFF, myTeamIds, boughtValuesMap }) => {
+const SummaryTable = ({ up, down, maybe = [], onOpen, onSellHintPress, C, isDark, eoMap, eoCutoff = EO_CUTOFF, myTeamIds, boughtValuesMap }) => {
   const { t } = useTranslation('translation');
   const Row = ({ p, dir }) => {
     const d = dir || p._dir || 'up';
@@ -1211,7 +1293,8 @@ const SummaryTable = ({ up, down, maybe = [], onOpen, C, isDark, eoMap, eoCutoff
             <TouchableOpacity
               onPress={(e) => {
                 e?.stopPropagation?.();
-                Alert.alert(t('prices.sellingPrice'), sellHint);
+                if (typeof onSellHintPress === 'function') onSellHintPress(p, sellHintData, cost);
+                else Alert.alert(t('prices.sellingPrice'), sellHint);
               }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               style={{ marginLeft: 2, marginRight: 6, flexShrink: 0 }}
@@ -1425,6 +1508,7 @@ function OverviewTab({
   setSortMode,
   sortDir,
   setSortDir,
+  onSellHintPress,
 }) {
   const { t } = useTranslation('translation');
   const { C, isDark } = ui;
@@ -1631,7 +1715,7 @@ function OverviewTab({
           refreshControl={<RefreshControl refreshing={data.refreshing} onRefresh={data.handleRefresh} />}
           alwaysBounceVertical
         >
-          <SummaryTable up={tonightUpAll} down={tonightDownAll} maybe={maybeTonightAll} onOpen={(p) => setOpen(p)} C={C} isDark={isDark} eoMap={eoMap} eoCutoff={EO_CUTOFF} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
+          <SummaryTable up={tonightUpAll} down={tonightDownAll} maybe={maybeTonightAll} onOpen={(p) => setOpen(p)} onSellHintPress={onSellHintPress} C={C} isDark={isDark} eoMap={eoMap} eoCutoff={EO_CUTOFF} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
         </ScrollView>
       ) : (
         <FlatList
@@ -1644,6 +1728,7 @@ function OverviewTab({
               starred={data.watchlist.has(item._pid)}
               onToggleStar={toggleWatch}
               onOpen={() => setOpen(item)}
+              onSellHintPress={onSellHintPress}
               C={C}
               isDark={isDark}
               myTeamIds={data.myTeamIds}
@@ -1676,7 +1761,7 @@ function OverviewTab({
 }
 
 /* ───────── Watchlist tab (unchanged from your message) ───────── */
-function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchChange, goOverviewClearFilters, sortMode, sortDir }) {
+function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchChange, goOverviewClearFilters, sortMode, sortDir, onSellHintPress }) {
   const { t } = useTranslation('translation');
   const { C, isDark } = ui;
   const { players, watchlist } = data;
@@ -1752,7 +1837,7 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
           data={list}
           keyExtractor={(item) => String(item._el)}
           renderItem={({ item }) => (
-            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} C={C} isDark={isDark} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
+            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} onSellHintPress={onSellHintPress} C={C} isDark={isDark} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
           )}
           contentContainerStyle={{ paddingBottom: BOTTOM_INSET }}
           keyboardShouldPersistTaps="handled"
@@ -1768,7 +1853,7 @@ function WatchlistTab({ data, ui, actions, searchQuery, setSearchQuery, onSearch
 }
 
 /* ───────── My Team tab (unchanged from your message) ───────── */
-function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchChange, goOverviewClearFilters, sortMode, sortDir }) {
+function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchChange, goOverviewClearFilters, sortMode, sortDir, onSellHintPress }) {
   const { t } = useTranslation('translation');
   const { C, isDark } = ui;
   const { players, myTeamIds, watchlist } = data;
@@ -1844,7 +1929,7 @@ function MyTeamTab({ data, ui, actions, searchQuery, setSearchQuery, onSearchCha
           data={list}
           keyExtractor={(item) => String(item._el)}
           renderItem={({ item }) => (
-            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} C={C} isDark={isDark} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
+            <TableRow player={item} starred={watchlist.has(item._pid)} onToggleStar={toggleWatch} onOpen={() => setOpen(item)} onSellHintPress={onSellHintPress} C={C} isDark={isDark} myTeamIds={data.myTeamIds} boughtValuesMap={data.boughtValuesMap} />
           )}
           contentContainerStyle={{ paddingBottom: BOTTOM_INSET }}
           keyboardShouldPersistTaps="handled"
@@ -1876,11 +1961,22 @@ const dropAffectsSellPrice = (cost, buyPriceTenths) => {
   return diffT % 2 === 0;
 };
 
-// Returns { affects } for caller to translate and style (affects = drop affects selling price).
+// Selling price now: FPL = buy + half of profit (in 0.1 steps) when current > buy; else current.
+const getSellingPriceNow = (cost, buyPriceTenths) => {
+  const buyT = Number(buyPriceTenths);
+  if (!Number.isFinite(buyT)) return cost;
+  const costT = Math.round(Number(cost) * 10);
+  const sellT = costT > buyT ? buyT + Math.floor((costT - buyT) / 2) : costT;
+  return sellT / 10;
+};
+
+// Returns { affects, buyPrice, sellPriceNow } for caller to translate and style.
 const getSellNoteForFaller = (oldPrice, _newPrice, buyPriceTenths) => {
   if (buyPriceTenths == null) return null;
   const affects = dropAffectsSellPrice(oldPrice, buyPriceTenths);
-  return { affects };
+  const buyPrice = Number(buyPriceTenths) / 10;
+  const sellPriceNow = getSellingPriceNow(oldPrice, buyPriceTenths);
+  return { affects, buyPrice, sellPriceNow };
 };
 
 const sortActualRows = (rows) => {
@@ -2207,6 +2303,19 @@ export default function PricesV2() {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState('summary');
   const [showHelp, setShowHelp] = useState(false);
+  const [sellHintModal, setSellHintModal] = useState(null);
+
+  const onSellHintPress = useCallback((player, sellHintData, cost) => {
+    if (!player || !sellHintData) return;
+    setSellHintModal({
+      playerName: player.name,
+      buyPrice: sellHintData.buyPrice,
+      currentPrice: cost,
+      sellPriceNow: sellHintData.sellPriceNow,
+      inDanger: !!sellHintData.affects,
+      affects: sellHintData.affects,
+    });
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -2292,6 +2401,7 @@ export default function PricesV2() {
                     setShowHelp={setShowHelp}
                     viewMode={viewMode}
                     setViewMode={setViewMode}
+                    onSellHintPress={onSellHintPress}
                   />
                 )}
 
@@ -2311,6 +2421,7 @@ export default function PricesV2() {
                       if (data.onlyAbove1Pct) data.setOnlyAbove1Pct(false);
                       setTab('overview');
                     }}
+                    onSellHintPress={onSellHintPress}
                   />
                 )}
 
@@ -2330,6 +2441,7 @@ export default function PricesV2() {
                       if (data.onlyAbove1Pct) data.setOnlyAbove1Pct(false);
                       setTab('overview');
                     }}
+                    onSellHintPress={onSellHintPress}
                   />
                 )}
               </View>
@@ -2341,6 +2453,19 @@ export default function PricesV2() {
           )}
         </View>
       </View>
+
+      <SellingPriceModal
+        visible={!!sellHintModal}
+        onClose={() => setSellHintModal(null)}
+        playerName={sellHintModal?.playerName}
+        buyPrice={sellHintModal?.buyPrice}
+        currentPrice={sellHintModal?.currentPrice}
+        sellPriceNow={sellHintModal?.sellPriceNow}
+        inDanger={sellHintModal?.inDanger}
+        affects={sellHintModal?.affects}
+        C={C}
+        isDark={isDark}
+      />
 
       <View style={{ height: BOTTOM_INSET }} />
     </SafeAreaView>

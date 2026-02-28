@@ -1076,7 +1076,7 @@ const loadFromCache = useCallback(async () => {
               <View style={styles.modalWhoWrap}>
                 <Text style={[styles.modalWhoTitle, { color: T.silverDeep }]}>{t('trophyRoom.whoContributed')}</Text>
                 {modalAch.who.slice(0, 12).map((line, i) => (
-                  <Text key={i} style={[styles.modalWhoItem, { color: T.muted }]} numberOfLines={1} ellipsizeMode="tail">
+                  <Text key={typeof line === 'string' && line ? `who-${line}` : `who-${i}`} style={[styles.modalWhoItem, { color: T.muted }]} numberOfLines={1} ellipsizeMode="tail">
                     • {line}
                   </Text>
                 ))}
