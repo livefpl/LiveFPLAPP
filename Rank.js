@@ -2381,9 +2381,6 @@ if (genMatches) {
        }
      } catch {}
 
-      try {
-       await persistExposureForPayload(payload, effectiveId);
-     } catch {}
 setOnePt(payload?.one_pt ?? payload?.onePt ?? payload?.one_pt_est ?? null);
 
       // ---- downstream: unchanged UI mapping ----
@@ -2540,12 +2537,15 @@ for (const p of playersData) {
   exposureFromPlayers[p.pid] = deriveMul(p);
 }
 setExposureMap(exposureFromPlayers);
-            // Push subs: update once per GW when the team loads successfully (own team only)
-      if (!viewFplId) {
-        await updateMyTeamPushSubsOncePerGW({ gw: payload?.gw, players: playersData, fplId: fplId });
-      }
-
       setPlayers(playersData);
+      // Clear loading immediately so UI shows; push topic updates can run in background
+      setLoading(false);
+      inFlightRef.current = null;
+
+      // Push subs: fire-and-forget so Rank doesn't wait on Firebase (keeps loading spinner short)
+      if (!viewFplId) {
+        updateMyTeamPushSubsOncePerGW({ gw: payload?.gw, players: playersData, fplId: fplId }).catch(() => {});
+      }
     } catch (e) {
       // Swallow aborts, surface real errors
       if (e?.name !== 'AbortError') {

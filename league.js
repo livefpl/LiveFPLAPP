@@ -1022,6 +1022,7 @@ useEffect(() => {
       const cacheKey = `league:${leagueId}:autosubs=${autosubs ? 1 : 0}`;
       const VERSION_URL = 'https://livefpl.us/version.json';
       const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+      const CACHE_TTL_WHEN_GEN_UNKNOWN_MS = 15 * 60 * 1000; // 15 min when we couldn't get version
 
       // 1) Read cached league (per id + autosubs)
       let cachedObj = null;
@@ -1051,11 +1052,12 @@ useEffect(() => {
 
       // 3) Decide whether we can serve cache without hitting API
       //    - If >2 days old → must refetch
+      //    - If we couldn't get remoteGen, only serve cache if younger than 15 min (avoid stuck stale data)
       //    - Else if we know remoteGen and it equals cachedGen → serve cache
-      //    - Else if we *don’t* know remoteGen, but we have non-stale cache and not forcing → serve cache
-      if (!force && cachedData && !tooOld) {
+      const tooOldWhenGenUnknown = (remoteGen == null) && (ageMs > CACHE_TTL_WHEN_GEN_UNKNOWN_MS);
+      if (!force && cachedData && !tooOld && !tooOldWhenGenUnknown) {
         const genKnownAndSame = (remoteGen != null) && (cachedGen === remoteGen);
-        const genUnknownButFresh = (remoteGen == null);
+        const genUnknownButFresh = (remoteGen == null) && (ageMs <= CACHE_TTL_WHEN_GEN_UNKNOWN_MS);
 
         if (genKnownAndSame || genUnknownButFresh) {
           let dataToUse = cachedData;
@@ -1205,7 +1207,7 @@ useEffect(() => {
   const onRefresh = useCallback(async () => {
     if (!isValidLeagueId(selected?.id)) return;
     setRefreshing(true);
-    await fetchLeague(selected.id, { autosubs });
+    await fetchLeague(selected.id, { autosubs, force: true });
     setRefreshing(false);
   }, [selected?.id, autosubs, fetchLeague]);
 

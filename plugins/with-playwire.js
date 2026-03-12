@@ -4,7 +4,6 @@ const {
   withAndroidManifest,
   withDangerousMod,
   withProjectBuildGradle,
-  withAppBuildGradle,
   createRunOncePlugin,
 } = require('@expo/config-plugins');
 const fs = require('fs');
@@ -19,17 +18,17 @@ const pkg = { name: 'with-playwire', version: '1.0.0' };
  *   androidApplicationId: "<Android Google Ad Manager app id>",
  *   adManagerApp: true, // default true
  *   skadItems: [ { SKAdNetworkIdentifier: "xxxxxx.skadnetwork" }, ... ],
- *   githubUser: "<your GitHub username for Playwire Maven>",
+ *   githubUser: "<ignored in v12; Android uses Maven Central>",
  *
  *   // Optional:
- *   iosPlaywireVersion: "11.6.0" // defaults to 11.6.0
+ *   iosPlaywireVersion: "12.0.0" // defaults to 12.0.0 (v12: pod brought in by RN SDK)
  * }
  */
 const withPlaywire = (config, options = {}) => {
   const playwire = (config.extra && config.extra.playwire) || {};
   const opts = { ...options, ...playwire };
 
-  const iosPlaywireVersion = opts.iosPlaywireVersion || '11.6.0';
+  const iosPlaywireVersion = opts.iosPlaywireVersion || '12.0.0';
 
   /* ---------- iOS Info.plist: GADApplicationIdentifier + SKAdNetworkItems ---------- */
   config = withInfoPlist(config, (c) => {
@@ -116,8 +115,8 @@ const withPlaywire = (config, options = {}) => {
         });
       };
 
-      // Playwire is the missing piece on iOS (Android already pulls playwiresdk_total)
-      ensurePodInFirstTarget(`pod 'Playwire', '${iosPlaywireVersion}'`);
+      // v12: Playwire is brought in by @intergi/react-native-playwire-sdk podspec (no explicit pod)
+      // ensurePodInFirstTarget(`pod 'Playwire', '${iosPlaywireVersion}'`);
 
       // Keep your mediation adapter
       ensurePodInFirstTarget(`pod 'GoogleMobileAdsMediationAppLovin'`);
@@ -128,30 +127,20 @@ const withPlaywire = (config, options = {}) => {
   ]);
 
   /* ---------- ANDROID: project-level Gradle (maven repos) ---------- */
+  /* v12: Playwire is on Maven Central; no GitHub Packages auth. Ensure mavenCentral + mediation repos. */
   config = withProjectBuildGradle(config, (c) => {
     const mod = c.modResults;
     if (mod.language !== 'groovy') return c;
 
     let contents = mod.contents;
 
-    const marker = 'maven.pkg.github.com/intergi/playwire-android-binaries';
-    if (contents.includes(marker)) {
-      // Already injected
+    const mediationReposMarker = 'https://android-sdk.is.com/';
+    if (contents.includes(mediationReposMarker)) {
       return c;
     }
 
-    const githubUser = opts.githubUser || 'CHANGE_ME_GITHUB_USERNAME';
-
     const repoBlock = `
-        maven {
-            name = "GitHubPackages"
-            url = uri("https://maven.pkg.github.com/intergi/playwire-android-binaries")
-            credentials {
-                username = "${githubUser}"
-                password = System.getenv("GITHUB_TOKEN") ?: ""
-            }
-        }
-
+        mavenCentral()
         maven {
             url 'https://android-sdk.is.com/'
         }
@@ -184,25 +173,9 @@ const withPlaywire = (config, options = {}) => {
     return c;
   });
 
-  /* ---------- ANDROID: app-level Gradle (Playwire dependency) ---------- */
-  config = withAppBuildGradle(config, (c) => {
-    const mod = c.modResults;
-    if (mod.language !== 'groovy') return c;
-
-    let contents = mod.contents;
-
-    if (!contents.includes('com.intergi.playwire:playwiresdk_total:11.6.0')) {
-      contents = contents.replace(
-        /dependencies\s*{/,
-        (match) =>
-          `${match}
-    implementation("com.intergi.playwire:playwiresdk_total:11.6.0")`
-      );
-    }
-
-    mod.contents = contents;
-    return c;
-  });
+  /* ---------- ANDROID: app-level Gradle ---------- */
+  /* v12: Playwire SDK bundles total/non_coppa implicitly; do not add playwiresdk_total here. */
+  /* (No app-level Playwire dependency injection for v12.) */
 
   return config;
 };

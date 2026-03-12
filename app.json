@@ -8,14 +8,14 @@
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "2.6.0",
-    "runtimeVersion": "2.6.0",
+    "version": "2.6.1",
+    "runtimeVersion": "2.6.1",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {
       "package": "com.pocketgamerguides.livefpl",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 8,
+      "versionCode": 9,
       "adaptiveIcon": {
         "foregroundImage": "./adaptive-foreground-1024.png",
         "backgroundImage": "./adaptive-background-1024.png"
