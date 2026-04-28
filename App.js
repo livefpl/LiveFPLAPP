@@ -33,7 +33,8 @@ import { setApiTier } from './signedFetch';
 
   import { ThemeProvider, useTheme, useColors } from './theme';
   import { ProProvider, usePro } from './ProContext';
-  import { FplIdProvider,useFplId } from './FplIdContext';
+  import { FplIdProvider, useFplId } from './FplIdContext';
+  import { prefetchRankData } from './Rank';
   import '@react-native-firebase/app';
   import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady } from './playwireInit';
 
@@ -63,7 +64,6 @@ import { setApiTier } from './signedFetch';
   }
 
   import ForceUpdateGate from './checkversion';
-  import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
 
   import { setTrigger, setConfig, bump } from './meter';
   import { showOnce, setAdGuard } from './AdInterstitial';
@@ -88,7 +88,7 @@ import { setApiTier } from './signedFetch';
   TextInput.defaultProps = TextInput.defaultProps || {};
   TextInput.defaultProps.allowFontScaling = false;
 
-  const LOCAL_BUILD = 4;
+  const LOCAL_BUILD = 5;
   const CONFIG_URL = 'https://livefpl.us/version.json';
   const DEFAULT_REMOTE_VERSION = 1;
 
@@ -130,6 +130,19 @@ import { setApiTier } from './signedFetch';
 
   // This ensures interstitials are blocked until Pro state is known,
   // and then blocked for Pro users.
+  function PrefetchRankWhenPro() {
+    const { isPro } = usePro();
+    const { fplId } = useFplId();
+    useEffect(() => {
+      if (!isPro || !fplId) return;
+      prefetchRankData(fplId, { isMain: true });
+      const intervalMs = 1 * 60 * 1000;
+      const id = setInterval(() => prefetchRankData(fplId, { isMain: true }), intervalMs);
+      return () => clearInterval(id);
+    }, [isPro, fplId]);
+    return null;
+  }
+
   function AdsProGate() {
   const { isReady, isPro } = usePro();
 
@@ -468,7 +481,7 @@ function BannerTestScreen() {
       setInterstitialRes(null);
 
       const cfg = getPlaywireConfig();
-      // Attempt re-init (will no-op if already ready; will retry if init got stuck)
+      // Attempt re-init (no-op on iOS 17 and earlier or if already ready)
       retryPlaywireInit(cfg);
 
       // Force a hard remount of the native view:
@@ -598,16 +611,21 @@ function BannerTestScreen() {
 
         <View style={[styles.adTestBannerBox, { borderColor: C.border, backgroundColor: C.bg }]}>
           {mounted ? (
-            <PlaywireBannerView
-              key={`pw_banner_test_${bannerKey}_${initDbgTick}`}
-              adUnitId={AD_ALIAS}
-              size={BANNER_SIZE}
-              style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}
-              onAdLoaded={onLoaded}
-              onAdFailedToLoad={onFailed}
-              onAdImpression={onImpression}
-              onAdClicked={onClicked}
-            />
+            (() => {
+              const { PlaywireBannerView } = require('@intergi/react-native-playwire-sdk');
+              return (
+                <PlaywireBannerView
+                  key={`pw_banner_test_${bannerKey}_${initDbgTick}`}
+                  adUnitId={AD_ALIAS}
+                  size={BANNER_SIZE}
+                  style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}
+                  onAdLoaded={onLoaded}
+                  onAdFailedToLoad={onFailed}
+                  onAdImpression={onImpression}
+                  onAdClicked={onClicked}
+                />
+              );
+            })()
           ) : (
             <Text style={{ color: C.muted, fontWeight: '800' }}>Banner unmounted</Text>
           )}
@@ -805,6 +823,7 @@ function BannerTestScreen() {
           <FplIdProvider>
             <ThemeProvider>
               <ProProvider>
+                <PrefetchRankWhenPro />
                 <AdsProGate />
                 <RootNavigation navRef={navRef} onReady={onReady} onStateChange={onStateChange} />
               </ProProvider>

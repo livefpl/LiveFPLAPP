@@ -8,14 +8,14 @@
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "2.6.1",
-    "runtimeVersion": "2.6.1",
+    "version": "2.6.5",
+    "runtimeVersion": "2.6.5",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {
       "package": "com.pocketgamerguides.livefpl",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 9,
+      "versionCode": 13,
       "adaptiveIcon": {
         "foregroundImage": "./adaptive-foreground-1024.png",
         "backgroundImage": "./adaptive-background-1024.png"
@@ -31,6 +31,7 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.pocketgamerguides.livefpl",
       "googleServicesFile": "./GoogleService-Info.plist",
+      "buildNumber": "13",
       "infoPlist": {
 	"GADIsAdManagerApp": true,
         "ITSAppUsesNonExemptEncryption": false,
@@ -61,7 +62,7 @@
       "expo-font",
       
       "expo-tracking-transparency",
-      ["./plugins/withAppLovinPin", { "version": "13.2.0" }],
+      ["./plugins/withAppLovinPin", { "version": "13.4.0" }],
 
       [
         "./plugins/with-playwire",

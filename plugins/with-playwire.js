@@ -4,12 +4,81 @@ const {
   withAndroidManifest,
   withDangerousMod,
   withProjectBuildGradle,
-  createRunOncePlugin,
 } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
 
-const pkg = { name: 'with-playwire', version: '1.0.0' };
+/** Swift Concurrency linker flags for app target (Playwire static lib uses Swift async). */
+const SWIFT_CONCURRENCY_LDFLAGS =
+  '-L$(TOOLCHAIN_DIR)/usr/lib/swift/iphoneos -lswift_Concurrency';
+
+/**
+ * Add or append Swift Concurrency OTHER_LDFLAGS to app target build configs in project.pbxproj.
+ * Only touches XCBuildConfiguration sections that contain PRODUCT_BUNDLE_IDENTIFIER (app target).
+ */
+function addSwiftConcurrencyFlagsToPbxproj(contents) {
+  if (contents.includes('swift_Concurrency')) return contents;
+
+  const lines = contents.split('\n');
+  const result = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    result.push(line);
+
+    // Start of buildSettings = {
+    const buildSettingsMatch = line.match(/^(\s*)buildSettings = \{\s*$/);
+    if (buildSettingsMatch) {
+      const indent = buildSettingsMatch[1];
+      i++;
+      let hasBundleId = false;
+      let otherLdFlagsLineIndex = -1;
+
+      while (i < lines.length) {
+        const inner = lines[i];
+        if (inner.match(/^\s*\}\s*;\s*$/)) {
+          // End of buildSettings block
+          if (hasBundleId) {
+            if (otherLdFlagsLineIndex >= 0) {
+              const idx = otherLdFlagsLineIndex;
+              const targetLine = result[idx];
+              if (targetLine && !targetLine.includes('swift_Concurrency')) {
+                const m = targetLine.match(/^(\s*OTHER_LDFLAGS = )(.+);\s*$/);
+                if (m) {
+                  const rest = m[2].trim();
+                  if (rest.startsWith('(')) {
+                    // Array form: append two entries before );
+                    result[idx] = targetLine.replace(
+                      /\)\s*;\s*$/,
+                      ', "-L$(TOOLCHAIN_DIR)/usr/lib/swift/iphoneos", "-lswift_Concurrency");'
+                    );
+                  } else {
+                    result[idx] =
+                      m[1] + rest.replace(/"\s*$/, '') + ' ' + SWIFT_CONCURRENCY_LDFLAGS + '";';
+                  }
+                }
+              }
+            } else {
+              result.push(
+                indent + '\tOTHER_LDFLAGS = "$(inherited) ' + SWIFT_CONCURRENCY_LDFLAGS + '";'
+              );
+            }
+          }
+          result.push(inner);
+          i++;
+          break;
+        }
+        if (inner.includes('PRODUCT_BUNDLE_IDENTIFIER')) hasBundleId = true;
+        if (inner.includes('OTHER_LDFLAGS =')) otherLdFlagsLineIndex = i;
+        result.push(inner);
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return result.join('\n');
+}
 
 /**
  * Options (prefer storing in app.json -> expo.extra.playwire):
@@ -21,14 +90,14 @@ const pkg = { name: 'with-playwire', version: '1.0.0' };
  *   githubUser: "<ignored in v12; Android uses Maven Central>",
  *
  *   // Optional:
- *   iosPlaywireVersion: "12.0.0" // defaults to 12.0.0 (v12: pod brought in by RN SDK)
+ *   iosPlaywireVersion: "12.1.1" // defaults to 12.1.1 (v12: pod brought in by RN SDK)
  * }
  */
 const withPlaywire = (config, options = {}) => {
   const playwire = (config.extra && config.extra.playwire) || {};
   const opts = { ...options, ...playwire };
 
-  const iosPlaywireVersion = opts.iosPlaywireVersion || '12.0.0';
+  const iosPlaywireVersion = opts.iosPlaywireVersion || '12.1.1';
 
   /* ---------- iOS Info.plist: GADApplicationIdentifier + SKAdNetworkItems ---------- */
   config = withInfoPlist(config, (c) => {
@@ -82,7 +151,7 @@ const withPlaywire = (config, options = {}) => {
   config = withDangerousMod(config, [
     'ios',
     async (c) => {
-      const podfilePath = path.join(c.modRequest.projectRoot, 'ios', 'Podfile');
+      const podfilePath = path.join(c.modRequest.platformProjectRoot, 'Podfile');
 
       let contents = await fs.promises.readFile(podfilePath, 'utf8');
 
@@ -121,7 +190,47 @@ const withPlaywire = (config, options = {}) => {
       // Keep your mediation adapter
       ensurePodInFirstTarget(`pod 'GoogleMobileAdsMediationAppLovin'`);
 
+      // 3) Link Swift concurrency runtime when using static libs (Playwire uses Swift async;
+      //    app target may not link Swift otherwise -> undefined _swift_coroFrameAlloc)
+      const postInstallMarker = 'post_install do |installer|';
+      const playwireSwiftMarker = 'Playwire Swift concurrency';
+      if (contents.includes(postInstallMarker) && !contents.includes(playwireSwiftMarker)) {
+        const swiftConcurrencyInjection = `
+  # ${playwireSwiftMarker}: ensure app links libswift_Concurrency (static libs)
+  Dir.glob(File.join(installer.sandbox.root, 'Target Support Files', 'Pods-*', '*.xcconfig')).each do |xcconfig_path|
+    content = File.read(xcconfig_path)
+    if content =~ /OTHER_LDFLAGS = (.+)/
+      existing = $1.strip
+      unless existing.include?('swift_Concurrency')
+        new_value = existing + ' -L"$(TOOLCHAIN_DIR)/usr/lib/swift/iphoneos" -lswift_Concurrency'
+        content = content.sub(/OTHER_LDFLAGS = .+/, "OTHER_LDFLAGS = " + new_value)
+        File.write(xcconfig_path, content)
+      end
+    end
+  end
+`;
+        contents = contents.replace(postInstallMarker, postInstallMarker + swiftConcurrencyInjection);
+      }
+
       await fs.promises.writeFile(podfilePath, contents, 'utf8');
+
+      // Option 1: Set Swift Concurrency linker flags on the app target in the Xcode project
+      // so the main binary links libswift_Concurrency regardless of Pods xcconfig.
+      const projectName = c.modRequest.projectName || config.expo?.name || 'LiveFPL';
+      const pbxprojPath = path.join(
+        c.modRequest.platformProjectRoot,
+        `${projectName}.xcodeproj`,
+        'project.pbxproj'
+      );
+      try {
+        let pbxproj = await fs.promises.readFile(pbxprojPath, 'utf8');
+        pbxproj = addSwiftConcurrencyFlagsToPbxproj(pbxproj);
+        await fs.promises.writeFile(pbxprojPath, pbxproj, 'utf8');
+      } catch (err) {
+        // Prebuild may not have created the project yet in some flows; Podfile post_install is fallback
+        console.warn('[with-playwire] Could not update project.pbxproj for Swift Concurrency:', err.message);
+      }
+
       return c;
     },
   ]);
@@ -180,4 +289,4 @@ const withPlaywire = (config, options = {}) => {
   return config;
 };
 
-module.exports = createRunOncePlugin(withPlaywire, pkg.name, pkg.version);
+module.exports = withPlaywire;

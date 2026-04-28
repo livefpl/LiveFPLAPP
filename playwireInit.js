@@ -1,6 +1,5 @@
-// playwireInit.js
+// playwireInit.js — lazy-loads Playwire SDK after first init
 import { Platform } from 'react-native';
-import { Playwire } from '@intergi/react-native-playwire-sdk';
 import { markPlaywireInitialized, preloadInterstitial } from './AdInterstitial';
 
 const PLAYWIRE_TEST_MODE = false;
@@ -60,6 +59,7 @@ export function initPlaywire({ publisherId, iosAppId, androidAppId }) {
   _lastInitErr = null;
 
   try {
+    const { Playwire } = require('@intergi/react-native-playwire-sdk');
     Playwire.setTest(!!PLAYWIRE_TEST_MODE);
 
     Playwire.initializeSDK(publisherId, appId, async () => {

@@ -26,12 +26,14 @@ import {
   ActivityIndicator,
   Linking,
   Share,
+  InteractionManager,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import ThemedTextInput from './ThemedTextInput';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useFplId } from './FplIdContext';
+import { usePro } from './ProContext';
 import { FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
 import StatsStrip from './StatsStrip';
@@ -403,6 +405,43 @@ const GEN_URL = 'https://livefpl.us/version.json';
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
 const SCALE_KEY = 'ui.rank.pitchScale';
 
+// Prefetch (module-level): same payload shape as Rank screen cache
+function pickPayloadForPrefetch(json, id) {
+  if (!json) return null;
+  if (json[id]) return json[id];
+  if (json[String(id)]) return json[String(id)];
+  const keys = Object.keys(json);
+  if (keys.length === 1 && typeof json[keys[0]] === 'object') return json[keys[0]];
+  return json;
+}
+
+export async function prefetchRankData(fplId, opts = {}) {
+  const { isMain = true } = opts;
+  if (!fplId) return;
+  const id = String(fplId).trim();
+  if (!/^\d{2,10}$/.test(id) || Number(id) <= 0) return;
+  let remoteGen = null;
+  try {
+    const vres = await fetch(`${GEN_URL}?t=${Date.now()}`, { cache: 'no-store' });
+    if (vres.ok) {
+      const vjson = await vres.json();
+      const g = Number(typeof vjson === 'number' ? vjson : vjson?.gen);
+      if (Number.isFinite(g)) remoteGen = g;
+    }
+  } catch {}
+  try {
+    const resp = await smartFetch(`/LH_api2/${encodeURIComponent(id)}`, {});
+    if (!resp.ok) return;
+    const json = await resp.json();
+    const payload = pickPayloadForPrefetch(json, id);
+    const now = Date.now();
+    await AsyncStorage.setItem(`fplData:${id}`, JSON.stringify({ data: payload, timestamp: now, id, gen: remoteGen }));
+    await AsyncStorage.setItem(`latestRankData:${id}`, JSON.stringify(json));
+    if (isMain) await AsyncStorage.setItem('fplData', JSON.stringify({ data: payload, timestamp: now, id, gen: remoteGen }));
+  } catch (e) {
+    console.warn('prefetchRankData failed', e);
+  }
+}
 
 // ---------- Helpers that don't need styles ----------
 // DGW: "minutes Game 2" etc. → treat as same stat as "minutes" (sum across games)
@@ -647,6 +686,7 @@ const atMax = pitchScale >= MAX_SCALE - EPS;
 
   const viewFplId = route?.params?.viewFplId;
   const { fplId, triggerRefetch } = useFplId();
+  const { isPro } = usePro();
   const { t } = useTranslation();
   // Rank.js (inside component)
   const C = useColors();
@@ -2203,11 +2243,114 @@ function hasLiveGamesFromPayload(p) {
     return /^\d{2,10}$/.test(s) && Number(s) > 0;
   };
 
+  // Premium: apply cached/fresh payload to state so UI updates (cache-first or after fetch)
+  const applyPayloadToState = useCallback(async (payload) => {
+    if (!payload) return;
+    let includeVal = displaySettings.includeSubs;
+    try {
+      const saved = await AsyncStorage.getItem(INCLUDE_SUBS_KEY);
+      if (saved === '1' || saved === '0') includeVal = saved === '1';
+      else if (payload?.aut != null) includeVal = !!payload.aut;
+    } catch {}
+    setDisplaySettings((prev) => ({ ...prev, includeSubs: includeVal }));
+
+    const live = Number(payload?.live_points ?? 0);
+    const bench = Number(payload?.bench_points ?? 0);
+    const hit = Number(payload?.hit ?? 0);
+    const livePlusBench = live + bench;
+    const pointsfinal = livePlusBench + hit;
+    const displayRank = includeVal
+      ? payload?.post_rank ?? payload?.displayrank
+      : payload?.pre_rank ?? payload?.displayrank;
+    const arrowDirection =
+      (displayRank ?? 0) > (payload?.old_rank ?? 0)
+        ? 'down'
+        : (payload?.old_rank ?? 0) > (displayRank ?? 0)
+          ? 'up'
+          : 'same';
+    const safetyVal = Number(payload?.safety ?? 0);
+    const difference = pointsfinal - safetyVal;
+    const fmtDelta = (n) => (n > 0 ? `+${n}` : n < 0 ? `${n}` : '0');
+    const subText = t('rank.safetyDelta', { safety: safetyVal, delta: fmtDelta(difference) });
+    const safeDiv = (n, d) => (d ? (n * 100) / d : 0);
+    const diffrank = -(displayRank ?? 0) + (payload?.old_rank ?? 0);
+    const diffpercent = safeDiv(diffrank, payload?.old_rank ?? 0).toFixed(2);
+    const diffpercentText = t('rank.oldRankPct', { rank: (payload?.old_rank ?? 0).toLocaleString(), pct: `${Number(diffpercent) > 0 ? '+' : ''}${diffpercent}` });
+    const diffranksubs = -(payload?.post_rank ?? 0) + (payload?.old_rank ?? 0);
+    const diffpercentsubs = safeDiv(diffranksubs, payload?.old_rank ?? 0).toFixed(2);
+    const diffpercentsubsText = t('rank.oldRankPct', { rank: (payload?.old_rank ?? 0).toLocaleString(), pct: `${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}` });
+    const diffranknosubs = -(payload?.pre_rank ?? 0) + (payload?.old_rank ?? 0);
+    const diffpercentnosubs = safeDiv(diffranknosubs, payload?.old_rank ?? 0).toFixed(2);
+    const diffpercentnosubsText = t('rank.oldRankPct', { rank: (payload?.old_rank ?? 0).toLocaleString(), pct: `${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}` });
+    const arrowsubs = (payload?.post_rank ?? 0) > (payload?.old_rank ?? 0) ? 'down' : (payload?.old_rank ?? 0) > (payload?.post_rank ?? 0) ? 'up' : 'same';
+    const arrownosubs = (payload?.pre_rank ?? 0) > (payload?.old_rank ?? 0) ? 'down' : (payload?.old_rank ?? 0) > (payload?.pre_rank ?? 0) ? 'up' : 'same';
+
+    setInfo({
+      diffrank,
+      diffpercent: diffpercentText,
+      subsafety: subText,
+      Pointsfinal: pointsfinal,
+      Hit: hit,
+      Points: `${livePlusBench}(${hit})=${pointsfinal}`,
+      Newrank: displayRank,
+      arrow: arrowDirection,
+      Safety: safetyVal,
+      Ranksubs: payload?.post_rank,
+      Ranknosubs: payload?.pre_rank,
+      diffpercentsubs: diffpercentsubsText,
+      diffpercentnosubs: diffpercentnosubsText,
+      oldRank: payload?.old_rank ?? 0,
+      diffPctSubsStr: `${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}`,
+      diffPctNosubsStr: `${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}`,
+      arrowsubs,
+      arrownosubs,
+      GWrank: payload?.GWrank,
+      gw: payload?.gw,
+      manager: payload?.manager ?? '',
+    });
+
+    const playersData = (payload?.team ?? []).map((player) => {
+      const EO1p = Number(player?.EO1 ?? 0) * 100;
+      const EO2p = Number(player?.EO2 ?? 0) * 100;
+      const fmt = (x) => (x > 0 ? Math.round(x) : x.toFixed(1));
+      const role = player?.role;
+      const isBench = role === 'b';
+      const pos = isBench ? 'Bench' : Number(player?.position ?? 0);
+      const statsFiltered = (player?.stats ?? []).filter((stat) => String(stat[0]).toLowerCase() !== 'bps');
+      const pid = Number(player?.fpl_id ?? player?.element ?? player?.id ?? player?.code);
+      return {
+        pid,
+        key: String(player?.code ?? player?.fpl_id ?? player?.name),
+        name: String(player?.name ?? ''),
+        position: pos,
+        team: Number(player?.club ?? 0),
+        EO: fmt(EO1p),
+        EO2: fmt(EO2p),
+        EO_local: EO1p,
+        EO_top10k: EO2p,
+        Emoji: find_emoji(player?.emoji ?? ''),
+        emojiCode: String(player?.emoji ?? ''),
+        Status: find_status(player?.status ?? 'd'),
+        Points: Number(player?.points ?? 0),
+        Cap: !isBench && role !== 's' ? role : '',
+        imageUri: clubCrestUri(player?.club ?? 1),
+        stats: statsFiltered,
+      };
+    });
+    const exposureFromPlayers = {};
+    for (const p of playersData) exposureFromPlayers[p.pid] = deriveMul(p);
+    setExposureMap(exposureFromPlayers);
+    setPlayers(playersData);
+    setOnePt(payload?.one_pt ?? payload?.onePt ?? payload?.one_pt_est ?? null);
+    setLoading(false);
+  }, [displaySettings.includeSubs, t]);
+
   // ---- NEW: guards to prevent duplicate requests ----
   const inFlightRef = useRef(null);      // coalesce concurrent triggers
   const abortRef = useRef(null);         // cancel stale requests
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (options = {}) => {
+  const { silent = false } = options;
   // Coalesce: if a request is already in-flight, reuse it
   if (inFlightRef.current) return inFlightRef.current;
 
@@ -2218,7 +2361,7 @@ function hasLiveGamesFromPayload(p) {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    setLoading(true);
+    if (!silent) setLoading(true);
     setError(null);
 
     try {
@@ -2479,30 +2622,6 @@ const subText = t('rank.safetyDelta', { safety: safetyVal, delta: fmtDelta(diffe
         // non-fatal
       }
 
-      setInfo({
-        diffrank,
-        diffpercent: diffpercentText,
-        subsafety: subText,
-        Pointsfinal: pointsfinal,
-        Hit: hit,
-        Points: `${livePlusBench}(${hit})=${pointsfinal}`,
-        Newrank: displayRank,
-        arrow: arrowDirection,
-        Safety: Number(payload?.safety ?? 0),
-        Ranksubs: payload?.post_rank,
-        Ranknosubs: payload?.pre_rank,
-        diffpercentsubs: diffpercentsubsText,
-        diffpercentnosubs: diffpercentnosubsText,
-        oldRank: payload?.old_rank ?? 0,
-        diffPctSubsStr: `${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}`,
-        diffPctNosubsStr: `${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}`,
-        arrowsubs,
-        arrownosubs,
-        GWrank: payload?.GWrank,
-        gw: payload?.gw,
-        manager: payload?.manager ?? '',
-      });
-
       const playersData = (payload?.team ?? []).map((player) => {
         const EO1p = Number(player?.EO1 ?? 0) * 100;
         const EO2p = Number(player?.EO2 ?? 0) * 100;
@@ -2533,19 +2652,43 @@ const subText = t('rank.safetyDelta', { safety: safetyVal, delta: fmtDelta(diffe
         };
       });
       const exposureFromPlayers = {};
-for (const p of playersData) {
-  exposureFromPlayers[p.pid] = deriveMul(p);
-}
-setExposureMap(exposureFromPlayers);
-      setPlayers(playersData);
-      // Clear loading immediately so UI shows; push topic updates can run in background
-      setLoading(false);
-      inFlightRef.current = null;
-
-      // Push subs: fire-and-forget so Rank doesn't wait on Firebase (keeps loading spinner short)
-      if (!viewFplId) {
-        updateMyTeamPushSubsOncePerGW({ gw: payload?.gw, players: playersData, fplId: fplId }).catch(() => {});
+      for (const p of playersData) {
+        exposureFromPlayers[p.pid] = deriveMul(p);
       }
+
+      // Yield so state updates run in a new task and aren't starved while Rank is focused
+      InteractionManager.runAfterInteractions(() => {
+        setExposureMap(exposureFromPlayers);
+        setInfo({
+          diffrank,
+          diffpercent: diffpercentText,
+          subsafety: subText,
+          Pointsfinal: pointsfinal,
+          Hit: hit,
+          Points: `${livePlusBench}(${hit})=${pointsfinal}`,
+          Newrank: displayRank,
+          arrow: arrowDirection,
+          Safety: Number(payload?.safety ?? 0),
+          Ranksubs: payload?.post_rank,
+          Ranknosubs: payload?.pre_rank,
+          diffpercentsubs: diffpercentsubsText,
+          diffpercentnosubs: diffpercentnosubsText,
+          oldRank: payload?.old_rank ?? 0,
+          diffPctSubsStr: `${Number(diffpercentsubs) > 0 ? '+' : ''}${diffpercentsubs}`,
+          diffPctNosubsStr: `${Number(diffpercentnosubs) > 0 ? '+' : ''}${diffpercentnosubs}`,
+          arrowsubs,
+          arrownosubs,
+          GWrank: payload?.GWrank,
+          gw: payload?.gw,
+          manager: payload?.manager ?? '',
+        });
+        setPlayers(playersData);
+        setLoading(false);
+        inFlightRef.current = null;
+        if (!viewFplId) {
+          updateMyTeamPushSubsOncePerGW({ gw: payload?.gw, players: playersData, fplId: fplId }).catch(() => {});
+        }
+      });
     } catch (e) {
       // Swallow aborts, surface real errors
       if (e?.name !== 'AbortError') {
@@ -2571,12 +2714,38 @@ setExposureMap(exposureFromPlayers);
     useCallback(() => {
       setRankTab('pitch');
       setQuickBarOpen(false);
-    setQuickOpen(false);
-      // kick off fetch
-      fetchData();
-
+      setQuickOpen(false);
+      if (!isPro) {
+        fetchData();
+        return () => {};
+      }
+      (async () => {
+        let effectiveId = null;
+        try {
+          const stored = await AsyncStorage.getItem('fplId');
+          const rawId = viewFplId ?? stored ?? fplId;
+          effectiveId = isValidFplId(rawId) ? String(rawId) : null;
+        } catch {}
+        const cacheKey = effectiveId ? `fplData:${effectiveId}` : null;
+        const legacyKey = 'fplData';
+        let parsed = null;
+        if (cacheKey) {
+          try {
+            const rawScoped = await AsyncStorage.getItem(cacheKey);
+            const rawLegacy = !rawScoped ? await AsyncStorage.getItem(legacyKey) : null;
+            const raw = rawScoped || rawLegacy;
+            if (raw) parsed = JSON.parse(raw);
+          } catch {}
+        }
+        if (parsed?.id === effectiveId && parsed?.data) {
+          await applyPayloadToState(parsed.data);
+          fetchData({ silent: true });
+        } else {
+          fetchData();
+        }
+      })();
       return () => {};
-    }, [fetchData, triggerRefetch]) 
+    }, [fetchData, triggerRefetch, isPro, viewFplId, fplId, applyPayloadToState])
   );
 
   // ✅ Preload cached data for this ID (so Achievements can use it immediately)

@@ -1,15 +1,18 @@
-// ad.js
+// ad.js — lazy-loads Playwire SDK for the banner view
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, Text, Platform, TouchableOpacity, Linking } from 'react-native';
-import { PlaywireBannerView } from '@intergi/react-native-playwire-sdk';
 import { usePro } from './ProContext';
 import { getInterstitialDebugState } from './AdInterstitial';
 import { useTranslation } from 'react-i18next';
 import { useTheme, useColors } from './theme';
-import { onPlaywireReady } from './playwireInit';
 import { useNavigation } from '@react-navigation/native';
 
 export const AD_FOOTER_HEIGHT = 50;
+
+function LazyPlaywireBanner(props) {
+  const { PlaywireBannerView } = require('@intergi/react-native-playwire-sdk');
+  return <PlaywireBannerView {...props} />;
+}
 
 const BANNER_SIZE = { width: 320, height: 50 };
 const AD_ALIAS = 'banner-320x50';
@@ -108,6 +111,7 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
   // Become ready when Playwire is ready
   useEffect(() => {
     if (sdkReady) return;
+    const { onPlaywireReady } = require('./playwireInit');
     onPlaywireReady(() => setSdkReady(true));
   }, [sdkReady]);
 
@@ -364,7 +368,7 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
       <View style={styles.bannerFrame}>
         {/* Keep banner mounted. No opacity hacks. */}
         <View pointerEvents={showPlaceholder ? 'none' : 'auto'}>
-          <PlaywireBannerView
+          <LazyPlaywireBanner
             key={`pw_banner_${bannerKey}`}
             adUnitId={AD_ALIAS}
             size={BANNER_SIZE}
@@ -376,7 +380,7 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
           />
         </View>
 
-        {/* Placeholder only before first ever load */}
+        {/* Placeholder only before first successful load */}
         {showPlaceholder ? (
           <View style={styles.placeholderOverlay} pointerEvents="box-none">
             <TouchableOpacity

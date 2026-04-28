@@ -3,7 +3,8 @@ const { withDangerousMod } = require("@expo/config-plugins");
 const fs = require("fs");
 const path = require("path");
 
-const DEFAULT_VERSION = "13.2.0";
+// Keep in sync with Playwire iOS (e.g. Playwire 12.1.x pins AppLovinSDK 13.4.x).
+const DEFAULT_VERSION = "13.4.0";
 
 function patchPodfile(podfile, version) {
   const v = version || DEFAULT_VERSION;

@@ -1,4 +1,7 @@
 // SettingsModal.js
+// Bump this with each OTA to confirm the JS update reached the device (shown at bottom of modal).
+const JS_BUNDLE_LABEL = '1';
+
 import React, { useMemo, useState, useEffect } from 'react';
 import {
   Modal,
@@ -178,6 +181,13 @@ export default function SettingsModal({
           justifyContent: 'space-between',
         },
         chevron: { color: C.ink, fontSize: 14, opacity: 0.9 },
+        jsBundleLabel: {
+          marginTop: 10,
+          fontSize: 10,
+          color: C.muted,
+          textAlign: 'center',
+          opacity: 0.7,
+        },
       }),
     [C]
   );
@@ -305,6 +315,8 @@ export default function SettingsModal({
               <Text style={styles.closeText}>{t('common.close')}</Text>
             </Pressable>
           </View>
+
+          <Text style={styles.jsBundleLabel}>JS • {JS_BUNDLE_LABEL}</Text>
           </Pressable>
 </Pressable>
 

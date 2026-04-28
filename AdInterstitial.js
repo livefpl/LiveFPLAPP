@@ -4,12 +4,19 @@
 // - cooldown
 // - SDK-init gate (markPlaywireInitialized must be called from Playwire.initializeSDK callback)
 // - NO user-visible debug UI, NO console logs
+// - Lazy-loads Playwire from @intergi/react-native-playwire-sdk
 //
 // Pro/ads gating:
 //   Use setAdGuard(() => isPro) from your ProContext (source of truth).
 //   If the guard returns true, interstitials will never show.
 
-import { Playwire } from '@intergi/react-native-playwire-sdk';
+function _getPlaywire() {
+  try {
+    return require('@intergi/react-native-playwire-sdk').Playwire;
+  } catch {
+    return null;
+  }
+}
 
 const INTERSTITIAL_ALIAS = 'interstitial'; // must match your Playwire alias exactly
 
@@ -116,6 +123,11 @@ function _wrapGetReady(adUnitId, timeoutMs = 900) {
       finish(false);
     }, timeoutMs);
 
+    const Playwire = _getPlaywire();
+    if (!Playwire) {
+      finish(false);
+      return;
+    }
     try {
       Playwire.getInterstitialReady(adUnitId, (isReady) => {
         _dbg.lastReadyCheck = !!isReady;
@@ -142,6 +154,8 @@ function _resolveAll(waiters, val) {
 
 function _installListenersOnce() {
   if (_listenersInstalled) return;
+  const Playwire = _getPlaywire();
+  if (!Playwire) return;
   _listenersInstalled = true;
 
   try {
@@ -221,6 +235,12 @@ async function _ensureLoaded({ timeoutMs = 12_000 } = {}) {
   _dbg.lastLoadCallAt = Date.now();
   _mark('load_called');
 
+  const Playwire = _getPlaywire();
+  if (!Playwire) {
+    _loading = false;
+    _mark('failed_to_load', { lastFailAlias: 'sdk_skip' });
+    return false;
+  }
   try {
     Playwire.loadInterstitial(INTERSTITIAL_ALIAS);
   } catch {
@@ -311,6 +331,11 @@ export async function showOnce({ reason, force } = {}) {
       _dbg.lastShowCallAt = Date.now();
       _mark('show_called');
 
+      const Playwire = _getPlaywire();
+      if (!Playwire) {
+        _dbg.lastResult = { shown: false, provider: 'playwire', reason: 'sdk_skip' };
+        return _dbg.lastResult;
+      }
       try {
         Playwire.showInterstitial(INTERSTITIAL_ALIAS);
       } catch {
