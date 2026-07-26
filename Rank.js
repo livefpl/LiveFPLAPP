@@ -34,6 +34,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { useFplId } from './FplIdContext';
 import { usePro } from './ProContext';
+import { usePreseason } from './PreseasonContext';
 import { FontAwesome, MaterialCommunityIcons } from '@expo/vector-icons';
 import { CommonActions } from '@react-navigation/native';
 import StatsStrip from './StatsStrip';
@@ -688,6 +689,7 @@ const atMax = pitchScale >= MAX_SCALE - EPS;
   const { fplId, triggerRefetch } = useFplId();
   const { isPro } = usePro();
   const { t } = useTranslation();
+  const { preseason } = usePreseason();
   // Rank.js (inside component)
   const C = useColors();
 
@@ -2380,11 +2382,14 @@ function hasLiveGamesFromPayload(p) {
   } catch {}
 
       if (!effectiveId) {
-        requestAnimationFrame(() => {
-          navigation.dispatch(
-            CommonActions.navigate({ name: 'ID', params: {}, merge: false })
-          );
-        });
+        // Pre-season: don't force the ID screen — live linking waits until after GW1 deadline
+        if (!preseason) {
+          requestAnimationFrame(() => {
+            navigation.dispatch(
+              CommonActions.navigate({ name: 'ID', params: {}, merge: false })
+            );
+          });
+        }
         return;
       }
 

@@ -64,6 +64,7 @@ import { setApiTier } from './signedFetch';
   }
 
   import ForceUpdateGate from './checkversion';
+  import { usePreseason } from './PreseasonContext';
 
   import { setTrigger, setConfig, bump } from './meter';
   import { showOnce, setAdGuard } from './AdInterstitial';
@@ -88,7 +89,7 @@ import { setApiTier } from './signedFetch';
   TextInput.defaultProps = TextInput.defaultProps || {};
   TextInput.defaultProps.allowFontScaling = false;
 
-  const LOCAL_BUILD = 5;
+  const LOCAL_BUILD = 7;
   const CONFIG_URL = 'https://livefpl.us/version.json';
   const DEFAULT_REMOTE_VERSION = 1;
 
@@ -169,6 +170,7 @@ import { setApiTier } from './signedFetch';
   function MyTabs() {
     const { t } = useTranslation();
     const { fplId } = useFplId();
+    const { preseason } = usePreseason();
     const C = useColors();
     const navigation = useNavigation();
 
@@ -176,10 +178,28 @@ import { setApiTier } from './signedFetch';
     const [chromeH, setChromeH] = React.useState(60);
     const [moreOpen, setMoreOpen] = React.useState(false);
 
-    const PopItem = ({ icon, label, target, onPress }) => {
+    const showPreseasonGate = React.useCallback(() => {
+      Alert.alert(t('preseason.title'), t('preseason.message'));
+    }, [t]);
+
+    const guardLiveTab = React.useCallback(
+      (e) => {
+        if (!preseason) return;
+        e.preventDefault();
+        showPreseasonGate();
+      },
+      [preseason, showPreseasonGate]
+    );
+
+    const PopItem = ({ icon, label, target, onPress, blockedInPreseason }) => {
       const handle =
         onPress ??
         (() => {
+          if (preseason && blockedInPreseason) {
+            setMoreOpen(false);
+            showPreseasonGate();
+            return;
+          }
           setMoreOpen(false);
           navigation.navigate(target);
         });
@@ -228,8 +248,8 @@ import { setApiTier } from './signedFetch';
             </View>
 
             {/* Keep only non-tab destinations here */}
-            <PopItem icon="medal" label={t('moreMenu.gameweekTrophies')} target="Trophies" />
-            <PopItem icon="account-edit" label={t('moreMenu.changeFplId')} target="ID" />
+            <PopItem icon="medal" label={t('moreMenu.gameweekTrophies')} target="Trophies" blockedInPreseason />
+            <PopItem icon="account-edit" label={t('moreMenu.changeFplId')} target="ID" blockedInPreseason />
             <PopItem icon="crown" label={t('moreMenu.premiumRemoveAds')} target="Premium" />
             {String(fplId) === '114740' && (<PopItem icon="advertisements" label={t('moreMenu.adBannerTest')} target="AdTest" />
             )}
@@ -241,7 +261,7 @@ import { setApiTier } from './signedFetch';
     return (
       <>
         <Tab.Navigator
-          initialRouteName="Rank"
+          initialRouteName={preseason ? 'Planner' : 'Rank'}
           screenOptions={({ route }) => ({
             tabBarIcon: ({ color }) => {
               let iconName;
@@ -293,11 +313,13 @@ import { setApiTier } from './signedFetch';
             headerShown: false,
             tabBarActiveTintColor: C.accent,
             tabBarInactiveTintColor: C.muted,
-            tabBarStyle: {
-              backgroundColor: C.bg,
-              borderTopColor: C.border,
-              borderTopWidth: 1,
-            },
+            tabBarStyle: preseason
+              ? { display: 'none', height: 0 }
+              : {
+                  backgroundColor: C.bg,
+                  borderTopColor: C.border,
+                  borderTopWidth: 1,
+                },
             tabBarLabelStyle: { fontSize: 10, fontWeight: '700' },
             tabBarIconStyle: { marginTop: 2 },
             tabBarItemStyle: { paddingVertical: 2 },
@@ -314,22 +336,30 @@ import { setApiTier } from './signedFetch';
 
             return (
               <View onLayout={(e) => setChromeH(e.nativeEvent.layout.height || 60)}>
-                <MorePopover />
-                <AdFooter  routeKey={activeRoute} />
-                <BottomTabBar
-                  {...props}
-                  state={{
+                {!preseason && <MorePopover />}
+                <AdFooter routeKey={activeRoute} instanceKey="primary" />
+                {preseason ? (
+                  <AdFooter
+                    routeKey={`${activeRoute}-2`}
+                    instanceKey="preseason-2"
+                    mountDelayMs={2200}
+                  />
+                ) : (
+                  <BottomTabBar
+                    {...props}
+                    state={{
       ...props.state,
       index: props.state.routeNames.indexOf(activeRoute),
     }}
-                  onTabPress={(e) => {
-                    const { name } = e.target
-                      ? props.state.routes.find((r) => r.key === e.target) || {}
-                      : {};
-                    if (name && name !== 'More') setMoreOpen(false);
-                    props.onTabPress?.(e);
-                  }}
-                />
+                    onTabPress={(e) => {
+                      const { name } = e.target
+                        ? props.state.routes.find((r) => r.key === e.target) || {}
+                        : {};
+                      if (name && name !== 'More') setMoreOpen(false);
+                      props.onTabPress?.(e);
+                    }}
+                  />
+                )}
               </View>
             );
           }}
@@ -341,17 +371,46 @@ import { setApiTier } from './signedFetch';
             component={Rank}
             options={{ tabBarLabel: t('tabs.rank') }}
             listeners={({ navigation }) => ({
-              tabPress: () => {
+              tabPress: (e) => {
+                if (preseason) {
+                  guardLiveTab(e);
+                  return;
+                }
                 navigation.dispatch(CommonActions.navigate({ name: 'Rank', params: {}, merge: false }));
               },
             })}
           />
-          <Tab.Screen name="Stats" component={Threats} options={{ tabBarLabel: t('tabs.stats') }} />
-          <Tab.Screen name="Leagues" component={Leagues} options={{ tabBarLabel: t('tabs.leagues') }} />
-          <Tab.Screen name="Prices" component={PricesPage} options={{ tabBarLabel: t('tabs.prices') }} />
-          <Tab.Screen name="Matches" component={Games} options={{ tabBarLabel: t('tabs.matches') }} />
+          <Tab.Screen
+            name="Stats"
+            component={Threats}
+            options={{ tabBarLabel: t('tabs.stats') }}
+            listeners={{ tabPress: guardLiveTab }}
+          />
+          <Tab.Screen
+            name="Leagues"
+            component={Leagues}
+            options={{ tabBarLabel: t('tabs.leagues') }}
+            listeners={{ tabPress: guardLiveTab }}
+          />
+          <Tab.Screen
+            name="Prices"
+            component={PricesPage}
+            options={{ tabBarLabel: t('tabs.prices') }}
+            listeners={{ tabPress: guardLiveTab }}
+          />
+          <Tab.Screen
+            name="Matches"
+            component={Games}
+            options={{ tabBarLabel: t('tabs.matches') }}
+            listeners={{ tabPress: guardLiveTab }}
+          />
           <Tab.Screen name="Planner" component={PlannerScreen} options={{ tabBarLabel: t('tabs.planner') }} />
-          <Tab.Screen name="What If" component={WhatIf} options={{ tabBarLabel: t('tabs.whatIf') }} />
+          <Tab.Screen
+            name="What If"
+            component={WhatIf}
+            options={{ tabBarLabel: t('tabs.whatIf') }}
+            listeners={{ tabPress: guardLiveTab }}
+          />
 
           {/* Toggle-only tab for popover */}
           <Tab.Screen
@@ -371,16 +430,19 @@ import { setApiTier } from './signedFetch';
             name="Templates"
             component={TemplatesChipsAverages}
             options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
+            listeners={{ tabPress: guardLiveTab }}
           />
           <Tab.Screen
             name="Trophies"
             component={Achievements}
             options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
+            listeners={{ tabPress: guardLiveTab }}
           />
           <Tab.Screen
             name="ID"
             component={ChangeID}
             options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
+            listeners={{ tabPress: guardLiveTab }}
           />
           <Tab.Screen
             name="Premium"

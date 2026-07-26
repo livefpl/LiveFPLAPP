@@ -507,7 +507,33 @@
     "zoomOut": "Zoom out",
     "zoomIn": "Zoom in",
     "share": "Bagikan",
-    "sharePlannerImage": "Bagikan gambar perencana"
+    "sharePlannerImage": "Bagikan gambar perencana",
+    "xDangerDefenses": "Clean sheet yang bisa merugikan peringkatmu",
+    "xDangers": "xDangers",
+    "xDangersBlurb": "GW{{gw}} · 💀 >50% · 😈 >30%",
+    "xDangersNoData": "Belum ada file EO prediksi untuk GW ini.",
+    "xDangersEmpty": "Tidak ada ancaman di mana xEO mengalahkan eksposur Anda.",
+    "xEoAgainstYou": "xEO terhadap Anda",
+    "xDangerDefensesEmpty": "Tidak ada ancaman unit pertahanan untuk GW ini.",
+    "gkDef": "GK+DEF",
+    "templateRating": "Template",
+    "templateNoEo": "Rating template memerlukan EO prediksi untuk GW ini.",
+    "templateDangerHint": "xDanger {{n}}%",
+    "templateOwnedHint": "{{owned}}/{{total}} xEO tinggi dimiliki",
+    "templateVsBest": "xDanger {{yours}}% · terbaik ~{{best}}%",
+    "templateScale": "Anda {{yours}}% · terbaik {{best}}% · terburuk {{worst}}%",
+    "templateBand": {
+      "veryTemplate": "Sangat template",
+      "template": "Template",
+      "balanced": "Seimbang",
+      "differential": "Differensial",
+      "ultraDiff": "Ultra diferensial"
+    },
+    "player": "Pemain",
+    "pos": "Pos",
+    "price": "Harga",
+    "predictedEo": "EO prediksi: {{value}}",
+    "xDangerPlayers": "Pemain yang bisa merugikan peringkatmu"
   },
   "whatif": {
     "liveRank": "Peringkat Langsung",
@@ -847,5 +873,9 @@
     "fr": "Français",
     "de": "Deutsch",
     "id": "Indonesia"
+  },
+  "preseason": {
+    "title": "Pra-musim",
+    "message": "Fitur live dan menautkan ID FPL hanya tersedia setelah deadline Gameweek 1."
   }
 }

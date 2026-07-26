@@ -508,7 +508,33 @@
     "zoomOut": "تصغير",
     "zoomIn": "تكبير",
     "share": "مشاركة",
-    "sharePlannerImage": "مشاركة صورة المخطّط"
+    "sharePlannerImage": "مشاركة صورة المخطّط",
+    "xDangerDefenses": "شباك نظيفة قد تضر بترتيبك",
+    "xDangers": "xDangers",
+    "xDangersBlurb": "GW{{gw}} · 💀 >50% · 😈 >30%",
+    "xDangersNoData": "لا يوجد ملف EO متوقع لهذه الجولة بعد.",
+    "xDangersEmpty": "لا توجد تهديدات حيث يتجاوز xEO تعرضك.",
+    "xEoAgainstYou": "xEO ضدك",
+    "xDangerDefensesEmpty": "لا توجد تهديدات دفاعية لهذه الجولة.",
+    "gkDef": "حارس+دفاع",
+    "templateRating": "Template",
+    "templateNoEo": "تقييم القالب يحتاج EO متوقع لهذه الجولة.",
+    "templateDangerHint": "xDanger {{n}}%",
+    "templateOwnedHint": "{{owned}}/{{total}} xEO مرتفع مملوك",
+    "templateVsBest": "xDanger {{yours}}% · الأفضل ~{{best}}%",
+    "templateScale": "أنت {{yours}}% · الأفضل {{best}}% · الأسوأ {{worst}}%",
+    "templateBand": {
+      "veryTemplate": "قالب جداً",
+      "template": "قالب",
+      "balanced": "متوازن",
+      "differential": "Differentials",
+      "ultraDiff": "Ultra differential"
+    },
+    "player": "لاعب",
+    "pos": "مركز",
+    "price": "السعر",
+    "predictedEo": "EO متوقع: {{value}}",
+    "xDangerPlayers": "لاعبون قد يضرون بترتيبك"
   },
   "whatif": {
     "liveRank": "الترتيب المباشر",
@@ -848,5 +874,9 @@
     "fr": "Français",
     "de": "Deutsch",
     "id": "إندونيسي"
+  },
+  "preseason": {
+    "title": "ما قبل الموسم",
+    "message": "الميزات المباشرة وربط معرف FPL متاحة فقط بعد موعد نهاية الجولة 1."
   }
 }

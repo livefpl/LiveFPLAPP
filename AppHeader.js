@@ -1,6 +1,6 @@
 // components/AppHeader.js
 import React, { useState, useEffect } from 'react';
-import { SafeAreaView, View, Image, Text, StyleSheet, TouchableOpacity, StatusBar, Modal, Pressable, ScrollView } from 'react-native';
+import { SafeAreaView, View, Image, Text, StyleSheet, TouchableOpacity, StatusBar, Modal, Pressable, ScrollView, Alert } from 'react-native';
 
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, useColors } from './theme';
 import { assetImages } from './clubs';
 import { usePro } from './ProContext';
+import { usePreseason } from './PreseasonContext';
 import { setStoredLanguage } from './i18n';
 
 import PaywallScreen from './Paywallscreen';
@@ -36,6 +37,7 @@ export default function AppHeader({
   const colors = useColors();
   const navigation = useNavigation();
   const { isPro } = usePro();
+  const { preseason } = usePreseason();
 
   const [paywallOpen, setPaywallOpen] = useState(false); // ← local page overlay
   const [langModalVisible, setLangModalVisible] = useState(false);
@@ -47,10 +49,15 @@ export default function AppHeader({
   const onToggleMode = () => setMode(mode === 'dark' ? 'light' : 'dark');
 
   // Change ID: on the LEFT next to Go Pro
-  const handleGoChangeId = () =>
-    typeof onPressChangeId === 'function'
-      ? onPressChangeId()
-      : (setPaywallOpen(false), navigation.navigate('ID'));
+  const handleGoChangeId = () => {
+    if (typeof onPressChangeId === 'function') return onPressChangeId();
+    if (preseason) {
+      Alert.alert(t('preseason.title'), t('preseason.message'));
+      return;
+    }
+    setPaywallOpen(false);
+    navigation.navigate('ID');
+  };
 
   // Language picker: vertical list modal (Android shows Alert buttons horizontally)
   const showLanguagePicker = () => setLangModalVisible(true);

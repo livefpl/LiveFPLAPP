@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setConfig } from './meter';
+import { PreseasonProvider, isPreseasonFlag } from './PreseasonContext';
 
 const STORAGE_LAST_CHECK = 'version.lastCheckAt';
 const STORAGE_LAST_SEEN  = 'version.lastSeen';
@@ -27,6 +28,7 @@ export default function ForceUpdateGate({
   const [checked, setChecked] = useState(false);
   const [mustUpdate, setMustUpdate] = useState(false);
   const [storeUrl, setStoreUrl] = useState(null);
+  const [preseason, setPreseason] = useState(false);
 
   const inFlight = useRef(null);
   const appState = useRef(AppState.currentState);
@@ -56,6 +58,8 @@ export default function ForceUpdateGate({
       const platformUrl = Platform.select({ ios: s.ios, android: s.android }) || null;
       setStoreUrl(platformUrl);
     }
+
+    setPreseason(isPreseasonFlag(payload?.preseason));
 
     setChecked(true);
   };
@@ -181,5 +185,5 @@ export default function ForceUpdateGate({
     );
   }
 
-  return <>{children}</>;
+  return <PreseasonProvider preseason={preseason}>{children}</PreseasonProvider>;
 }

@@ -17,11 +17,16 @@ import AppHeader from './AppHeader';
 import { useTranslation } from 'react-i18next';
 import { useColors } from './theme';
 import { usePro } from './ProContext';
+import { usePreseason } from './PreseasonContext';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useNavigation } from '@react-navigation/native';
 
 export default function PaywallScreen(props) {
+  const { onClose } = props;
   const { t } = useTranslation();
   const C = useColors();
+  const navigation = useNavigation();
+  const { preseason } = usePreseason();
   const { offerings, purchaseMonthly, purchaseAnnual, restore, isReady } = usePro();
 
   const [appUserId, setAppUserId] = useState(null);
@@ -31,6 +36,18 @@ export default function PaywallScreen(props) {
 
   const isExpoGo = Constants.appOwnership === 'expo';
   const isIOS = Platform.OS === 'ios';
+
+  const handleBack = useCallback(() => {
+    if (typeof onClose === 'function') {
+      onClose();
+      return;
+    }
+    if (navigation?.canGoBack?.()) {
+      navigation.goBack();
+      return;
+    }
+    navigation.navigate(preseason ? 'Planner' : 'Rank');
+  }, [onClose, navigation, preseason]);
 
   // ---- Resolve packages ----
   const monthlyPkg =
@@ -156,6 +173,19 @@ const benefits = [
     <View style={{ flex: 1, backgroundColor: C.bg }}>
       {/* Avoid Go-Pro/Change-ID in this header to prevent recursion/overlap */}
       <AppHeader showGoPro={false} showChangeId={false} />
+
+      <View style={styles.backRow}>
+        <TouchableOpacity
+          onPress={handleBack}
+          style={[styles.backBtn, { borderColor: C.border, backgroundColor: C.card }]}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.close')}
+        >
+          <MaterialCommunityIcons name="arrow-left" size={16} color={C.ink} />
+          <Text style={[styles.backText, { color: C.ink }]}>{t('common.close')}</Text>
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: 24 }]}
@@ -345,6 +375,23 @@ const benefits = [
 }
 
 const styles = StyleSheet.create({
+  backRow: {
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 4,
+    alignItems: 'flex-start',
+  },
+  backBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  backText: { fontSize: 13, fontWeight: '800' },
+
   // small inline “Close” bar for overlay use
   inlineCloseWrap: {
     height: 44,

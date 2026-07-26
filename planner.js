@@ -38,7 +38,7 @@
 // *** 2025-10-01 hotfixes ***
 // - Bank editor (pencil on Bank) — override bank for a GW and propagate forward
 // - Chips expire after GW19; fresh set starts GW20 (per-half usage enforcement)
-// - GW16 starts with 5 Free Transfers
+// - GW1: unlimited transfers; only BB + TC selectable. GW2 starts at 1 FT; WC/FH available from GW2
 // - Search flicker fix: remove debounce; filter directly from raw input
 
 
@@ -68,6 +68,7 @@ import { useFplId } from './FplIdContext';
 import { useColors } from './theme';
 import { clubCrestUri, assetImages } from './clubs';
 import { smartFetch } from './signedFetch';
+import { usePreseason } from './PreseasonContext';
 import AppHeader from './AppHeader';
 import InfoBanner from './InfoBanner';
 import AllPlayersStatsModal from './AllPlayersStatsModal';
@@ -157,8 +158,12 @@ const LINE_H = 12;
 const MAX_FT = 5; // set to 2 if you want classic FPL behavior
 const HIT_COST = 4; // positive UI cost
 const CACHE_TTL_MS = 9600_000;
+const GW1_RESET_FORCE_TTL_MS = 60 * 60 * 1000; // force-fresh snapshot on GW1 reset at most once/hour
+const SNAP_FORCE_GW1_KEY = (id) => `planner_snap_force_gw1_${id}`;
 
 const SNAPSHOT_URL = (id) => `https://livefpl-api-489391001748.europe-west4.run.app/LH_api2/planner/snapshot?id=${id}`;
+// Pre-GW1 every team is the same autopick squad — use this when the user has no ID yet
+const PRESEASON_AUTOPICK_ID = '1';
 const FDR_URL        = 'https://livefpl.us/planner/fdr.json';       // confirmed fixtures only
 const FDR2_URL       = 'https://livefpl.us/fdr2.json';            // projected fixtures (future DGW/BGW may move)
 const FDR_RATINGS_URL= 'https://livefpl.us/planner/fdr_ratings.json';
@@ -173,12 +178,14 @@ const ACTIVE_PLAN_KEY = (id) => `planner_active_plan_${id}`;
 const DEFAULT_PLAN_ID = 'main';
 
 const PREF_MINIS_KEY = 'planner_pref_showMinis';
+const PREF_PRED_EO_KEY = 'planner_pref_showPredictedEo';
 const ZOOM_KEY = 'planner_zoom_v1';
 // New: local FDR override storage
 const FDR_OVERRIDES_KEY = 'planner_fdr_overrides_v1';
 const FDR_CUSTOM_ENABLED_KEY = 'planner_fdr_useCustom_v1';
 const USE_PROJECTED_FIXTURES_KEY = 'planner_use_projected_fixtures_v1';
 const MARKET_AFFORDABLE_KEY = 'planner_market_affordable_only_v1';
+const PREDICTED_EO_URL = (gwNum) => `https://livefpl.us/predictedEOs/${gwNum}.json`;
 // ---- Extended metrics → ranking (overall + by position type) ----
 
 // Hide list consistent with your SeasonStatsModal (no "rank" keys; identity/meta removed)
@@ -699,10 +706,6 @@ function applyTransfersToUserOrder(prevPicks, transfers) {
   }
   return next;
 }
-function surname(full) {
-  const parts = String(full || '').trim().split(/\s+/);
-  return parts.length ? parts[parts.length - 1] : full;
-}
 
 
 // ---- Status & flag helpers (from extended_api.json) ----
@@ -819,6 +822,182 @@ function tinyFixture(label) {
   const opp = s.replace(/\s*\((H|A)\)\s*$/, '');
   return home ? opp.toUpperCase() : opp.toLowerCase();
 }
+
+// Rank-page emoji codes from exposure (mul) vs EO (fraction). Same thresholds as live Rank backend.
+function findEmojiGlyph(code) {
+  const d = { d: '🎲', t: '😴', s: '🕵', ds: '⭐', '': '', f: '🔥', sub: '🔃' };
+  return d[code] || '';
+}
+function emojiFromMulEo({ mul = 0, eoFraction = 0, points = 0, status = 'y', isAutosub = false } = {}) {
+  if (isAutosub) return 'sub';
+  if (!mul) return '';
+  const gain = Number(mul) - Number(eoFraction);
+  if (!(Number.isFinite(gain))) return '';
+  if (gain > 0.75 && points < 5 && status !== 'd' && status !== 'm') return 'd';
+  if (gain > 0.75 && points < 5) return '';
+  if (gain > 0.75) return 'ds';
+  if (gain < 0) return 's';
+  if (gain < 0.15) return 't';
+  if (points > 9) return 'f';
+  return '';
+}
+
+/** Total xDanger = Σ max(0, xEO − mul) over all players. */
+function sumXDanger(predictedEos, mulForPid) {
+  let danger = 0;
+  for (const pidStr of Object.keys(predictedEos || {})) {
+    const eo = Number(predictedEos[pidStr]);
+    if (!Number.isFinite(eo) || eo <= 0) continue;
+    const mul = Number(mulForPid(Number(pidStr)) || 0);
+    danger += Math.max(0, eo - mul);
+  }
+  return danger;
+}
+
+/**
+ * Approx. min/max xDanger for a legal squad within budget (tenths):
+ * 2 GK / 5 DEF / 5 MID / 3 FWD, ≤3 per club, valid XI + C (or TC).
+ * mode 'min' → best template (cover high xEO); 'max' → worst (cover as little as possible).
+ */
+function estimateXDangerBound({
+  predictedEos,
+  types,
+  costs,
+  teams,
+  extendedInfo,
+  budgetTenths,
+  allowTc = false,
+  mode = 'min', // 'min' | 'max'
+}) {
+  const NEED = { 1: 2, 2: 5, 3: 5, 4: 3 };
+  const FORMATIONS = [
+    [1, 5, 4, 1], [1, 5, 3, 2], [1, 5, 2, 3],
+    [1, 4, 5, 1], [1, 4, 4, 2], [1, 4, 3, 3],
+    [1, 3, 5, 2], [1, 3, 4, 3],
+  ];
+  const wantMin = mode !== 'max';
+  const cands = [];
+  for (const pidStr of Object.keys(predictedEos || {})) {
+    const pid = Number(pidStr);
+    const eo = Number(predictedEos[pidStr]);
+    if (!Number.isFinite(eo) || eo < 0) continue;
+    const pos = Number(types?.[pid] ?? types?.[pidStr] ?? 0);
+    if (pos < 1 || pos > 4) continue;
+    const price = Number(costs?.[pid] ?? costs?.[pidStr] ?? 0);
+    if (!(price > 0)) continue;
+    const st = statusMeta(pid, extendedInfo);
+    if (st.status === 'u') continue;
+    const team = teams?.[pid] || teams?.[pidStr] || '';
+    cands.push({
+      pid, eo, pos, price, team,
+      cover1: Math.min(1, eo),
+    });
+  }
+  if (!cands.length) return null;
+
+  // For max danger, prefer low EO (and still fill a legal squad). For min, prefer high EO.
+  const ordered = cands.slice().sort((a, b) => {
+    if (wantMin) return b.eo - a.eo || a.price - b.price;
+    return a.eo - b.eo || a.price - b.price;
+  });
+
+  const pickSquad = () => {
+    const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const teamCount = new Map();
+    const squad = [];
+    let spent = 0;
+    const tryAdd = (list) => {
+      for (const c of list) {
+        if (squad.some((s) => s.pid === c.pid)) continue;
+        if (counts[c.pos] >= NEED[c.pos]) continue;
+        const tc = c.team ? (teamCount.get(c.team) || 0) : 0;
+        if (c.team && tc >= 3) continue;
+        if (spent + c.price > budgetTenths) continue;
+        squad.push(c);
+        counts[c.pos] += 1;
+        spent += c.price;
+        if (c.team) teamCount.set(c.team, tc + 1);
+        if (squad.length >= 15) break;
+      }
+    };
+    tryAdd(ordered);
+    if (squad.length < 15) {
+      // Fill remaining with cheapest legal options
+      tryAdd(cands.slice().sort((a, b) => a.price - b.price || (wantMin ? b.eo - a.eo : a.eo - b.eo)));
+    }
+    return squad.length >= 11 ? squad : null;
+  };
+
+  const squad = pickSquad();
+  if (!squad) return null;
+
+  const byPos = { 1: [], 2: [], 3: [], 4: [] };
+  for (const s of squad) byPos[s.pos].push(s);
+  // XI pick order: high EO for min-danger, low EO for max-danger
+  for (const p of [1, 2, 3, 4]) {
+    byPos[p].sort((a, b) => (wantMin ? b.eo - a.eo : a.eo - b.eo));
+  }
+
+  const capMul = allowTc ? 3 : 2;
+  let bestXI = null;
+  let bestCapId = null;
+  let bestScore = wantMin ? -Infinity : Infinity; // cover when min; cover when max (minimize)
+
+  for (const [ng, nd, nm, nf] of FORMATIONS) {
+    if (byPos[1].length < ng || byPos[2].length < nd || byPos[3].length < nm || byPos[4].length < nf) continue;
+    const xi = [
+      ...byPos[1].slice(0, ng),
+      ...byPos[2].slice(0, nd),
+      ...byPos[3].slice(0, nm),
+      ...byPos[4].slice(0, nf),
+    ];
+    if (xi.length !== 11) continue;
+
+    // Captain: max cover gain for min-danger; min cover gain for max-danger
+    let cap = xi[0];
+    let capGain = wantMin ? -Infinity : Infinity;
+    for (const p of xi) {
+      const gain = Math.min(capMul, p.eo) - Math.min(1, p.eo);
+      if (wantMin ? gain > capGain : gain < capGain) {
+        capGain = gain;
+        cap = p;
+      }
+    }
+    let cover = 0;
+    for (const p of xi) {
+      const mul = p.pid === cap.pid ? capMul : 1;
+      cover += Math.min(mul, p.eo);
+    }
+    if (wantMin ? cover > bestScore : cover < bestScore) {
+      bestScore = cover;
+      bestXI = xi;
+      bestCapId = cap.pid;
+    }
+  }
+  if (!bestXI) {
+    const sorted = squad.slice().sort((a, b) => (wantMin ? b.eo - a.eo : a.eo - b.eo));
+    bestXI = sorted.slice(0, Math.min(11, sorted.length));
+    bestCapId = bestXI[0]?.pid ?? null;
+  }
+
+  const xiSet = new Set(bestXI.map((p) => p.pid));
+  const danger = sumXDanger(predictedEos, (pid) => {
+    if (!xiSet.has(pid)) return 0;
+    return pid === bestCapId ? capMul : 1;
+  });
+
+  return { danger, squadSize: squad.length, capMul };
+}
+
+function estimateMinXDanger(opts) {
+  const r = estimateXDangerBound({ ...opts, mode: 'min' });
+  return r ? { minDanger: r.danger, squadSize: r.squadSize, capMul: r.capMul } : null;
+}
+function estimateMaxXDanger(opts) {
+  const r = estimateXDangerBound({ ...opts, mode: 'max' });
+  return r ? { maxDanger: r.danger, squadSize: r.squadSize, capMul: r.capMul } : null;
+}
+
 function keysNum(obj) {
   return Object.keys(obj || {}).map(Number).filter((n) => !isNaN(n));
 }
@@ -882,7 +1061,9 @@ const closePicker = () => setPicker({ visible: false, type: null });
   const navigation = useNavigation();
   const route = useRoute();
   const { fplId } = useFplId();
-  
+  const { preseason } = usePreseason();
+  // Personal ID if set; otherwise shared autopick while preseason (any ID returns the same squad)
+  const plannerId = fplId || (preseason ? PRESEASON_AUTOPICK_ID : null);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -972,12 +1153,15 @@ const transitionEndedRef = useRef(false);
   // chips modal + preference for tiny fixtures visibility
   const [chipsOpen, setChipsOpen] = useState(false);
   const [showMinis, setShowMinis] = useState(false); // default OFF
+  const [showPredictedEo, setShowPredictedEo] = useState(true); // default ON
+  const [predictedEos, setPredictedEos] = useState(null); // null = no file / not loaded for this GW
 const [settingsOpen, setSettingsOpen] = useState(false);
   // action sheet
   const [actionModal, setActionModal] = useState({ open: false, pid: null, sellText: '' });
 
   // summary + ticker + GW picker
   const [summaryOpen, setSummaryOpen] = useState(false);
+  const [dangersOpen, setDangersOpen] = useState(false);
   const [tickerOpen, setTickerOpen] = useState(false);
   const [tickerLookahead, setTickerLookahead] = useState(5); // lifted so it survives ticker remount when FDR refetches
   const [gwPickerOpen, setGwPickerOpen] = useState(false);
@@ -996,7 +1180,7 @@ const savePlannerState = useCallback(async (id,planId, weeksObj, gwNum, bankOv) 
 }, []);
 
 const switchToPlan = useCallback(async (planId) => {
-  if (!fplId) return;
+  if (!plannerId) return;
 
   const nextId = planId;
 
@@ -1005,17 +1189,17 @@ const switchToPlan = useCallback(async (planId) => {
   setLoading(true);
 
   try {
-    await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(nextId));
+    await AsyncStorage.setItem(ACTIVE_PLAN_KEY(plannerId), String(nextId));
   } catch {}
 
   try {
     const { ai } = await loadStatic();
-    const snap = snapshot || (await loadSnapshot(fplId));
+    const snap = snapshot || (await loadSnapshot(plannerId));
     if (!snapshot) setSnapshot(snap);
 
     let restoredWeeks = null, restoredGw = null, restoredBankOv = {};
     try {
-      const raw = await AsyncStorage.getItem(STATE_KEY(fplId, nextId));
+      const raw = await AsyncStorage.getItem(STATE_KEY(plannerId, nextId));
       if (raw) {
         const saved = JSON.parse(raw);
         restoredWeeks  = saved?.weeks || null;
@@ -1049,7 +1233,7 @@ const switchToPlan = useCallback(async (planId) => {
   } finally {
     setLoading(false);
   }
-}, [fplId, isPro, loadStatic, loadSnapshot, snapshot]);
+}, [plannerId, isPro, loadStatic, loadSnapshot, snapshot]);
 
 // --- Plans: rename / delete helpers (iOS Alert.prompt; Android = modal with TextInput) ---
 const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
@@ -1082,21 +1266,21 @@ const promptPlanName = useCallback((title, message, initialValue, onSubmit) => {
 }, [t]);
 
 const renamePlan = useCallback(async (planId, nextName) => {
-  if (!fplId) return;
+  if (!plannerId) return;
   const name = String(nextName || '').trim();
   if (!name) return;
 
   const nextPlans = plans.map(p => (p.id === planId ? { ...p, name } : p));
   try {
-    await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
+    await AsyncStorage.setItem(PLANS_KEY(plannerId), JSON.stringify(nextPlans));
     setPlans(nextPlans);
   } catch {
     Alert.alert('Planner', 'Failed to rename plan.');
   }
-}, [fplId, plans]);
+}, [plannerId, plans]);
 
 const deletePlan = useCallback(async (planId) => {
-  if (!fplId) return;
+  if (!plannerId) return;
   if (planId === DEFAULT_PLAN_ID) {
     Alert.alert('Planner', 'The Main plan cannot be deleted.');
     return;
@@ -1119,12 +1303,12 @@ const deletePlan = useCallback(async (planId) => {
             : activePlanId;
 
           try {
-            await AsyncStorage.removeItem(STATE_KEY(fplId, planId));
+            await AsyncStorage.removeItem(STATE_KEY(plannerId, planId));
           } catch {}
 
           try {
-            await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
-            await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(nextActive));
+            await AsyncStorage.setItem(PLANS_KEY(plannerId), JSON.stringify(nextPlans));
+            await AsyncStorage.setItem(ACTIVE_PLAN_KEY(plannerId), String(nextActive));
             setPlans(nextPlans);
             setActivePlanId(nextActive);
           } catch {
@@ -1140,10 +1324,10 @@ const deletePlan = useCallback(async (planId) => {
       },
     ]
   );
-}, [fplId, plans, activePlanId, switchToPlan]);
+}, [plannerId, plans, activePlanId, switchToPlan]);
 
 const createNewPlan = useCallback(async () => {
-  if (!fplId) return;
+  if (!plannerId) return;
   if (plans.length >= maxPlans) {
   Alert.alert(
     'Plan limit reached',
@@ -1167,11 +1351,11 @@ const createNewPlan = useCallback(async () => {
       const nextPlans = [...plans, newPlan];
 
       try {
-        await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(nextPlans));
-        await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), newId);
+        await AsyncStorage.setItem(PLANS_KEY(plannerId), JSON.stringify(nextPlans));
+        await AsyncStorage.setItem(ACTIVE_PLAN_KEY(plannerId), newId);
 
         // Start fresh from snapshot (not a clone of current plan)
-const snap = snapshot || (await loadSnapshot(fplId));
+const snap = snapshot || (await loadSnapshot(plannerId));
 if (!snapshot) setSnapshot(snap);
 
 const { ai } = await loadStatic(); // so recomputeAll has ai
@@ -1179,7 +1363,7 @@ const seeded = seedFromSnapshot(snap);
 const recomputed = recomputeAll(seeded.weeks, snap, ai, {});
 const payload = { weeks: recomputed, gw: seeded.gw, bankOverrides: {} };
 
-await AsyncStorage.setItem(STATE_KEY(fplId, newId), JSON.stringify(payload));
+await AsyncStorage.setItem(STATE_KEY(plannerId, newId), JSON.stringify(payload));
 
         setPlans(nextPlans);
         setActivePlanId(newId);
@@ -1191,7 +1375,7 @@ await AsyncStorage.setItem(STATE_KEY(fplId, newId), JSON.stringify(payload));
       }
     }
   );
-}, [fplId, isPro, plans, weeks, gw, bankOverrides, maxPlans, promptPlanName]);
+}, [plannerId, isPro, plans, weeks, gw, bankOverrides, maxPlans, promptPlanName]);
 
 
 
@@ -1442,7 +1626,7 @@ const rankedMetricKeys = extRanks.keys; // e.g. ["assists","bonus","bps","creati
     } catch (_) { /* keep previous fdr on error */ }
   }, []);
 
-  const loadSnapshot = useCallback(async (id, { revalidateIfGwAdvanced = false } = {}) => {
+  const loadSnapshot = useCallback(async (id, { revalidateIfGwAdvanced = false, force = false } = {}) => {
   const cacheKey = `planner_snap_${id}`;
   const now = Date.now();
 
@@ -1458,9 +1642,12 @@ const rankedMetricKeys = extRanks.keys; // e.g. ["assists","bonus","bps","creati
   const cachedHasFreshTTL = cachedJson && (now - cachedJson.t < CACHE_TTL_MS);
   const cachedData = cachedJson?.data?.data;
   const cachedGw = Number(cachedData?.base_gw || cachedData?.gw || cachedData?.start_gw || 0);
+  // Late-season GWs: always hit the network (no AsyncStorage TTL short-circuit)
+  const lateSeasonGw = (g) => g === 38 || g === 39;
+  const bypassCache = force || lateSeasonGw(cachedGw);
 
-  // Fast path: TTL valid and no revalidate request
-  if (cachedHasFreshTTL && !revalidateIfGwAdvanced) {
+  // Fast path: TTL valid and no revalidate / late-season bypass
+  if (cachedHasFreshTTL && !revalidateIfGwAdvanced && !bypassCache) {
     return cachedData;
   }
 
@@ -1472,11 +1659,11 @@ const rankedMetricKeys = extRanks.keys; // e.g. ["assists","bonus","bps","creati
     const freshData = fresh?.data;
     const freshGw = Number(freshData?.base_gw || freshData?.gw || freshData?.start_gw || 0);
 
-    // Save fresh copy
+    // Save fresh copy (still useful as offline fallback)
     try { await AsyncStorage.setItem(cacheKey, JSON.stringify({ t: now, data: fresh })); } catch {}
 
-    // If GW advanced (or cache was stale), return fresh; otherwise keep fresh anyway
-    if (!cachedData || freshGw !== cachedGw || !cachedHasFreshTTL) {
+    // If GW advanced (or cache was stale / late-season), return fresh
+    if (!cachedData || freshGw !== cachedGw || !cachedHasFreshTTL || bypassCache || lateSeasonGw(freshGw)) {
       return freshData;
     }
     // Same GW as cache: returning fresh keeps things consistent
@@ -1492,8 +1679,9 @@ const rankedMetricKeys = extRanks.keys; // e.g. ["assists","bonus","bps","creati
   // new team/id → hide summary & clear undo history
   useEffect(() => {
     setSummaryOpen(false);
+    setDangersOpen(false);
     historyRef.current = [];
-  }, [fplId]);
+  }, [plannerId]);
 // Hourly refresh of static datasets (incl. all_player_info.json)
 useEffect(() => {
   const timer = setInterval(() => {
@@ -1511,32 +1699,79 @@ useEffect(() => {
   return () => clearInterval(timer);
 }, [loadStatic, snapshot, bankOverrides]);
 
-  // preference for minis
+  // Mini fixtures ↔ Predicted EO are exclusive (one on ⇒ other off)
+  const predEoPrefReady = useRef(false);
   useEffect(() => {
     (async () => {
       try {
-        const pref = await AsyncStorage.getItem(PREF_MINIS_KEY);
-        if (pref != null) setShowMinis(pref === '1');
+        const [minisPref, eoPref] = await Promise.all([
+          AsyncStorage.getItem(PREF_MINIS_KEY),
+          AsyncStorage.getItem(PREF_PRED_EO_KEY),
+        ]);
+        let minisOn = minisPref != null ? minisPref === '1' : false;
+        let eoOn = eoPref != null ? eoPref === '1' : true; // default ON
+        if (minisOn && eoOn) {
+          // Prefer EO if both were somehow saved on
+          minisOn = false;
+        }
+        setShowMinis(minisOn);
+        setShowPredictedEo(eoOn);
       } catch {}
+      predEoPrefReady.current = true;
     })();
   }, []);
   useEffect(() => {
+    if (!predEoPrefReady.current) return;
     (async () => {
       try { await AsyncStorage.setItem(PREF_MINIS_KEY, showMinis ? '1' : '0'); } catch {}
     })();
   }, [showMinis]);
+  useEffect(() => {
+    if (!predEoPrefReady.current) return;
+    (async () => {
+      try { await AsyncStorage.setItem(PREF_PRED_EO_KEY, showPredictedEo ? '1' : '0'); } catch {}
+    })();
+  }, [showPredictedEo]);
+
+  // Load predicted EOs for the current planner GW (404 → no file for far-future GWs)
+  useEffect(() => {
+    let cancelled = false;
+    const gwNum = Number(gw);
+    if (!Number.isFinite(gwNum) || gwNum < 1) {
+      setPredictedEos(null);
+      return undefined;
+    }
+    (async () => {
+      try {
+        const resp = await fetch(PREDICTED_EO_URL(gwNum));
+        if (!resp.ok) {
+          if (!cancelled) setPredictedEos(null);
+          return;
+        }
+        const data = await resp.json();
+        if (!cancelled) setPredictedEos(data && typeof data === 'object' ? data : null);
+      } catch {
+        if (!cancelled) setPredictedEos(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [gw]);
 
 
 useEffect(() => {
   let mounted = true;
   (async () => {
+    if (!plannerId) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       // 1) Static datasets (returns ai etc so we don't wait on state setters)
       const { ai } = await loadStatic();
 
       // 2) Snapshot (uses your cache+TTL logic)
-      const snap = await loadSnapshot(fplId);
+      const snap = await loadSnapshot(plannerId);
       if (!mounted) return;
       setSnapshot(snap);
 
@@ -1546,7 +1781,7 @@ let plansList = [{ id: DEFAULT_PLAN_ID, name: 'Main', createdAt: Date.now() }];
 let desiredPlanId = DEFAULT_PLAN_ID;
 
 try {
-  const rawPlans = await AsyncStorage.getItem(PLANS_KEY(fplId));
+  const rawPlans = await AsyncStorage.getItem(PLANS_KEY(plannerId));
   if (rawPlans) {
     const parsed = JSON.parse(rawPlans);
     if (Array.isArray(parsed) && parsed.length) plansList = parsed;
@@ -1554,7 +1789,7 @@ try {
 } catch {}
 
 // Always default to Main on restart (ignore saved active plan)
-try { await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(DEFAULT_PLAN_ID)); } catch {}
+try { await AsyncStorage.setItem(ACTIVE_PLAN_KEY(plannerId), String(DEFAULT_PLAN_ID)); } catch {}
 desiredPlanId = DEFAULT_PLAN_ID;
 
 // Enforce plan limit (handles downgrade from Pro -> Free)
@@ -1566,12 +1801,12 @@ if (!isPro && plansList.length > FREE_MAX_PLANS) {
   plansList = main ? [main, rest[0]].filter(Boolean) : plansList.slice(0, FREE_MAX_PLANS);
 
   // Persist trimmed list
-  try { await AsyncStorage.setItem(PLANS_KEY(fplId), JSON.stringify(plansList)); } catch {}
+  try { await AsyncStorage.setItem(PLANS_KEY(plannerId), JSON.stringify(plansList)); } catch {}
 
   // If active plan got trimmed away, pick the first allowed and persist it too
   if (!plansList.some(p => p.id === desiredPlanId)) {
     desiredPlanId = plansList[0]?.id || DEFAULT_PLAN_ID;
-    try { await AsyncStorage.setItem(ACTIVE_PLAN_KEY(fplId), String(desiredPlanId)); } catch {}
+    try { await AsyncStorage.setItem(ACTIVE_PLAN_KEY(plannerId), String(desiredPlanId)); } catch {}
   }
 }
 
@@ -1589,15 +1824,15 @@ let restoredWeeks = null, restoredGw = null, restoredBankOv = {};
 
 // Legacy single-plan migration: if old key exists and new main doesn't, copy it once.
 try {
-  const legacy = await AsyncStorage.getItem(`planner_state_${fplId}`);
-  const mainNew = await AsyncStorage.getItem(STATE_KEY(fplId, DEFAULT_PLAN_ID));
+  const legacy = await AsyncStorage.getItem(`planner_state_${plannerId}`);
+  const mainNew = await AsyncStorage.getItem(STATE_KEY(plannerId, DEFAULT_PLAN_ID));
   if (legacy && !mainNew) {
-    await AsyncStorage.setItem(STATE_KEY(fplId, DEFAULT_PLAN_ID), legacy);
+    await AsyncStorage.setItem(STATE_KEY(plannerId, DEFAULT_PLAN_ID), legacy);
   }
 } catch {}
 
 try {
-  const raw = await AsyncStorage.getItem(STATE_KEY(fplId, desiredPlanId));
+  const raw = await AsyncStorage.getItem(STATE_KEY(plannerId, desiredPlanId));
   if (raw) {
     const saved = JSON.parse(raw);
     restoredWeeks  = saved?.weeks || null;
@@ -1627,7 +1862,7 @@ if (restoredWeeks && Object.keys(restoredWeeks).length) {
     } catch (e) {
       // Fallback: seed minimally if anything failed
       try {
-        const snap = await loadSnapshot(fplId);
+        const snap = await loadSnapshot(plannerId);
         const seeded = seedFromSnapshot(snap);
         setSnapshot(snap);
         setWeeks(recomputeAll(seeded.weeks, snap, null));
@@ -1638,13 +1873,13 @@ if (restoredWeeks && Object.keys(restoredWeeks).length) {
     }
   })();
   return () => { mounted = false; };
-}, [fplId, loadStatic, loadSnapshot,isPro]);
+}, [plannerId, loadStatic, loadSnapshot,isPro]);
 useEffect(() => {
-  if (!fplId) return;
+  if (!plannerId) return;
   // avoid saving half-initialized state during boot
   if (loading) return;
-  savePlannerState(fplId, activePlanId, weeks, gw, bankOverrides);
-}, [fplId, weeks, gw, bankOverrides, loading, savePlannerState,activePlanId]);
+  savePlannerState(plannerId, activePlanId, weeks, gw, bankOverrides);
+}, [plannerId, weeks, gw, bankOverrides, loading, savePlannerState,activePlanId]);
 
 function capFromSnapshot(snap) {
   if (!snap) return null;
@@ -1725,7 +1960,8 @@ function capFromSnapshot(snap) {
 
   const baseGwNum = useMemo(() => Number(snapshot?.base_gw || snapshot?.gw || snapshot?.start_gw || 1), [snapshot]);
 
-  // >>>>>>>>>> CORE: recompute with bank overrides, chip-halves, GW16 FT=5
+  // >>>>>>>>>> CORE: recompute with bank overrides, chip-halves
+  // GW1: unlimited FT; only BB/TC chips. GW2 starts at 1 FT. No GW16 FT reset.
   function recomputeAll(inputWeeks, snap, pinfo,bankOv) {
     if (!snap) return inputWeeks || {};
     const costsMap = pinfo?.costs || {};
@@ -1737,7 +1973,10 @@ const ov = bankOv || bankOverrides || {};
     let carry = {
       picks: (snap.picks || []).slice(),
       bank: Number(snap.bank || 0),
-      ft: Number(snap.FT || 1),
+      // GW1 unlimited; GW2 always 1 FT; otherwise use snapshot FT
+      ft: startGw === 1
+        ? Number.POSITIVE_INFINITY
+        : (startGw === 2 ? 1 : Number(snap.FT || 1)),
       bought: { ...(snap.bought_values || {}) },
       sellOverrides: {},
       cap: capFromSnapshot(snap),
@@ -1754,11 +1993,11 @@ const ov = bankOv || bankOverrides || {};
       // Merge persistent overrides
       const overridesThisWeek = { ...(carry.sellOverrides || {}), ...(prevUserWeek.sellOverrides || {}) };
 
-      // Base state, applying GW16 FT reset and bank override
+      // Base state + bank override. GW1 unlimited FT; GW2 always exactly 1 FT.
       let base = {
         picks: carry.picks.slice(),
         bank: carry.bank,
-        ft: (g === 16 ? 5 : carry.ft), // GW16 reset to 5 FT
+        ft: g === 1 ? Number.POSITIVE_INFINITY : (g === 2 ? 1 : carry.ft),
         bought: { ...carry.bought },
         sellOverrides: overridesThisWeek,
         cap: carry.cap,
@@ -1768,6 +2007,10 @@ const ov = bankOv || bankOverrides || {};
 
       // Respect half-season chip limits (first set GW1–19, second GW20–38)
       let chip = prevUserWeek.chip || null;
+      // GW1: only Bench Boost + Triple Captain are allowed
+      if (g === 1 && chip && chip !== 'bboost' && chip !== '3xc') {
+        chip = null;
+      }
       if (chip) {
         if (g >= 20) {
           if (usedSecond.has(chip)) chip = null; else usedSecond.add(chip);
@@ -1798,7 +2041,9 @@ const { used, ins, bankAfter, boughtNext, sellOverridesNext } = netImpact(base, 
 // Final bank should always reflect transfers
 const bankFinal = bankAfter;
 
-      const hits = (chip === 'freehit' || chip === 'wildcard') ? 0 : Math.max(0, used - base.ft) * HIT_COST;
+      const hits = (g === 1 || chip === 'freehit' || chip === 'wildcard')
+        ? 0
+        : Math.max(0, used - (Number.isFinite(base.ft) ? base.ft : 0)) * HIT_COST;
 
 
  // One-time GW-start snapshot (before ANY transfers in this GW)
@@ -1832,7 +2077,8 @@ const bankFinal = bankAfter;
 
       out[g] = weekObj;
 
-      const ftNext = nextFT(base.ft, used, chip);
+      // After GW1 (unlimited), GW2 always starts with 1 FT
+      let ftNext = g === 1 ? 1 : nextFT(base.ft, used, chip);
       if (chip === 'freehit') {
         // After FH, next GW must restore to the team from the week BEFORE FH (start of FH week = carry from previous GW).
         // Use base (state at start of this GW), not preFH/gwStart, so we never rely on a stale __gwStart__ or API snapshot.
@@ -2009,6 +2255,8 @@ if (
     };
   }, [snapshot]);
 function chipBaseAvailForGW(code, gwNum) {
+   // GW1: only Bench Boost + Triple Captain (WC/FH unlock from GW2)
+   if (Number(gwNum) === 1 && code !== 'bboost' && code !== '3xc') return false;
    // Always respect snapshot chips_available (API tells us which chips are still left)
    return !!baseChipAvail[code];
  }
@@ -2020,6 +2268,7 @@ function chipBaseAvailForGW(code, gwNum) {
     return !used;
   }
   function chipStatusLabel(code, gwNum, onHere) {
+    if (Number(gwNum) === 1 && code !== 'bboost' && code !== '3xc') return 'N/A';
     if (!chipBaseAvailForGW(code, gwNum)) return 'USED';
     const half = gwNum >= 20 ? 'h2' : 'h1';
     const used = (chipsUsageHalf[half].get(code) || []).some(g => g !== gwNum);
@@ -2316,7 +2565,7 @@ closeMarket();
   }
 
   // Safe reset: remove target+future and re-seed if needed
-  function resetFromGW(targetGw) {
+  function applyResetFromGW(targetGw, snap) {
     pushHistory({ type: 'reset-from-gw', gw: targetGw });
     setWeeks(prev => {
    // 1) prune weeks
@@ -2332,11 +2581,50 @@ closeMarket();
 
    const remainingKeys = keysNum(candidate);
    if (remainingKeys.length === 0) {
-     const seeded = seedFromSnapshot(snapshot);
-     return recomputeAll(seeded.weeks, snapshot, playersInfo, prunedOverrides);
+     const seeded = seedFromSnapshot(snap);
+     return recomputeAll(seeded.weeks, snap, playersInfo, prunedOverrides);
    }
-   return recomputeAll(candidate, snapshot, playersInfo, prunedOverrides);
+   return recomputeAll(candidate, snap, playersInfo, prunedOverrides);
  });
+  }
+  function resetFromGW(targetGw) {
+    const snapGw = Number(snapshot?.base_gw || snapshot?.gw || snapshot?.start_gw || 0);
+    const isLateSeason =
+      targetGw === 38 || targetGw === 39 || snapGw === 38 || snapGw === 39;
+    const isGw1Reset = targetGw === 1 || snapGw === 1;
+    if (!isLateSeason && !isGw1Reset) {
+      applyResetFromGW(targetGw, snapshot);
+      return;
+    }
+    // GW38/39: always force-fetch. GW1: force-fetch at most once per hour.
+    (async () => {
+      try {
+        setLoading(true);
+        const id = plannerId;
+        if (isGw1Reset && !isLateSeason) {
+          let lastForce = 0;
+          try {
+            const raw = await AsyncStorage.getItem(SNAP_FORCE_GW1_KEY(id));
+            lastForce = Number(raw) || 0;
+          } catch {}
+          if (Date.now() - lastForce < GW1_RESET_FORCE_TTL_MS) {
+            applyResetFromGW(targetGw, snapshot);
+            return;
+          }
+        }
+        const snap = await loadSnapshot(id, { force: true });
+        setSnapshot(snap);
+        if (isGw1Reset) {
+          try { await AsyncStorage.setItem(SNAP_FORCE_GW1_KEY(id), String(Date.now())); } catch {}
+        }
+        applyResetFromGW(targetGw, snap);
+      } catch (e) {
+        // Fall back to in-memory snapshot if network fails
+        applyResetFromGW(targetGw, snapshot);
+      } finally {
+        setLoading(false);
+      }
+    })();
   }
   function resetFromCurrentGW() { resetFromGW(gw); }
 
@@ -2511,9 +2799,9 @@ const ratingRgbFromBase = useMemo(() => {
       try {
         setLoading(true);
         setError(null);
-        const id = fplId || (await AsyncStorage.getItem('fplId'));
+        const id = plannerId;
         if (!id) {
-          navigation.navigate('Change ID');
+          navigation.navigate('ID');
           setLoading(false);
           return;
         }
@@ -2566,7 +2854,7 @@ const ratingRgbFromBase = useMemo(() => {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fplId, navigation, loadSnapshot, loadStatic]);
+  }, [plannerId, navigation, loadSnapshot, loadStatic]);
 
   useEffect(() => {
     if (!weeks || gw == null) return;
@@ -2725,6 +3013,25 @@ statsTd: { flex: 0.2, color: C.ink, fontWeight:'700', fontSize:12, flexWrap:'wra
         minHeight: 10,
         paddingVertical: 1,
         borderLeftWidth: StyleSheet.hairlineWidth, borderRightWidth: StyleSheet.hairlineWidth, borderColor: C.border,
+      },
+      predEoBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: IMG_W_BASE,
+        overflow: 'hidden',
+        backgroundColor: isDark ? '#243B5A' : 'lightgreen',
+        minHeight: LINE_H,
+      },
+      predEoTxt: {
+        fontSize: 8, lineHeight: LINE_H, includeFontPadding: false,
+        textAlign: 'center',
+        color: isDark ? '#FFFFFF' : 'black',
+        flexShrink: 1,
+      },
+      predEoEmoji: {
+        fontSize: 8, lineHeight: LINE_H, includeFontPadding: false,
+        marginLeft: 1,
       },
 
       // NAV row
@@ -3147,20 +3454,27 @@ kpiTitleCompact: {
         justifyContent: 'center',
       },
       chipPill: {
-  position: 'absolute',
-  top: 62,
-  left: 18,
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 6,
-  paddingHorizontal: 10,
-  paddingVertical: 6,
-  borderRadius: 10,
-  borderWidth: 1,
-  borderColor: C.border,
-  backgroundColor: C.card,
-},
-chipPillTxt: { color: C.ink, fontWeight: '800', fontSize: 11, maxWidth: 160 },
+        position: 'absolute',
+        // Below pitch LiveFPL logo, above GK row
+        top: Math.max(56, Math.round(rowHeight * 0.62)),
+        left: 18,
+        zIndex: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: C.border,
+        backgroundColor: C.card,
+        maxWidth: 120,
+        ...Platform.select({
+          ios: { shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },
+          android: { elevation: 3 },
+        }),
+      },
+      chipPillTxt: { color: C.ink, fontWeight: '800', fontSize: 11, maxWidth: 100 },
 
       // FDR editor
       editorCard: { width: Math.min(SCREEN_W-16, 700), maxHeight: SCREEN_H*0.6, backgroundColor: C.bg, borderRadius: 16, borderWidth:1, borderColor:C.border, overflow:'hidden' },
@@ -3175,24 +3489,19 @@ chipPillTxt: { color: C.ink, fontWeight: '800', fontSize: 11, maxWidth: 160 },
   // ---------- top UI ----------
   const TopBar = () => {
     const used = Number(current?.used || 0);
-    const ftShown = (current?.chip === 'freehit' || current?.chip === 'wildcard') ? '∞' : (current?.ft ?? 1);
+    const ftShown = (
+      gw === 1 ||
+      current?.chip === 'freehit' ||
+      current?.chip === 'wildcard' ||
+      !Number.isFinite(Number(current?.ft))
+    ) ? '∞' : (current?.ft ?? 1);
 
     const rawCost = Math.max(0, Number(current?.hits || 0));
     const cost = rawCost ? -rawCost : 0;
-      const bankTenths = Number(current?.bank || 0); // <- add this
-const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || current.chip}`)) : t('planner.noChip');
+    const bankTenths = Number(current?.bank || 0);
 
   return (
     <View style={S.topBar}>
-      {/* 👇 Tiny chip box (left of Transfers) */}
-      <TouchableOpacity
-        onPress={() => setChipsOpen(true)}
-        style={S.chipMini}
-        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-      >
-        
-        <Text style={S.chipMiniTxt} numberOfLines={1}>{chipLabel}</Text>
-      </TouchableOpacity>
         <View style={S.card}>
           <Text style={S.cardTitle}>{t('planner.transfers')}</Text>
           <Text style={S.cardValue}>{`${used}/${ftShown}`}</Text>
@@ -3223,6 +3532,33 @@ const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || curre
           <Text style={S.cardTitle}>{t('planner.cost')}</Text>
           <Text style={[S.cardValue, cost < 0 && { color: '#ef4444' }]}>{cost}</Text>
         </View>
+
+        <TouchableOpacity
+          style={S.card}
+          onPress={() => setDangersOpen(true)}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={t('planner.templateRating')}
+        >
+          <Text style={S.cardTitle}>{t('planner.templateRating')}</Text>
+          <Text
+            style={[
+              S.cardValue,
+              {
+                color: !templateRating ? C.muted
+                  : templateRating.pct >= 85 ? '#22c55e'
+                  : templateRating.pct >= 70 ? '#eab308'
+                  : templateRating.pct >= 50 ? '#f97316' : '#ef4444',
+                fontSize: 14,
+              },
+            ]}
+            numberOfLines={1}
+          >
+            {templateRating
+              ? `${templateRating.emoji} ${Math.round(templateRating.pct)}%`
+              : '—'}
+          </Text>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -3241,6 +3577,15 @@ const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || curre
           <Text style={S.navTxt}>{t('planner.gameweekNum', { n: gw })}</Text>
         </TouchableOpacity>
 
+        <TouchableOpacity
+          style={[S.navBtn, { flex: 0, paddingHorizontal: 10, borderColor: '#ef4444' }]}
+          onPress={resetFromCurrentGW}
+          accessibilityLabel={t('planner.reset')}
+        >
+          <MaterialCommunityIcons name="backup-restore" size={16} color="#ef4444" />
+          <Text style={[S.navTxt, { color: '#ef4444' }]}>{t('planner.reset')}</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity style={S.navBtn} onPress={() => setGw(Math.min(maxGw, gw + 1))}>
           <Text style={S.navTxt}>{t('planner.next')}</Text>
           <Ionicons name="chevron-forward" size={16} color={C.ink} />
@@ -3255,13 +3600,13 @@ const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || curre
         <MaterialCommunityIcons name="clipboard-text-outline" size={18} color={C.ink} />
         <Text style={S.iconBtnLabel}>{t('planner.summary')}</Text>
       </TouchableOpacity>
+      <TouchableOpacity style={S.iconBtn} onPress={() => setDangersOpen(true)}>
+        <MaterialCommunityIcons name="skull-crossbones-outline" size={18} color={C.ink} />
+        <Text style={S.iconBtnLabel}>{t('planner.xDangers')}</Text>
+      </TouchableOpacity>
       <TouchableOpacity style={S.iconBtn} onPress={() => setTickerOpen(true)}>
         <MaterialCommunityIcons name="chart-timeline-variant" size={18} color={C.ink} />
         <Text style={S.iconBtnLabel}>{t('planner.ticker')}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity style={S.iconBtn} onPress={resetFromCurrentGW}>
-        <MaterialCommunityIcons name="backup-restore" size={18} color="#ef4444" />
-        <Text style={[S.iconBtnLabel, { color: '#ef4444' }]}>{t('planner.reset')}</Text>
       </TouchableOpacity>
       <TouchableOpacity
   style={S.iconBtn}
@@ -3304,11 +3649,22 @@ const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || curre
     const firstGW = fixtureGWs[0];
     const big = firstGW?.fixtures?.[0]; // First fixture of first GW
     const miniGWs = fixtureGWs.slice(1, 4); // Next 3 GWs for mini display
+    const showEoBar = showPredictedEo && predictedEos != null;
+    const showMiniRow = !showEoBar && showMinis && miniGWs.length > 0;
+    const predEoRaw = predictedEos?.[String(pid)] ?? predictedEos?.[pid];
+    const predEoPct = Number(predEoRaw);
+    const predEoLabel = Number.isFinite(predEoPct)
+      ? `xEO: ${predEoPct > 0 ? Math.round(predEoPct * 100) : (predEoPct * 100).toFixed(1)}%`
+      : 'xEO: —';
     const inXI = current?.picks?.slice(0, 11).includes(pid);
-    const isNew = newInsSet.has(pid);
+    const isNew = gw !== 1 && newInsSet.has(pid);
     const tcOn = current?.chip === '3xc';
     const isCap = current?.cap === pid;
     const isVice = current?.vice === pid;
+    const exposureMul = !inXI ? 0 : isCap ? (tcOn ? 3 : 2) : 1;
+    const eoEmoji = (showPredictedEo && Number.isFinite(predEoPct))
+      ? findEmojiGlyph(emojiFromMulEo({ mul: exposureMul, eoFraction: predEoPct, points: 0, status: 'y' }))
+      : '';
 
     const wStyle = isBenchRow ? S.playerImageBench : S.playerImage;
     const canReceiveBench = isBenchRow && benchFrom && isValidBenchTarget(pid);
@@ -3426,11 +3782,25 @@ const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || curre
           </Text>
         )}
 
-        <Text numberOfLines={1} ellipsizeMode="clip" allowFontScaling={false} style={[S.priceBar, !showMinis && S.bottomRounded]}>
+        <Text numberOfLines={1} ellipsizeMode="clip" allowFontScaling={false} style={[S.priceBar, !showEoBar && !showMiniRow && S.bottomRounded]}>
           {money(getSellPriceTenths(pid))}
         </Text>
 
-        {showMinis && miniGWs.length > 0 && (
+        {showEoBar ? (
+          <View style={[S.predEoBar, S.bottomRounded]}>
+            <Text
+              numberOfLines={1}
+              ellipsizeMode="clip"
+              allowFontScaling={false}
+              style={S.predEoTxt}
+            >
+              {predEoLabel}
+            </Text>
+            {!!eoEmoji && (
+              <Text allowFontScaling={false} style={S.predEoEmoji}>{eoEmoji}</Text>
+            )}
+          </View>
+        ) : showMiniRow ? (
           <View style={[S.miniRow, S.bottomRounded]}>
             {miniGWs.map((gwData, gwIdx) => {
               if (gwData.isBlank) {
@@ -3468,7 +3838,7 @@ const chipLabel = current?.chip ? (t(`planner.${CHIP_KEYS[current.chip] || curre
               </View>
             ))}
           </View>
-        )}
+        ) : null}
       </View>
     );
   };
@@ -5090,6 +5460,7 @@ const friendlyLabelForStat = (key) => {
   if (!key) return '';
   if (/^now_?cost$/i.test(key)) return 'Price';
   if (String(key) === 'total_points') return 'Total points';
+  if (String(key) === 'predicted_eo') return 'xEO';
   const s = String(key).replace(/_/g, ' ');
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
@@ -5103,6 +5474,14 @@ const statDefs = useMemo(() => {
         label: friendlyLabelForStat('now_cost'),
         format: (v) =>
           v == null || isNaN(v) ? '—' : `£${(v / 10).toFixed(1)}`,
+      },
+      {
+        key: 'predicted_eo',
+        label: friendlyLabelForStat('predicted_eo'),
+        format: (v) =>
+          v == null || !Number.isFinite(Number(v)) || Number(v) < 0
+            ? '—'
+            : `${Number(v) > 0 ? Math.round(Number(v)) : Number(v).toFixed(1)}%`,
       },
     ];
   }
@@ -5139,12 +5518,22 @@ const statDefs = useMemo(() => {
   const ordered = topKeys.map((t) => t.k).concat(restNonPct, restPct);
 
   if (!ordered.includes('now_cost')) ordered.unshift('now_cost');
+  // Predicted EO (from livefpl.us/predictedEOs/{gw}.json) — sort key near top
+  if (!ordered.includes('predicted_eo')) {
+    const tpIdx = ordered.indexOf('total_points');
+    ordered.splice(tpIdx >= 0 ? tpIdx + 1 : 1, 0, 'predicted_eo');
+  }
 
   return ordered.map((k) => ({
     key: k,
     label: friendlyLabelForStat(k),
     format:
-      /^now_?cost$/i.test(k) || /price/i.test(k)
+      k === 'predicted_eo'
+        ? (v) =>
+            v == null || !Number.isFinite(Number(v)) || Number(v) < 0
+              ? '—'
+              : `${Number(v) > 0 ? Math.round(Number(v)) : Number(v).toFixed(1)}%`
+        : /^now_?cost$/i.test(k) || /price/i.test(k)
         ? (v) =>
             v == null || isNaN(v)
               ? '—'
@@ -5269,6 +5658,8 @@ const TransferMarketModal = React.memo(() => {
       const price = Number(costs[pid] || 0);
 
       const st = statusMeta(pid, extendedInfo);
+      const predEoRaw = predictedEos?.[String(pid)] ?? predictedEos?.[pid];
+      const predEoFrac = Number(predEoRaw);
       const row = {
         id: pid,
         name: playersInfo.players[pid],
@@ -5278,6 +5669,8 @@ const TransferMarketModal = React.memo(() => {
         _flag: st.flag,
         teamName: teamNameByPid?.[pid] || '',
         _fixtureGWs: nextFixtures(pid, gw),
+        // percent for sorting/display; -1 = missing (sorts last when descending)
+        predicted_eo: Number.isFinite(predEoFrac) ? predEoFrac * 100 : -1,
       };
 
       const activeSortKey = marketSort;
@@ -5291,6 +5684,7 @@ const TransferMarketModal = React.memo(() => {
 
       // assign metrics (prefer extended_api)
       for (const { key } of statDefs) {
+        if (key === 'predicted_eo') continue; // already set from predictedEos
         if (extRow && Object.prototype.hasOwnProperty.call(extRow, key)) {
           let v = Number(extRow[key]);
           if (!Number.isFinite(v)) v = 0;
@@ -5309,7 +5703,7 @@ const TransferMarketModal = React.memo(() => {
     }).filter(Boolean);
 
     return entries;
-  }, [playersInfo, current, transferMode, teamNameByPid, costs, statDefs, outId, gw, nextFixtures, types, pos, extendedInfo, effectivePos, marketSort]);
+  }, [playersInfo, current, transferMode, teamNameByPid, costs, statDefs, outId, gw, nextFixtures, types, pos, extendedInfo, effectivePos, marketSort, predictedEos, statsMode]);
 
   const availableTeams = useMemo(() => {
     const names = new Set();
@@ -5368,9 +5762,9 @@ const TransferMarketModal = React.memo(() => {
             <Text style={S.rInlinePrice}>{` • ${POS_NAME[item.pos]} • ${money(item.price)}`}</Text>
           </View>
 
-          {!!item._fixtureGWs?.length && (
+          {(!!item._fixtureGWs?.length || (item.predicted_eo != null && item.predicted_eo >= 0)) && (
             <View style={[S.marketMiniRow, { gap: 6, alignItems:'flex-start' }]}>
-              {item._fixtureGWs.slice(0, 5).map((gwData, gwIdx) => {
+              {(item._fixtureGWs || []).slice(0, 5).map((gwData, gwIdx) => {
                 if (gwData.isBlank) {
                   return (
                     <View key={`${item.id}-gw${gwIdx}`} style={{ flexDirection: 'column', minWidth: 32 }}>
@@ -5417,6 +5811,25 @@ const TransferMarketModal = React.memo(() => {
                   </View>
                 );
               })}
+              {item.predicted_eo != null && item.predicted_eo >= 0 && (
+                <Text
+                  numberOfLines={1}
+                  style={{
+                    textAlign: 'center',
+                    fontSize: 8,
+                    fontWeight: '800',
+                    paddingHorizontal: 5,
+                    paddingVertical: 3,
+                    borderRadius: 6,
+                    backgroundColor: 'rgba(34,197,94,0.22)',
+                    color: C.ink,
+                    minHeight: 18,
+                    alignSelf: 'flex-start',
+                  }}
+                >
+                  {`xEO ${item.predicted_eo > 0 ? Math.round(item.predicted_eo) : item.predicted_eo.toFixed(1)}%`}
+                </Text>
+              )}
             </View>
           )}
 
@@ -5428,7 +5841,11 @@ const TransferMarketModal = React.memo(() => {
         </View>
 
         <Text style={S.rPrice}>
-          {/^costs?$/i.test(marketSort) || /price/i.test(marketSort)
+          {marketSort === 'predicted_eo'
+            ? (item.predicted_eo != null && item.predicted_eo >= 0
+                ? `${item.predicted_eo > 0 ? Math.round(item.predicted_eo) : item.predicted_eo.toFixed(1)}%`
+                : '—')
+            : /^costs?$/i.test(marketSort) || /price/i.test(marketSort)
             ? (Number(item[marketSort]) / 10).toFixed(1)
             : (Number.isFinite(item[marketSort]) ? item[marketSort] : '')
           }
@@ -5664,8 +6081,11 @@ const TransferMarketModal = React.memo(() => {
         }
         out.push({
           g,
-          transfers: collapseTransfers(w.transfers || [])
-  .map(([o, i]) => `${namesById?.[o] ?? o} → ${namesById?.[i] ?? i}`),
+          // GW1 squad is the starting XI — never show transfers in the season summary
+          transfers: g === 1
+            ? []
+            : collapseTransfers(w.transfers || [])
+                .map(([o, i]) => `${namesById?.[o] ?? o} → ${namesById?.[i] ?? i}`),
 
 
           chip: w.chip || null,
@@ -5733,6 +6153,282 @@ const TransferMarketModal = React.memo(() => {
       </View>
     );
   };
+
+  // ---------- xDangers: players + top defensive units where xEO exceeds exposure ----------
+  const exposureMulFor = useCallback((pid, xiSet, capId, tcOn) => {
+    if (!xiSet.has(Number(pid))) return 0;
+    return (Number(capId) === Number(pid)) ? (tcOn ? 3 : 2) : 1;
+  }, []);
+
+  const xDangersList = useMemo(() => {
+    if (!playersInfo?.players || !predictedEos) return [];
+    const picks = (current?.picks || []).map(Number);
+    const owned = new Set(picks);
+    const xiSet = new Set(picks.slice(0, 11));
+    const tcOn = current?.chip === '3xc';
+    const capId = current?.cap != null ? Number(current.cap) : null;
+    const out = [];
+    for (const pidStr of Object.keys(playersInfo.players)) {
+      const pid = Number(pidStr);
+      if (!Number.isFinite(pid)) continue;
+      const eoFrac = Number(predictedEos[String(pid)] ?? predictedEos[pid]);
+      if (!Number.isFinite(eoFrac)) continue;
+      const mul = exposureMulFor(pid, xiSet, capId, tcOn);
+      const danger = eoFrac - mul; // xEO − mul
+      if (danger <= 0) continue;
+      const st = statusMeta(pid, extendedInfo);
+      if (st.status === 'u') continue;
+      const dangerPct = danger * 100;
+      let emoji = '';
+      if (dangerPct > 50) emoji = '💀';
+      else if (dangerPct > 30) emoji = '😈';
+      out.push({
+        id: pid,
+        name: playersInfo.players[pid] || namesById?.[pid] || String(pid),
+        pos: types?.[pid],
+        price: Number(costs?.[pid] || 0),
+        teamName: teamNameByPid?.[pid] || '',
+        eoPct: eoFrac * 100,
+        dangerPct,
+        mul,
+        owned: owned.has(pid),
+        emoji,
+        _flag: st.flag,
+      });
+    }
+    out.sort((a, b) => b.dangerPct - a.dangerPct);
+    return out.slice(0, 100);
+  }, [playersInfo, predictedEos, current?.picks, current?.cap, current?.chip, extendedInfo, types, costs, teamNameByPid, namesById, exposureMulFor]);
+
+  // Top 3 clubs by combined GK+DEF (xEO − mul)
+  const xDangerDefenses = useMemo(() => {
+    if (!playersInfo?.players || !predictedEos || !types) return [];
+    const picks = (current?.picks || []).map(Number);
+    const xiSet = new Set(picks.slice(0, 11));
+    const tcOn = current?.chip === '3xc';
+    const capId = current?.cap != null ? Number(current.cap) : null;
+    const byTeam = new Map(); // teamName -> { teamName, teamId, dangerFrac, parts: [] }
+
+    for (const pidStr of Object.keys(playersInfo.players)) {
+      const pid = Number(pidStr);
+      if (!Number.isFinite(pid)) continue;
+      const pos = Number(types?.[pid] ?? types?.[String(pid)] ?? 0);
+      if (pos !== 1 && pos !== 2) continue; // GK + DEF only
+      const eoFrac = Number(predictedEos[String(pid)] ?? predictedEos[pid]);
+      if (!Number.isFinite(eoFrac)) continue;
+      const st = statusMeta(pid, extendedInfo);
+      if (st.status === 'u') continue;
+      const teamName = teamNameByPid?.[pid] || teamNameByPid?.[String(pid)];
+      if (!teamName) continue;
+      const mul = exposureMulFor(pid, xiSet, capId, tcOn);
+      const danger = eoFrac - mul;
+      const teamId = Number(teamNums?.[pid] ?? teamNums?.[String(pid)] ?? 0);
+      let row = byTeam.get(teamName);
+      if (!row) {
+        row = { teamName, teamId, dangerFrac: 0, parts: [] };
+        byTeam.set(teamName, row);
+      }
+      if (!row.teamId && teamId) row.teamId = teamId;
+      row.dangerFrac += danger;
+      row.parts.push({
+        id: pid,
+        name: playersInfo.players[pid] || String(pid),
+        pos,
+        mul,
+        dangerPct: danger * 100,
+      });
+    }
+
+    return Array.from(byTeam.values())
+      .map((r) => {
+        const dangerPct = r.dangerFrac * 100;
+        let emoji = '';
+        if (dangerPct > 50) emoji = '💀';
+        else if (dangerPct > 30) emoji = '😈';
+        return { ...r, dangerPct, emoji };
+      })
+      .filter((r) => r.dangerPct > 0)
+      .sort((a, b) => b.dangerPct - a.dangerPct)
+      .slice(0, 3);
+  }, [playersInfo, predictedEos, types, current?.picks, current?.cap, current?.chip, extendedInfo, teamNameByPid, teamNums, exposureMulFor]);
+
+  // Template % = how close your xDanger sum is to the best affordable template
+  // 100% ⇒ you match (approx) the minimum Σ max(0, xEO−mul) within budget
+  const templateRating = useMemo(() => {
+    if (!predictedEos || !playersInfo) return null;
+    const picks = (current?.picks || []).map(Number);
+    const xiSet = new Set(picks.slice(0, 11));
+    const tcOn = current?.chip === '3xc';
+    const capId = current?.cap != null ? Number(current.cap) : null;
+
+    const yourDanger = sumXDanger(predictedEos, (pid) => exposureMulFor(pid, xiSet, capId, tcOn));
+
+    // Budget = current squad sell value + bank (what you could rebuild with); floor 100.0m
+    let budgetTenths = Number(current?.bank || 0);
+    for (const pid of picks) {
+      budgetTenths += Number(getSellPriceTenths?.(pid) || costs?.[pid] || 0);
+    }
+    if (!(budgetTenths >= 800)) budgetTenths = 1000;
+
+    const optMin = estimateMinXDanger({
+      predictedEos,
+      types,
+      costs,
+      teams: teamNameByPid,
+      extendedInfo,
+      budgetTenths,
+      allowTc: tcOn,
+    });
+    const optMax = estimateMaxXDanger({
+      predictedEos,
+      types,
+      costs,
+      teams: teamNameByPid,
+      extendedInfo,
+      budgetTenths,
+      allowTc: tcOn,
+    });
+    if (!optMin || !optMax) return null;
+
+    const minDanger = Math.max(0, optMin.minDanger);
+    const maxDanger = Math.max(minDanger, optMax.maxDanger);
+    const yours = Math.max(0, yourDanger);
+
+    // 100% at lowest xDanger, 0% at highest, linear in between
+    let pct;
+    const span = maxDanger - minDanger;
+    if (span <= 1e-9) pct = 100;
+    else pct = ((maxDanger - yours) / span) * 100;
+    pct = Math.max(0, Math.min(100, pct));
+
+    const dangerPct = yours * 100;
+    const bestDangerPct = minDanger * 100;
+    const worstDangerPct = maxDanger * 100;
+    let bandKey = 'ultraDiff';
+    let emoji = '🎲';
+    if (pct >= 95) { bandKey = 'veryTemplate'; emoji = '😴'; }
+    else if (pct >= 85) { bandKey = 'template'; emoji = '😴'; }
+    else if (pct >= 70) { bandKey = 'balanced'; emoji = '⚖️'; }
+    else if (pct >= 50) { bandKey = 'differential'; emoji = '🎲'; }
+    return {
+      pct,
+      dangerPct,
+      bestDangerPct,
+      worstDangerPct,
+      budget: budgetTenths / 10,
+      bandKey,
+      emoji,
+    };
+  }, [
+    predictedEos, playersInfo, current?.picks, current?.cap, current?.chip, current?.bank,
+    extendedInfo, exposureMulFor, types, costs, teamNameByPid, getSellPriceTenths,
+  ]);
+
+  const XDangersModal = () => (
+    <View pointerEvents={dangersOpen ? 'auto' : 'none'} style={[S.centerWrap, { display: dangersOpen ? 'flex' : 'none' }]}>
+      <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setDangersOpen(false)} />
+      <View style={S.sumCardCenter}>
+        <View style={S.sumHeader}>
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            <Text style={S.sumTitle}>{t('planner.xDangers')}</Text>
+            <Text style={{ color: C.muted, fontSize: 11, fontWeight: '700', marginTop: 2 }}>
+              {t('planner.xDangersBlurb', { gw: gw ?? '—' })}
+            </Text>
+          </View>
+          <TouchableOpacity style={S.smallBtn} onPress={() => setDangersOpen(false)}>
+            <MaterialCommunityIcons name="close" size={14} color={C.ink} />
+            <Text style={S.smallBtnTxt}>{t('planner.close')}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {!predictedEos ? (
+          <View style={{ padding: 16 }}>
+            <Text style={{ color: C.muted, fontWeight: '700' }}>{t('planner.xDangersNoData')}</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={xDangersList}
+            keyExtractor={(item) => String(item.id)}
+            style={{ maxHeight: SCREEN_H * 0.55 }}
+            ListHeaderComponent={
+              <View style={{ paddingBottom: 6 }}>
+                <Text style={[S.th, { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }]}>
+                  {t('planner.xDangerDefenses')}
+                </Text>
+                {xDangerDefenses.length === 0 ? (
+                  <Text style={{ color: C.muted, fontWeight: '700', paddingHorizontal: 12, paddingBottom: 8, fontSize: 12 }}>
+                    {t('planner.xDangerDefensesEmpty')}
+                  </Text>
+                ) : (
+                  xDangerDefenses.map((d, i) => (
+                    <View key={`def-${d.teamName}`} style={[S.tableRow, { backgroundColor: i === 0 ? 'rgba(239,68,68,0.08)' : 'transparent' }]}>
+                      <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                        <Text style={[S.td, { width: 22, color: C.muted }]}>{i + 1}</Text>
+                        <Image
+                          source={{ uri: clubCrestUri(d.teamId || 1) }}
+                          style={{ width: 18, height: 18, resizeMode: 'contain' }}
+                        />
+                        <Text style={[S.td, { flexShrink: 1, fontWeight: '900' }]} numberOfLines={1}>
+                          {d.teamName}
+                        </Text>
+                        <Text style={{ color: C.muted, fontSize: 10, fontWeight: '700' }}>
+                          {t('planner.gkDef')}
+                        </Text>
+                        {!!d.emoji && <Text style={{ fontSize: 13 }}>{d.emoji}</Text>}
+                      </View>
+                      <Text style={[S.td, { fontWeight: '900', color: '#ef4444', minWidth: 52, textAlign: 'right' }]}>
+                        {d.dangerPct > 0 ? Math.round(d.dangerPct) : d.dangerPct.toFixed(1)}%
+                      </Text>
+                    </View>
+                  ))
+                )}
+                <Text style={[S.th, { paddingHorizontal: 12, paddingTop: 10, paddingBottom: 4 }]}>
+                  {t('planner.xDangerPlayers')}
+                </Text>
+                <View style={[S.tableRow, { borderTopWidth: StyleSheet.hairlineWidth, borderColor: C.border, marginTop: 0 }]}>
+                  <Text style={[S.th, { flex: 2.8 }]}>{t('planner.player')}</Text>
+                  <Text style={[S.th, { flex: 0.7 }]}>{t('planner.pos')}</Text>
+                  <Text style={[S.th, { flex: 0.9 }]}>{t('planner.price')}</Text>
+                  <Text style={[S.th, { flex: 1.8 }]}>{t('planner.xEoAgainstYou')}</Text>
+                </View>
+              </View>
+            }
+            ListEmptyComponent={
+              <View style={{ padding: 16 }}>
+                <Text style={{ color: C.muted, fontWeight: '700' }}>{t('planner.xDangersEmpty')}</Text>
+              </View>
+            }
+            renderItem={({ item, index }) => (
+              <TouchableOpacity
+                style={S.tableRow}
+                activeOpacity={0.75}
+                onPress={() => {
+                  setDangersOpen(false);
+                  setStatsPid(item.id);
+                  setStatsOpen(true);
+                }}
+              >
+                <View style={{ flex: 2.8, flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <Text style={[S.td, { width: 22, color: C.muted }]}>{index + 1}</Text>
+                  <Image source={{ uri: crestFor(item.id, teamNums) }} style={{ width: 16, height: 16, resizeMode: 'contain' }} />
+                  {!!item._flag && (
+                    <MaterialCommunityIcons name="flag-variant" size={12} color={item._flag.color} />
+                  )}
+                  <Text style={[S.td, { flexShrink: 1 }]} numberOfLines={1}>{item.name}</Text>
+                  {!!item.emoji && <Text style={{ fontSize: 12 }}>{item.emoji}</Text>}
+                </View>
+                <Text style={[S.td, { flex: 0.7 }]}>{POS_NAME[item.pos] || '—'}</Text>
+                <Text style={[S.td, { flex: 0.9 }]}>{money(item.price)}</Text>
+                <Text style={[S.td, { flex: 1.8, fontWeight: '900', color: '#ef4444' }]}>
+                  {item.dangerPct > 0 ? Math.round(item.dangerPct) : item.dangerPct.toFixed(1)}%
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        )}
+      </View>
+    </View>
+  );
 
   // ---------- GW Picker (overlay) ----------
   const GwPickerOverlay = () => (
@@ -5908,7 +6604,7 @@ const sumForTeam = useCallback((team) => {
       for (const pid of picksNow) {
         const t = teamNameByPid?.[pid];
         if (!t) continue;
-        (res[t] ||= []).push(surname(namesById?.[pid] || String(pid)));
+        (res[t] ||= []).push(namesById?.[pid] || String(pid));
       }
       return res;
     }, [picksNow, teamNameByPid, namesById]);
@@ -6238,7 +6934,7 @@ const cycleSort = useCallback(() => {
       setRefreshing(true);
       (async () => {
         try {
-          const id = fplId || (await AsyncStorage.getItem('fplId'));
+          const id = plannerId;
           const snap = await loadSnapshot(id);
           setSnapshot(snap);
           setWeeks((prev) => recomputeAll(prev, snap, playersInfo, bankOverrides));
@@ -6385,6 +7081,19 @@ const clearOverride = () => {
             
 
              <View style={S.pitchWrap}>
+              <TouchableOpacity
+                onPress={() => setChipsOpen(true)}
+                style={S.chipPill}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                accessibilityLabel={t('planner.chips')}
+              >
+                <MaterialCommunityIcons name="poker-chip" size={14} color={C.ink} />
+                <Text style={S.chipPillTxt} numberOfLines={1}>
+                  {current?.chip
+                    ? t(`planner.${CHIP_KEYS[current.chip] || current.chip}`)
+                    : t('planner.noChip')}
+                </Text>
+              </TouchableOpacity>
   {settingsOpen && (
     <View style={S.settingsLayer} pointerEvents="box-none">
     {/* Backdrop that closes on outside press */}
@@ -6419,10 +7128,16 @@ const clearOverride = () => {
             </View>
           </TouchableOpacity>
 
-          {/* Mini fixtures toggle */}
+          {/* Mini fixtures toggle (exclusive with Predicted EO) */}
           <TouchableOpacity
             style={S.settingsBtn}
-            onPress={() => setShowMinis(v => !v)}
+            onPress={() => {
+              setShowMinis((v) => {
+                const next = !v;
+                if (next) setShowPredictedEo(false);
+                return next;
+              });
+            }}
             accessibilityRole="switch"
             accessibilityState={{ checked: showMinis }}
           >
@@ -6433,6 +7148,28 @@ const clearOverride = () => {
                 color={C.ink}
               />
               <Text style={S.settingsTxt}>{t('planner.miniFixtures', { value: showMinis ? t('planner.projectedOn') : t('planner.projectedOff') })}</Text>
+            </View>
+          </TouchableOpacity>
+          {/* Predicted EO (exclusive with mini fixtures) */}
+          <TouchableOpacity
+            style={S.settingsBtn}
+            onPress={() => {
+              setShowPredictedEo((v) => {
+                const next = !v;
+                if (next) setShowMinis(false);
+                return next;
+              });
+            }}
+            accessibilityRole="switch"
+            accessibilityState={{ checked: showPredictedEo }}
+          >
+            <View style={S.settingsBtnInner}>
+              <MaterialCommunityIcons
+                name={showPredictedEo ? 'toggle-switch' : 'toggle-switch-off'}
+                size={22}
+                color={C.ink}
+              />
+              <Text style={S.settingsTxt}>{t('planner.predictedEo', { value: showPredictedEo ? t('planner.projectedOn') : t('planner.projectedOff') })}</Text>
             </View>
           </TouchableOpacity>
           {/* Projected fixtures (future DGW/BGW) vs confirmed only */}
@@ -6534,6 +7271,7 @@ const clearOverride = () => {
         
         
         <SummaryModal />
+        <XDangersModal />
         <TickerOverlay />
         <SeasonStatsModal />
         <PlayerInfoModal
@@ -6648,7 +7386,7 @@ const clearOverride = () => {
         visible={comparePlansOpen}
         onClose={() => setComparePlansOpen(false)}
         plans={plans}
-        fplId={fplId}
+        fplId={plannerId}
         namesById={namesById}
         teamNums={teamNums}
         getFixtureLabel={getFixtureLabel}

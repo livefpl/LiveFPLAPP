@@ -18,6 +18,7 @@ import { useFplId } from './FplIdContext';
 import { useTranslation } from 'react-i18next';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors, useTheme } from './theme';
+import { usePreseason } from './PreseasonContext';
 import ThemedTextInput from './ThemedTextInput';
 
 /* --- Helpers --- */
@@ -84,6 +85,7 @@ export default function ChangeID() {
   const { fplId, updateFplId } = useFplId();
   const { mode, setMode } = useTheme();   // global theme sync
   const C = useColors();
+  const { preseason } = usePreseason();
 
   const isDark = useMemo(() => {
     const hex = String(C.bg || '#000000').replace('#', '');
@@ -149,7 +151,7 @@ export default function ChangeID() {
       await updateFplId(trimmed);
       navigation.dispatch(
         CommonActions.navigate({
-          name: 'Rank',
+          name: preseason ? 'Planner' : 'Rank',
           params: {},
           merge: false,
         })

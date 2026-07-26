@@ -36,7 +36,13 @@ function fmtMs(ms) {
   return `${m}m`;
 }
 
-export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
+export default function AdFooter({
+  routeKey = 'unknown',
+  onGoPremium,
+  adUnitId = AD_ALIAS,
+  instanceKey = 'primary',
+  mountDelayMs = 1500,
+}) {
   const { t } = useTranslation();
   const C = useColors();
   const { isPro } = usePro();
@@ -94,9 +100,9 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
   };
 
   useEffect(() => {
-    const t = setTimeout(() => setCanMountBanner(true), 1500);
+    const t = setTimeout(() => setCanMountBanner(true), mountDelayMs);
     return () => clearTimeout(t);
-  }, []);
+  }, [mountDelayMs]);
 
   useEffect(() => {
     if (sdkReady && !sdkReadyAt) setSdkReadyAt(Date.now());
@@ -369,8 +375,8 @@ export default function AdFooter({ routeKey = 'unknown', onGoPremium }) {
         {/* Keep banner mounted. No opacity hacks. */}
         <View pointerEvents={showPlaceholder ? 'none' : 'auto'}>
           <LazyPlaywireBanner
-            key={`pw_banner_${bannerKey}`}
-            adUnitId={AD_ALIAS}
+            key={`pw_banner_${instanceKey}_${bannerKey}`}
+            adUnitId={adUnitId}
             size={BANNER_SIZE}
             style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}
             onAdLoaded={onLoaded}

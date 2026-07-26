@@ -507,7 +507,33 @@
     "zoomOut": "Verkleinern",
     "zoomIn": "Vergrößern",
     "share": "Teilen",
-    "sharePlannerImage": "Planer-Bild teilen"
+    "sharePlannerImage": "Planer-Bild teilen",
+    "xDangerDefenses": "Zu-Null-Spiele, die deinen Rang treffen könnten",
+    "xDangers": "xDangers",
+    "xDangersBlurb": "GW{{gw}} · 💀 >50% · 😈 >30%",
+    "xDangersNoData": "Noch keine prognostizierte EO-Datei für diesen GW.",
+    "xDangersEmpty": "Keine Bedrohungen, bei denen xEO deine Exposure schlägt.",
+    "xEoAgainstYou": "xEO gegen dich",
+    "xDangerDefensesEmpty": "Keine Abwehr-Bedrohungen für diesen GW.",
+    "gkDef": "TW+ABW",
+    "templateRating": "Template",
+    "templateNoEo": "Template-Wertung braucht prognostizierte EO für diesen GW.",
+    "templateDangerHint": "xDanger {{n}}%",
+    "templateOwnedHint": "{{owned}}/{{total}} hohe xEO im Besitz",
+    "templateVsBest": "xDanger {{yours}}% · best ~{{best}}%",
+    "templateScale": "du {{yours}}% · best {{best}}% · worst {{worst}}%",
+    "templateBand": {
+      "veryTemplate": "Sehr Template",
+      "template": "Template",
+      "balanced": "Ausgewogen",
+      "differential": "Differential",
+      "ultraDiff": "Ultra-Differential"
+    },
+    "player": "Spieler",
+    "pos": "Pos",
+    "price": "Preis",
+    "predictedEo": "Prognostizierte EO: {{value}}",
+    "xDangerPlayers": "Spieler, die deinen Rang treffen könnten"
   },
   "whatif": {
     "liveRank": "Live-Rang",
@@ -847,5 +873,9 @@
     "fr": "Français",
     "de": "Deutsch",
     "id": "Indonesia"
+  },
+  "preseason": {
+    "title": "Vorsaison",
+    "message": "Live-Funktionen und das Verknüpfen deiner FPL-ID sind erst nach der Deadline von Spielwoche 1 verfügbar."
   }
 }
