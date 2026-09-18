@@ -220,7 +220,8 @@
     "emojiStar": "⭐ نجم — تفاضلك يواصل النقاط.",
     "emojiSub": "🔃 بديل — الابدال التلقائي.",
     "changeId": "تغيير المعرف",
-    "closeSettings": "إغلاق الإعدادات"
+    "closeSettings": "إغلاق الإعدادات",
+    "openAdDebugger": "فتح مدقق الإعلانات (Freestar)"
   },
   "paywall": {
     "checkingStatus": "جاري التحقق…",

@@ -36,7 +36,8 @@ import { setApiTier } from './signedFetch';
   import { FplIdProvider, useFplId } from './FplIdContext';
   import { prefetchRankData } from './Rank';
   import '@react-native-firebase/app';
-  import { initPlaywire, retryPlaywireInit, getPlaywireInitDebug, isPlaywireReady } from './playwireInit';
+  import { initAds, retryAdsInit, getAdsInitDebug, isAdsReady, showMediationDebugger } from './adsInit';
+  import { BANNER_AD_UNIT_ID } from './adsConfig';
 
   import messaging from '@react-native-firebase/messaging';
 
@@ -482,23 +483,7 @@ function BannerTestScreen() {
   const [busy, setBusy] = useState(false);
 
   const BANNER_SIZE = { width: 320, height: 50 };
-  const AD_ALIAS = 'banner-320x50';
-
-  const getPlaywireConfig = () => {
-    const publisherId =
-      process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
-      require('./app.json').expo.extra.playwire.publisherId;
-
-    const iosAppId =
-      process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID ||
-      require('./app.json').expo.extra.playwire.iosAppId;
-
-    const androidAppId =
-      process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
-      require('./app.json').expo.extra.playwire.androidAppId;
-
-    return { publisherId, iosAppId, androidAppId };
-  };
+  const AD_ALIAS = BANNER_AD_UNIT_ID;
 
   const remount = () => {
     setLastErr(null);
@@ -542,9 +527,7 @@ function BannerTestScreen() {
       setLastErr(null);
       setInterstitialRes(null);
 
-      const cfg = getPlaywireConfig();
-      // Attempt re-init (no-op on iOS 17 and earlier or if already ready)
-      retryPlaywireInit(cfg);
+      retryAdsInit();
 
       // Force a hard remount of the native view:
       // unmount -> small delay -> mount + new key
@@ -598,15 +581,14 @@ function BannerTestScreen() {
     </TouchableOpacity>
   );
 
-  const initDbg = getPlaywireInitDebug();
+  const initDbg = getAdsInitDebug();
 
   return (
     <View style={[styles.adTestRoot, { backgroundColor: C.bg }]}>
       <View style={[styles.adTestCard, { backgroundColor: C.card, borderColor: C.border }]}>
         <Text style={[styles.adTestTitle, { color: C.ink }]}>Ad Banner Test</Text>
         <Text style={[styles.adTestSub, { color: C.muted }]}>
-          This screen mounts a single Playwire banner (320×50). Use “Force Re-init + Remount” to
-          simulate a bad run recovery.
+          Freestar / AppLovin MAX test. Banner is 320×50. Use Mediation Debugger for adapter review.
         </Text>
 
         <View style={styles.adTestRow}>
@@ -620,6 +602,7 @@ function BannerTestScreen() {
           {/* New */}
           {pill('Force Re-init + Remount', forceReinitAndRemount)}
           {pill('Show Interstitial', showInterstitial)}
+          {pill('Mediation Debugger', () => showMediationDebugger())}
         </View>
 
         <View style={styles.adTestStats}>
@@ -674,17 +657,17 @@ function BannerTestScreen() {
         <View style={[styles.adTestBannerBox, { borderColor: C.border, backgroundColor: C.bg }]}>
           {mounted ? (
             (() => {
-              const { PlaywireBannerView } = require('@intergi/react-native-playwire-sdk');
+              const { AdView, AdFormat } = require('react-native-applovin-max');
               return (
-                <PlaywireBannerView
-                  key={`pw_banner_test_${bannerKey}_${initDbgTick}`}
+                <AdView
+                  key={`max_banner_test_${bannerKey}_${initDbgTick}`}
                   adUnitId={AD_ALIAS}
-                  size={BANNER_SIZE}
+                  adFormat={AdFormat.BANNER}
                   style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}
                   onAdLoaded={onLoaded}
-                  onAdFailedToLoad={onFailed}
-                  onAdImpression={onImpression}
+                  onAdLoadFailed={onFailed}
                   onAdClicked={onClicked}
+                  onAdRevenuePaid={onImpression}
                 />
               );
             })()
@@ -730,30 +713,16 @@ function BannerTestScreen() {
   }, []);
 
   useEffect(() => {
-  const publisherId =
-    process.env.EXPO_PUBLIC_PLAYWIRE_PUBLISHER_ID ||
-    require('./app.json').expo.extra.playwire.publisherId;
+    initAds();
 
-  const iosAppId =
-    process.env.EXPO_PUBLIC_PLAYWIRE_IOS_APP_ID ||
-    require('./app.json').expo.extra.playwire.iosAppId;
+    const t = setTimeout(() => {
+      if (!isAdsReady()) {
+        retryAdsInit();
+      }
+    }, 8000);
 
-  const androidAppId =
-    process.env.EXPO_PUBLIC_PLAYWIRE_ANDROID_APP_ID ||
-    require('./app.json').expo.extra.playwire.androidAppId;
-
-  // Try immediately
-  initPlaywire({ publisherId, iosAppId, androidAppId });
-
-  // Watchdog: if init callback never arrives, retry
-  const t = setTimeout(() => {
-    if (!isPlaywireReady()) {
-      retryPlaywireInit({ publisherId, iosAppId, androidAppId });
-    }
-  }, 8000);
-
-  return () => clearTimeout(t);
-}, []);
+    return () => clearTimeout(t);
+  }, []);
 
 
 

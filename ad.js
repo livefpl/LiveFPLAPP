@@ -1,21 +1,32 @@
-// ad.js — lazy-loads Playwire SDK for the banner view
+// ad.js — lazy-loads AppLovin MAX banner for the Freestar test build
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, Text, Platform, TouchableOpacity, Linking } from 'react-native';
 import { usePro } from './ProContext';
 import { getInterstitialDebugState } from './AdInterstitial';
+import { BANNER_AD_UNIT_ID } from './adsConfig';
 import { useTranslation } from 'react-i18next';
 import { useTheme, useColors } from './theme';
 import { useNavigation } from '@react-navigation/native';
 
 export const AD_FOOTER_HEIGHT = 50;
 
-function LazyPlaywireBanner(props) {
-  const { PlaywireBannerView } = require('@intergi/react-native-playwire-sdk');
-  return <PlaywireBannerView {...props} />;
+function LazyMaxBanner(props) {
+  const { AdView, AdFormat } = require('react-native-applovin-max');
+  return (
+    <AdView
+      adUnitId={props.adUnitId}
+      adFormat={AdFormat.BANNER}
+      style={props.style}
+      onAdLoaded={props.onAdLoaded}
+      onAdLoadFailed={props.onAdLoadFailed}
+      onAdClicked={props.onAdClicked}
+      onAdRevenuePaid={props.onAdImpression}
+    />
+  );
 }
 
 const BANNER_SIZE = { width: 320, height: 50 };
-const AD_ALIAS = 'banner-320x50';
+const AD_ALIAS = BANNER_AD_UNIT_ID;
 
 // Debug HUD toggle (leave false in prod)
 const AD_DEBUG_FOOTER = false;
@@ -51,7 +62,7 @@ export default function AdFooter({
   const { navTheme } = useTheme();
   const isDark = navTheme?.dark;
 
-  // SDK ready hint (set by your Playwire init)
+  // SDK ready hint (set by MAX init)
   const [sdkReady, setSdkReady] = useState(
     () => getInterstitialDebugState().initializedHint === 'yes'
   );
@@ -114,11 +125,11 @@ export default function AdFooter({
     return () => clearInterval(id);
   }, []);
 
-  // Become ready when Playwire is ready
+  // Become ready when MAX is ready
   useEffect(() => {
     if (sdkReady) return;
-    const { onPlaywireReady } = require('./playwireInit');
-    onPlaywireReady(() => setSdkReady(true));
+    const { onAdsReady } = require('./adsInit');
+    onAdsReady(() => setSdkReady(true));
   }, [sdkReady]);
 
   // When we become mountable, kick off the first request
@@ -337,7 +348,7 @@ export default function AdFooter({
 
   const debugLines = AD_DEBUG_FOOTER
     ? [
-        `PW banner dbg | ${Platform.OS} | route=${routeKey}`,
+        `MAX banner dbg | ${Platform.OS} | route=${routeKey}`,
         `sdkReady=${sdkReady ? 'yes' : 'no'} (${sdkReadyAt ? fmtMs(nowTick - sdkReadyAt) : '—'})  canMount=${canMountBanner ? 'yes' : 'no'}`,
         `status=${bannerStatus}  last=${lastEventAt ? fmtMs(nowTick - lastEventAt) : '—'}`,
         `loads=${loads}  fails=${fails}  timeouts=${timeouts}  impr=${impr}  clicks=${clicks}`,
@@ -374,13 +385,12 @@ export default function AdFooter({
       <View style={styles.bannerFrame}>
         {/* Keep banner mounted. No opacity hacks. */}
         <View pointerEvents={showPlaceholder ? 'none' : 'auto'}>
-          <LazyPlaywireBanner
-            key={`pw_banner_${instanceKey}_${bannerKey}`}
+          <LazyMaxBanner
+            key={`max_banner_${instanceKey}_${bannerKey}`}
             adUnitId={adUnitId}
-            size={BANNER_SIZE}
             style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}
             onAdLoaded={onLoaded}
-            onAdFailedToLoad={onFailed}
+            onAdLoadFailed={onFailed}
             onAdImpression={onImpression}
             onAdClicked={onClicked}
           />

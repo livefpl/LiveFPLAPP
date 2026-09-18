@@ -223,7 +223,8 @@
     "emojiStar": "⭐ Star — Your differential delivering the points.",
     "emojiSub": "🔃 Sub — Autosubbed.",
     "changeId": "Change ID",
-    "closeSettings": "Close settings"
+    "closeSettings": "Close settings",
+    "openAdDebugger": "Open ad debugger (Freestar)"
   },
   "paywall": {
     "checkingStatus": "Checking status…",

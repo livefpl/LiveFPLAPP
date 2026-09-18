@@ -1,21 +1,21 @@
 {
   "expo": {
     "updates": {
-      "enabled": true,
+      "enabled": false,
       "checkAutomatically": "ON_LOAD",
       "fallbackToCacheTimeout": 0,
       "url": "https://u.expo.dev/602bdbe9-4f3d-4b57-89ad-ccd361c5ba16"
     },
     "name": "LiveFPL",
     "slug": "snack-ff015f15-372f-48a4-a54d-e0dc668b6d1b",
-    "version": "2.6.7",
-    "runtimeVersion": "2.6.7",
+    "version": "2.6.10",
+    "runtimeVersion": "2.6.10-freestar",
     "orientation": "portrait",
     "icon": "./icon.png",
     "android": {
       "package": "com.pocketgamerguides.livefpl",
       "googleServicesFile": "./google-services.json",
-      "versionCode": 15,
+      "versionCode": 9002,
       "adaptiveIcon": {
         "foregroundImage": "./adaptive-foreground-1024.png",
         "backgroundImage": "./adaptive-background-1024.png"
@@ -31,11 +31,11 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.pocketgamerguides.livefpl",
       "googleServicesFile": "./GoogleService-Info.plist",
-      "buildNumber": "15",
+      "buildNumber": "9002",
       "infoPlist": {
 	"GADIsAdManagerApp": true,
         "ITSAppUsesNonExemptEncryption": false,
-	"GADApplicationIdentifier": "ca-app-pub-6531503260671471~4892993394",
+	"GADApplicationIdentifier": "ca-app-pub-8061946413537984~4171878940",
         "NSUserTrackingUsageDescription": "This identifier is used to show you relevant, less intrusive ads and to measure ad performance."
       }
     },
@@ -44,11 +44,10 @@
       "eas": {
         "projectId": "602bdbe9-4f3d-4b57-89ad-ccd361c5ba16"
       },
-      "playwire": {
-        "publisherId": "1025271",
-        "iosAppId": "704",
-        "androidAppId": "726",
-        "githubUser": "livefpl"
+      "freestar": {
+        "sdkKey": "hO52kFtMvEo_AoeRzED0_XXfS1B1VQp9GW50yudJO-eUUTOmRBLl3c-2GyTevLNspll_fN5PLTbAHOakoTuHuP",
+        "gadApplicationId": "ca-app-pub-8061946413537984~4171878940",
+        "androidApplicationId": "ca-app-pub-8061946413537984~5484960613"
       }
     },
     "plugins": [
@@ -63,13 +62,11 @@
       "expo-font",
       
       "expo-tracking-transparency",
-      ["./plugins/withAppLovinPin", { "version": "13.4.0" }],
-
       [
-        "./plugins/with-playwire",
+        "./plugins/with-freestar-max",
         {
-          "gadApplicationId": "ca-app-pub-6531503260671471~4892993394",
-          "androidApplicationId": "ca-app-pub-6531503260671471~2921270248",
+          "gadApplicationId": "ca-app-pub-8061946413537984~4171878940",
+          "androidApplicationId": "ca-app-pub-8061946413537984~5484960613",
           "adManagerApp": true,
           "skadItems": [
             {
@@ -653,7 +650,10 @@
             "newArchEnabled": false,
             "compileSdkVersion": 36,
             "targetSdkVersion": 36,
-            "buildToolsVersion": "36.0.0"
+            "buildToolsVersion": "36.0.0",
+            "extraMavenRepos": [
+              "https://maven.ogury.co"
+            ]
           }
         }
       ],

@@ -35,3 +35,13 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# Generated native projects (EAS/CNG)
+/android
+/ios
+/freestar-review
+*.apk
+/LiveFPL-Freestar-review.zip
+eas-builds-status.json
+ios-build.json
+ios-submit-debug.log

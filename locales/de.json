@@ -219,7 +219,8 @@
     "emojiStar": "⭐ Star — Dein Differenzial, der die Punkte liefert.",
     "emojiSub": "🔃 Ersatz — Autosub.",
     "changeId": "ID ändern",
-    "closeSettings": "Einstellungen schließen"
+    "closeSettings": "Einstellungen schließen",
+    "openAdDebugger": "Anzeigen-Debugger öffnen (Freestar)"
   },
   "paywall": {
     "checkingStatus": "Status wird geprüft…",

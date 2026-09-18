@@ -219,7 +219,8 @@
     "emojiStar": "⭐ Bintang — Diferensial Anda yang mencetak poin.",
     "emojiSub": "🔃 Sub — Autosub.",
     "changeId": "Ubah ID",
-    "closeSettings": "Tutup pengaturan"
+    "closeSettings": "Tutup pengaturan",
+    "openAdDebugger": "Buka debugger iklan (Freestar)"
   },
   "paywall": {
     "checkingStatus": "Memeriksa status…",
