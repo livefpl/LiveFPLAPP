@@ -73,12 +73,11 @@ const fold = (s = '') =>
     .replace(/œ/g, 'oe')
     .replace(/ł/g, 'l');
 
-const computeCountdownToNext0130UTC = () => {
+const computeCountdownToNextMidnightUTC = () => {
   const now = new Date();
-  const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 1, 30, 0, 0));
+  const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
   let next = base;
-  const afterCut = now.getUTCHours() > 1 || (now.getUTCMinutes() >= 30 && now.getUTCHours() === 1);
-  if (afterCut) next = new Date(base.getTime() + 24 * 60 * 60 * 1000);
+  if (now >= base) next = new Date(base.getTime() + 24 * 60 * 60 * 1000);
   const diffMs = Math.max(0, next - now);
   const total = Math.floor(diffMs / 1000);
   const h = Math.floor(total / 3600);
@@ -215,7 +214,7 @@ function usePricesData() {
   const sFetch = smartFetch;
   const [players, setPlayers] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
-  const [countdown, setCountdown] = useState(computeCountdownToNext0130UTC());
+  const [countdown, setCountdown] = useState(computeCountdownToNextMidnightUTC());
   const [onlyAbove1Pct, setOnlyAbove1Pct] = useState(true);
   const [eoMap, setEoMap] = useState(new Map());
   const [watchlist, setWatchlist] = useState(new Set());
@@ -274,7 +273,7 @@ function usePricesData() {
   }, []);
 
   useEffect(() => {
-    const id = setInterval(() => setCountdown(computeCountdownToNext0130UTC()), 1000);
+    const id = setInterval(() => setCountdown(computeCountdownToNextMidnightUTC()), 1000);
     return () => clearInterval(id);
   }, []);
 
@@ -2068,6 +2067,7 @@ function ActualTab({ ui, data }) {
 
   const [q, setQ] = useState('');
   const [dir, setDir] = useState('all'); // all | up | down
+  const [showAllLatest, setShowAllLatest] = useState(false);
 
   const load = useCallback(async (force = false) => {
     try {
@@ -2101,6 +2101,10 @@ function ActualTab({ ui, data }) {
     load(false);
   }, [load]);
 
+  useEffect(() => {
+    setShowAllLatest(false);
+  }, [dir, q]);
+
   const grouped = useMemo(() => {
     const rows = Array.isArray(payload?.rows) ? payload.rows : [];
     const qq = fold(q.trim());
@@ -2118,6 +2122,8 @@ function ActualTab({ ui, data }) {
 
   const latest = grouped?.[0];
   const rest = grouped?.slice(1) || [];
+  const latestRows = latest?.rows || [];
+  const latestVisible = showAllLatest ? latestRows : latestRows.slice(0, 10);
 
   const SegBtn = ({ id, label }) => {
     const active = dir === id;
@@ -2226,14 +2232,22 @@ function ActualTab({ ui, data }) {
               </Text>
             </View>
 
-            {latest.rows.slice(0, 10).map((r, idx) => (
+            {latestVisible.map((r, idx) => (
               <ActualRow key={`${r.date}-${r.player_id}-${r.direction}-${idx}`} item={r} C={C} isDark={isDark} />
             ))}
 
-            {latest.rows.length > 10 && (
-              <Text style={{ color: isDark ? C.muted : '#64748b', fontWeight: '800', marginTop: 4 }}>
-                {t('prices.moreInLatestDay', { count: latest.rows.length - 10 })}
-              </Text>
+            {latestRows.length > 10 && (
+              <TouchableOpacity
+                onPress={() => setShowAllLatest((v) => !v)}
+                activeOpacity={0.85}
+                style={{ paddingVertical: 8, alignItems: 'center' }}
+              >
+                <Text style={{ color: isDark ? C.accent : '#2563eb', fontWeight: '800' }}>
+                  {showAllLatest
+                    ? t('prices.showLess')
+                    : t('prices.showAllChanges', { count: latestRows.length })}
+                </Text>
+              </TouchableOpacity>
             )}
           </View>
         ) : (
@@ -2371,7 +2385,7 @@ export default function PricesV2() {
           >
             <Text style={{ color: isDark ? '#cbd5e1' : '#334155', fontSize: 12, textAlign: 'center' }}>
               {t('prices.moveAt')}{' '}
-              <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>01:30 UTC</Text>. {t('prices.nextWindowIn')}{' '}
+              <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>{t('prices.midnightUtc')}</Text>. {t('prices.nextWindowIn')}{' '}
               <Text style={{ fontWeight: '800', color: isDark ? '#e6eefc' : '#0f172a' }}>{data.countdown}</Text>. {t('prices.transferTrendsAt')}{' '}
               <Text onPress={() => Linking.openURL('https://www.livefpl.net/prices')}>www.livefpl.net/prices</Text>
             </Text>

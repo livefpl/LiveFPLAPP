@@ -16,7 +16,6 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, useColors } from './theme';
-import { showMediationDebugger } from './adsInit';
 
 export default function SettingsModal({
   visible,
@@ -260,15 +259,6 @@ export default function SettingsModal({
 
 
           <View style={styles.divider} />
-
-          <Pressable
-            style={styles.idBtn}
-            onPress={() => showMediationDebugger()}
-            accessibilityRole="button"
-            accessibilityLabel={t('settings.openAdDebugger')}
-          >
-            <Text style={styles.idText}>{t('settings.openAdDebugger')}</Text>
-          </Pressable>
 
           {/* Links */}
           <Text style={[styles.glossItem, { marginTop: 6 }]}>

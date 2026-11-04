@@ -12,6 +12,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { setConfig } from './meter';
 import { PreseasonProvider, isPreseasonFlag } from './PreseasonContext';
+import { setCrestCacheBust } from './clubs';
 
 const STORAGE_LAST_CHECK = 'version.lastCheckAt';
 const STORAGE_LAST_SEEN  = 'version.lastSeen';
@@ -60,6 +61,9 @@ export default function ForceUpdateGate({
     }
 
     setPreseason(isPreseasonFlag(payload?.preseason));
+
+    const kits = payload && typeof payload === 'object' ? payload.kits : null;
+    setCrestCacheBust(kits);
 
     setChecked(true);
   };

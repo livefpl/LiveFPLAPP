@@ -36,8 +36,7 @@ import { setApiTier } from './signedFetch';
   import { FplIdProvider, useFplId } from './FplIdContext';
   import { prefetchRankData } from './Rank';
   import '@react-native-firebase/app';
-  import { initAds, retryAdsInit, getAdsInitDebug, isAdsReady, showMediationDebugger } from './adsInit';
-  import { BANNER_AD_UNIT_ID } from './adsConfig';
+  import { initAds, retryAdsInit, isAdsReady } from './adsInit';
 
   import messaging from '@react-native-firebase/messaging';
 
@@ -90,7 +89,7 @@ import { setApiTier } from './signedFetch';
   TextInput.defaultProps = TextInput.defaultProps || {};
   TextInput.defaultProps.allowFontScaling = false;
 
-  const LOCAL_BUILD = 7;
+  const LOCAL_BUILD = 9;
   const CONFIG_URL = 'https://livefpl.us/version.json';
   const DEFAULT_REMOTE_VERSION = 1;
 
@@ -252,8 +251,6 @@ import { setApiTier } from './signedFetch';
             <PopItem icon="medal" label={t('moreMenu.gameweekTrophies')} target="Trophies" blockedInPreseason />
             <PopItem icon="account-edit" label={t('moreMenu.changeFplId')} target="ID" blockedInPreseason />
             <PopItem icon="crown" label={t('moreMenu.premiumRemoveAds')} target="Premium" />
-            {String(fplId) === '114740' && (<PopItem icon="advertisements" label={t('moreMenu.adBannerTest')} target="AdTest" />
-            )}
           </View>
         </View>
       );
@@ -450,240 +447,11 @@ import { setApiTier } from './signedFetch';
             component={Paywallscreen}
             options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
           />
-          <Tab.Screen
-            name="AdTest"
-            component={BannerTestScreen}
-            options={{ tabBarButton: () => null, tabBarIcon: () => null, tabBarLabel: () => null }}
-          />
         </Tab.Navigator>
       </>
     );
   }
 
-
-
-  /* -------- Banner-only test screen -------- */
-  /* -------- Banner-only test screen -------- */
-function BannerTestScreen() {
-  const C = useColors();
-
-  const [mounted, setMounted] = useState(true);
-  const [bannerKey, setBannerKey] = useState(0);
-
-  const [status, setStatus] = useState('loading'); // loading | loaded | failed | idle
-  const [loads, setLoads] = useState(0);
-  const [fails, setFails] = useState(0);
-  const [impr, setImpr] = useState(0);
-  const [clicks, setClicks] = useState(0);
-  const [lastErr, setLastErr] = useState(null);
-
-  // New: init/interstitial debug
-  const [initDbgTick, setInitDbgTick] = useState(0);
-  const [interstitialRes, setInterstitialRes] = useState(null);
-  const [busy, setBusy] = useState(false);
-
-  const BANNER_SIZE = { width: 320, height: 50 };
-  const AD_ALIAS = BANNER_AD_UNIT_ID;
-
-  const remount = () => {
-    setLastErr(null);
-    setStatus('loading');
-    setBannerKey((k) => k + 1);
-  };
-
-  const resetCounters = () => {
-    setLoads(0);
-    setFails(0);
-    setImpr(0);
-    setClicks(0);
-    setLastErr(null);
-    setInterstitialRes(null);
-    setStatus(mounted ? 'loading' : 'idle');
-  };
-
-  const onLoaded = () => {
-    setLoads((x) => x + 1);
-    setStatus('loaded');
-  };
-
-  const onFailed = (e) => {
-    setFails((x) => x + 1);
-    setStatus('failed');
-
-    const msg =
-      typeof e === 'string'
-        ? e
-        : e?.message || e?.error || e?.nativeEvent?.message || JSON.stringify(e || {});
-    setLastErr(String(msg).slice(0, 260));
-  };
-
-  const onImpression = () => setImpr((x) => x + 1);
-  const onClicked = () => setClicks((x) => x + 1);
-
-  const forceReinitAndRemount = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      setLastErr(null);
-      setInterstitialRes(null);
-
-      retryAdsInit();
-
-      // Force a hard remount of the native view:
-      // unmount -> small delay -> mount + new key
-      setMounted(false);
-      setStatus('idle');
-
-      setTimeout(() => {
-        setBannerKey((k) => k + 1);
-        setMounted(true);
-        setStatus('loading');
-        setInitDbgTick((t) => t + 1);
-      }, 250);
-    } finally {
-      setTimeout(() => setBusy(false), 350);
-    }
-  };
-
-  const showInterstitial = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      setInterstitialRes(null);
-      const res = await showOnce({ reason: 'adtest_button', force: true });
-      setInterstitialRes(res || { shown: false, provider: 'unknown' });
-    } catch (e) {
-      setInterstitialRes({
-        shown: false,
-        provider: 'exception',
-        reason: String(e?.message || e).slice(0, 140),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const pill = (label, onPress) => (
-    <TouchableOpacity
-      onPress={onPress}
-      disabled={busy}
-      activeOpacity={0.9}
-      style={[
-        styles.adTestBtn,
-        {
-          backgroundColor: C.card,
-          borderColor: C.border,
-          opacity: busy ? 0.6 : 1,
-        },
-      ]}
-    >
-      <Text style={[styles.adTestBtnText, { color: C.ink }]}>{label}</Text>
-    </TouchableOpacity>
-  );
-
-  const initDbg = getAdsInitDebug();
-
-  return (
-    <View style={[styles.adTestRoot, { backgroundColor: C.bg }]}>
-      <View style={[styles.adTestCard, { backgroundColor: C.card, borderColor: C.border }]}>
-        <Text style={[styles.adTestTitle, { color: C.ink }]}>Ad Banner Test</Text>
-        <Text style={[styles.adTestSub, { color: C.muted }]}>
-          Freestar / AppLovin MAX test. Banner is 320×50. Use Mediation Debugger for adapter review.
-        </Text>
-
-        <View style={styles.adTestRow}>
-          {pill('Remount', remount)}
-          {pill(mounted ? 'Unmount' : 'Mount', () => {
-            setMounted((m) => !m);
-            setStatus((s) => (mounted ? 'idle' : 'loading'));
-          })}
-          {pill('Reset', resetCounters)}
-
-          {/* New */}
-          {pill('Force Re-init + Remount', forceReinitAndRemount)}
-          {pill('Show Interstitial', showInterstitial)}
-          {pill('Mediation Debugger', () => showMediationDebugger())}
-        </View>
-
-        <View style={styles.adTestStats}>
-          <Text style={[styles.adTestStat, { color: C.muted }]}>
-            status: <Text style={{ color: C.ink, fontWeight: '900' }}>{status}</Text>
-          </Text>
-
-          <Text style={[styles.adTestStat, { color: C.muted }]}>
-            loads: <Text style={{ color: C.ink, fontWeight: '900' }}>{loads}</Text> • fails:{' '}
-            <Text style={{ color: C.ink, fontWeight: '900' }}>{fails}</Text> • impr:{' '}
-            <Text style={{ color: C.ink, fontWeight: '900' }}>{impr}</Text> • clicks:{' '}
-            <Text style={{ color: C.ink, fontWeight: '900' }}>{clicks}</Text>
-          </Text>
-
-          <Text style={[styles.adTestStat, { color: C.muted }]}>
-            adUnitId: <Text style={{ color: C.ink, fontWeight: '900' }}>{AD_ALIAS}</Text>
-          </Text>
-
-          {/* New: init debug */}
-          <Text style={[styles.adTestStat, { color: C.muted }]}>
-            sdkReady:{' '}
-            <Text style={{ color: C.ink, fontWeight: '900' }}>
-              {initDbg.sdkReady ? 'yes' : 'no'}
-            </Text>
-            {'  '}• attempts:{' '}
-            <Text style={{ color: C.ink, fontWeight: '900' }}>{initDbg.initAttempts}</Text>
-            {!!initDbg.lastInitErr ? (
-              <>
-                {'  '}• lastInitErr:{' '}
-                <Text style={{ color: C.ink, fontWeight: '900' }}>
-                  {JSON.stringify(initDbg.lastInitErr).slice(0, 120)}
-                </Text>
-              </>
-            ) : null}
-          </Text>
-
-          {/* New: interstitial result */}
-          {!!interstitialRes ? (
-            <Text style={[styles.adTestStat, { color: C.muted }]}>
-              interstitial:{' '}
-              <Text style={{ color: C.ink, fontWeight: '900' }}>
-                {JSON.stringify(interstitialRes).slice(0, 180)}
-              </Text>
-            </Text>
-          ) : null}
-        </View>
-
-        {!!lastErr && (
-          <Text style={[styles.adTestErr, { color: '#ff6b6b' }]}>lastErr: {lastErr}</Text>
-        )}
-
-        <View style={[styles.adTestBannerBox, { borderColor: C.border, backgroundColor: C.bg }]}>
-          {mounted ? (
-            (() => {
-              const { AdView, AdFormat } = require('react-native-applovin-max');
-              return (
-                <AdView
-                  key={`max_banner_test_${bannerKey}_${initDbgTick}`}
-                  adUnitId={AD_ALIAS}
-                  adFormat={AdFormat.BANNER}
-                  style={{ width: BANNER_SIZE.width, height: BANNER_SIZE.height }}
-                  onAdLoaded={onLoaded}
-                  onAdLoadFailed={onFailed}
-                  onAdClicked={onClicked}
-                  onAdRevenuePaid={onImpression}
-                />
-              );
-            })()
-          ) : (
-            <Text style={{ color: C.muted, fontWeight: '800' }}>Banner unmounted</Text>
-          )}
-        </View>
-
-        <Text style={[styles.adTestHint, { color: C.muted }]}>
-          Tip: if a “bad run” gets fixed by Force Re-init + Remount, you’re likely dealing with an
-          init-timing / native-view mount ordering issue rather than persistent no-fill.
-        </Text>
-      </View>
-    </View>
-  );
-}
 
 
   /* -------- Root navigation (needs theme) -------- */

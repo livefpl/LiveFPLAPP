@@ -15,7 +15,7 @@ import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useColors } from './theme';
-import { assetImages } from './clubs';
+import { clubCrestUri, assetImages } from './clubs';
 
 /**
  * Reusable distilled events feed.
@@ -694,7 +694,7 @@ function TeamCrest({ team, size = 18 }) {
     return <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: '#9ca3af' }} />;
   }
   // Uses your website crest path convention.
-  const uri = `https://livefpl.us/figures/new_logos2/${t}.png`;
+  const uri = clubCrestUri(t);
   return (
     <Image
       source={{ uri }}

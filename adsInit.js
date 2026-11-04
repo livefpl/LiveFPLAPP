@@ -49,17 +49,6 @@ function _getMax() {
   }
 }
 
-export function showMediationDebugger() {
-  try {
-    const max = _getMax();
-    const AppLovinMAX = max?.default || max;
-    AppLovinMAX?.showMediationDebugger?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function _applyTrackingAndConsent(AppLovinMAX, Privacy) {
   let granted = true;
   if (Platform.OS === 'ios') {
@@ -94,7 +83,7 @@ export function initAds() {
 
     try {
       try {
-        AppLovinMAX.setVerboseLogging?.(true);
+        AppLovinMAX.setVerboseLogging?.(false);
       } catch {}
 
       await _applyTrackingAndConsent(AppLovinMAX, max?.Privacy);
@@ -107,13 +96,6 @@ export function initAds() {
       try {
         await preloadInterstitial();
       } catch {}
-
-      // Freestar review build: open mediation debugger after init.
-      setTimeout(() => {
-        try {
-          AppLovinMAX.showMediationDebugger?.();
-        } catch {}
-      }, 1800);
 
       return true;
     } catch (e) {

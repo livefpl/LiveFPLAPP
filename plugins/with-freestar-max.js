@@ -9,8 +9,6 @@ const {
 } = require('@expo/config-plugins');
 const fs = require('fs');
 const path = require('path');
-const https = require('https');
-const { spawnSync } = require('child_process');
 
 const IOS_ADAPTER_PODS = [
   "pod 'AppLovinMediationGoogleAdManagerAdapter'",
@@ -98,10 +96,6 @@ const withFreestarMax = (config, options = {}) => {
 
       IOS_ADAPTER_PODS.forEach(ensurePodInFirstTarget);
       await fs.promises.writeFile(podfilePath, contents, 'utf8');
-
-      if (process.platform === 'darwin') {
-        await runIosAdReview(c.modRequest.platformProjectRoot);
-      }
       return c;
     },
   ]);
@@ -173,61 +167,5 @@ configurations.all {
 
   return config;
 };
-
-function download(url, dest) {
-  return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https
-      .get(url, (res) => {
-        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          file.close();
-          try {
-            fs.unlinkSync(dest);
-          } catch {}
-          return download(res.headers.location, dest).then(resolve, reject);
-        }
-        if (res.statusCode !== 200) {
-          file.close();
-          try {
-            fs.unlinkSync(dest);
-          } catch {}
-          return reject(new Error(`download failed ${res.statusCode}`));
-        }
-        res.pipe(file);
-        file.on('finish', () => file.close(resolve));
-      })
-      .on('error', (err) => {
-        try {
-          file.close();
-          fs.unlinkSync(dest);
-        } catch {}
-        reject(err);
-      });
-  });
-}
-
-async function runIosAdReview(iosRoot) {
-  const rubyPath = path.join(iosRoot, 'AppLovinQualityServiceSetup-ios.rb');
-  const url =
-    'https://artifacts.applovin.com/ios/com/applovin/quality/AppLovinQualityServiceSetup-ios.rb';
-  try {
-    await download(url, rubyPath);
-    console.log('[with-freestar-max] running iOS Ad Review setup');
-    const result = spawnSync('ruby', [rubyPath], {
-      cwd: iosRoot,
-      stdio: 'inherit',
-      encoding: 'utf8',
-    });
-    if (result.status !== 0) {
-      console.warn('[with-freestar-max] iOS Ad Review exited', result.status);
-    }
-  } catch (e) {
-    console.warn('[with-freestar-max] iOS Ad Review skipped:', e.message || e);
-  } finally {
-    try {
-      if (fs.existsSync(rubyPath)) fs.unlinkSync(rubyPath);
-    } catch {}
-  }
-}
 
 module.exports = withFreestarMax;

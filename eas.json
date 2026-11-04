@@ -47,8 +47,8 @@
         "image": "latest"
       },
       "android": {
-        "distribution": "internal",
-        "buildType": "apk"
+        "distribution": "store",
+        "buildType": "app-bundle"
       }
     }
   },
